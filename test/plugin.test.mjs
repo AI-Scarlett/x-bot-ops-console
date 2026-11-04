@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { authorize, createService, DEFAULT_CONFIG, DESKTOP_ROUTE, WEB_ROUTE, installRoute, validateConfig } from '../index.js';
+import { createServer } from 'node:net';
+import { authorize, createService, DEFAULT_CONFIG, DEFAULT_TARGETS, DESKTOP_ROUTE, WEB_ROUTE, installRoute, resolveTargets, validateConfig } from '../index.js';
 
 function fixture() {
   const dir = mkdtempSync(join(tmpdir(), 'x-bot-console-'));
@@ -49,8 +50,33 @@ test('Desktop UI uses relative DSH route and Chinese-first controls', () => {
   assert.match(source, /const t = key => zh\[key\]/);
   assert.doesNotMatch(source, /navigator\.language/);
   assert.match(source, /disabled:busy\|\|!controlsEnabled/);
-  assert.match(source, /height:'100%'.*minHeight:0,overflowY:'auto',overflowX:'hidden'/);
-  assert.match(source, /padding:'20px 24px 64px'/);
+  assert.match(source, /const pageStyle = /);
+  assert.match(source, /overflowY:'auto'/);
+});
+
+test('local target overrides are read from a user-owned file and validated', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'x-bot-targets-'));
+  const overridePath = join(dir, 'console-targets.json');
+  const base = { comment: { dir:'/base/comment', worker:'/base/comment/w.py', watchdog:'/base/comment/d.py', watchdogPid:'/base/comment/d.pid', stop:'/base/comment/d.stop', pid:'/base/comment/w.pid', log:'/base/comment/w.log', heartbeat:'/base/comment/h.json', rate:'/base/comment/r.json', port:9222 }, reply: { dir:'/base/reply', worker:'/base/reply/w.py', watchdog:'/base/reply/d.py', watchdogPid:'/base/reply/d.pid', stop:'/base/reply/d.stop', pid:'/base/reply/w.pid', log:'/base/reply/w.log', heartbeat:'/base/reply/h.json', rate:'/base/reply/r.json', port:9223 } };
+  writeFileSync(overridePath, JSON.stringify({ targets: { comment: { dir:'/real/comment', worker:'/real/comment/w.py', watchdog:'/real/comment/d.py', port: 9222 }, reply: { worker:'relative.py', port:'9223' } } }));
+  const resolved = resolveTargets(base, overridePath);
+  assert.equal(resolved.comment.worker, '/real/comment/w.py');
+  assert.equal(resolved.comment.log, '/base/comment/w.log');
+  assert.equal(resolved.reply.worker, '/base/reply/w.py');
+  assert.equal(resolved.reply.port, 9223);
+  assert.equal(resolved.comment.port, 9222);
+  rmSync(dir, { recursive:true, force:true });
+  assert.deepEqual(resolveTargets(base, join(dir, 'missing.json')).comment, base.comment);
+  assert.equal(resolveTargets(base, join(dir, 'missing.json')).reply.port, 9223);
+});
+
+test('Desktop UI uses a viewport-sized scrolling panel and local target override', () => {
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.match(source, /height:'calc\(100vh - 24px\)'/);
+  assert.match(source, /overflowY:'auto'/);
+  assert.match(source, /WebkitOverflowScrolling:'touch'/);
+  assert.match(source, /const pageStyle =/);
+  assert.match(source, /h\('main',\{style:pageStyle\}/);
 });
 
 test('default config validates and preserves privacy boundaries', () => {
@@ -84,6 +110,24 @@ test('saves bounded user-owned config without real home writes', async () => {
     assert.equal(result.note.includes('回复轮次仅由回复进程读取'),true);
     assert.equal(JSON.parse(readFileSync(configPath,'utf8')).model.name,'gpt-test');
   } finally { f.cleanup(); }
+});
+
+test('reports the Chrome debug port as reachable only while something listens', async () => {
+  const f = fixture();
+  const server = createServer();
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  try {
+    const paths = structuredClone(f.paths);
+    paths.comment.port = port; paths.reply.port = port + 1;
+    const service = createService({ paths, configPath: join(f.dir, 'config.json'), platform: 'linux', targetsPath: join(f.dir, 'missing-targets.json') });
+    const state = await service.inspect();
+    assert.equal(state.items.comment.cdpAvailable, true);
+    assert.equal(state.items.reply.cdpAvailable, false);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+    f.cleanup();
+  }
 });
 
 test('pause writes only the selected marker; resume removes it', async () => {

@@ -2,7 +2,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { basename, dirname, join } from 'node:path';
 import { homedir } from 'node:os';
-import { createServer } from 'node:net';
+import { createConnection } from 'node:net';
 
 export const CONFIG_NAMESPACE = 'x-bot-ops-console';
 export const PACKAGE_ID = 'dsh-x-bot-ops-console';
@@ -17,6 +17,27 @@ export const DEFAULT_TARGETS = Object.freeze({
   reply: { dir: DEFAULT_REPLY_DIR, worker: join(DEFAULT_REPLY_DIR, 'reply_worker.py'), watchdog: join(DEFAULT_REPLY_DIR, 'reply_watchdog.py'), watchdogPid: join(DEFAULT_REPLY_DIR, 'reply_watchdog.pid'), stop: join(DEFAULT_REPLY_DIR, 'reply_watchdog.stop'), pid: join(DEFAULT_REPLY_DIR, 'reply_worker.pid'), log: join(DEFAULT_REPLY_DIR, 'reply_worker.log'), heartbeat: join(DEFAULT_REPLY_DIR, 'heartbeat.json'), rate: join(DEFAULT_REPLY_DIR, 'rate_limit.json'), port: 9223 },
 });
 const CONFIG_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/config.json');
+export const TARGETS_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/console-targets.json');
+const TARGET_FIELDS = ['dir', 'worker', 'watchdog', 'watchdogPid', 'stop', 'pid', 'log', 'heartbeat', 'rate'];
+export function resolveTargets(base = DEFAULT_TARGETS, overridesPath = TARGETS_PATH) {
+  const raw = readJsonSafe(overridesPath);
+  if (!isRecord(raw)) return base;
+  const patches = isRecord(raw.targets) ? raw.targets : raw;
+  const resolved = { ...base };
+  for (const key of ['comment', 'reply']) {
+    const patch = isRecord(patches[key]) ? patches[key] : null;
+    if (!patch) continue;
+    const next = { ...base[key] };
+    for (const field of TARGET_FIELDS) {
+      const value = patch[field];
+      if (typeof value !== 'string' || !value.startsWith('/') || value.includes('..')) continue;
+      next[field] = value;
+    }
+    if (Number.isInteger(patch.port) && patch.port > 0 && patch.port < 65536) next.port = patch.port;
+    resolved[key] = next;
+  }
+  return resolved;
+}
 
 const DEFAULT_CONFIG = Object.freeze({
   schemaVersion: 1,
@@ -60,11 +81,14 @@ function processState(pidPath, expectedScript, requiredArg = '') {
     return { running:true, pid, owned, detail:owned ? '工作进程身份已验证' : '该进程编号属于其他命令，控制已禁用' };
   } catch { return { running:false, pid, owned:false }; }
 }
-function portOpen(port) {
+function portListening(port) {
   return new Promise(resolveResult => {
-    const socket = createServer();
-    socket.once('error', () => resolveResult(false));
-    socket.listen(port, '127.0.0.1', () => socket.close(() => resolveResult(true)));
+    const socket = createConnection({ host: '127.0.0.1', port });
+    const finish = value => { try { socket.destroy(); } catch { /* ignore */ } resolveResult(value); };
+    socket.setTimeout(1500);
+    socket.once('connect', () => finish(true));
+    socket.once('timeout', () => finish(false));
+    socket.once('error', () => finish(false));
   });
 }
 function validateConfig(input) {
@@ -91,11 +115,12 @@ function validateConfig(input) {
 }
 import * as fsSync from 'node:fs';
 
-export function createService({ subprocess, clock = () => Date.now(), paths = DEFAULT_TARGETS, configPath = CONFIG_PATH, platform = process.platform } = {}) {
+export function createService({ subprocess, clock = () => Date.now(), paths = DEFAULT_TARGETS, configPath = CONFIG_PATH, targetsPath = null, platform = process.platform } = {}) {
   let activeConfigPath = configPath;
-  const configMirrorPaths = [...new Set([join(paths.comment.dir, 'xops_config.json'), join(paths.reply.dir, 'xops_config.json')])].filter(path => path !== activeConfigPath);
+  const currentTargets = () => (targetsPath ? resolveTargets(paths, targetsPath) : paths);
+  const configMirrorPaths = () => [...new Set([join(currentTargets().comment.dir, 'xops_config.json'), join(currentTargets().reply.dir, 'xops_config.json')])].filter(path => path !== activeConfigPath);
   const getConfig = () => {
-    for (const path of [activeConfigPath, ...configMirrorPaths]) {
+    for (const path of [activeConfigPath, ...configMirrorPaths()]) {
       const parsed = readJsonSafe(path);
       if (parsed === null) continue;
       return validateConfig(parsed);
@@ -110,7 +135,7 @@ export function createService({ subprocess, clock = () => Date.now(), paths = DE
     fsSync.writeFileSync(tmp, `${JSON.stringify(validated, null, 2)}\n`, { mode: 0o600 });
     fsSync.renameSync(tmp, activeConfigPath);
     const mirrorContent = `${JSON.stringify(validated, null, 2)}\n`;
-    for (const mirrorPath of configMirrorPaths) {
+    for (const mirrorPath of configMirrorPaths()) {
       try {
         fsSync.mkdirSync(dirname(mirrorPath), { recursive: true, mode: 0o700 });
         const mirrorTmp = `${mirrorPath}.${process.pid}.tmp`;
@@ -124,8 +149,9 @@ export function createService({ subprocess, clock = () => Date.now(), paths = DE
   };
   const inspect = async () => {
     const items = {};
+    const active = currentTargets();
     for (const key of ['comment', 'reply']) {
-      const t = paths[key];
+      const t = active[key];
       const worker = processState(t.pid, t.worker);
       const watchdog = processState(t.watchdogPid, t.watchdog, key === 'comment' ? '--loop' : '--supervise');
       const heartbeat = readJsonSafe(t.heartbeat);
@@ -137,7 +163,7 @@ export function createService({ subprocess, clock = () => Date.now(), paths = DE
         heartbeatAgeSeconds: heartbeat && Number.isFinite(Number(heartbeat.timestamp)) ? Math.max(0, Math.floor(clock() / 1000 - Number(heartbeat.timestamp))) : null,
         pausedUntil: rate && Number.isFinite(Number(rate.until)) ? Number(rate.until) : null,
         pauseReason: rate && ['rate_limit', 'manual'].includes(rate.reason) ? rate.reason : (rate ? 'other' : null),
-        cdpPort: t.port, cdpAvailable: await portOpen(t.port), logTail,
+        cdpPort: t.port, cdpAvailable: await portListening(t.port), logTail,
       };
     }
     return { ok: true, config: getConfig(), runtimeConfigApplied: true, runtimeCapabilities, items, platform, checkedAt: new Date(clock()).toISOString() };
@@ -152,7 +178,7 @@ export function createService({ subprocess, clock = () => Date.now(), paths = DE
     if (!['pause', 'resume', 'start', 'stop', 'restart'].includes(request.action)) throw new TypeError('未知操作类型');
     if (!['comment', 'reply'].includes(request.target)) throw new TypeError('目标必须是评论或提及回复');
     if (platform !== 'darwin') throw new Error('进程控制仅支持 macOS');
-    const target = paths[request.target];
+    const target = currentTargets()[request.target];
     const watchdogStatus = processState(target.watchdogPid, target.watchdog, request.target === 'comment' ? '--loop' : '--supervise');
     const workerStatus = processState(target.pid, target.worker);
     if (request.action === 'start') {
@@ -239,7 +265,7 @@ export function installRoute(ctx, service, { desktop = false } = {}) {
 }
 export const inject = ['subprocess', 'connection'];
 export function apply(ctx) {
-  const service = createService({ subprocess: ctx.subprocess });
+  const service = createService({ subprocess: ctx.subprocess, targetsPath: TARGETS_PATH });
   const desktop = ctx.profileContext?.name === 'desktop';
   installRoute(ctx, service, { desktop });
 }
