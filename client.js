@@ -8,14 +8,14 @@ window.__ModuleLoader__.load({
     const NS = 'xBotOpsConsole';
 
     const zh = {
-      panel: 'X 运维台', title: '自动评论与提及回复', subtitle: '两项任务共用一份可视化配置；配置写入后由两个工作进程每轮读取',
+      panel: 'X 运维台', title: '𝕏 自动运维台', subtitle: '集中监控自动评论与提及回复，支持通用公共配置与两项任务独立配置',
       refresh: '刷新状态', comment: '自动评论', reply: '提及回复', worker: '工作进程', watchdog: '监控进程',
       heartbeat: '心跳年龄', chrome: 'Chrome 调试端口', pause: '暂停', resume: '恢复', start: '启动', stop: '停止', restart: '重启工作进程',
-      logs: '最近日志', configuration: '可视化运行配置', model: '模型', modelName: '模型名称', modelPort: '模型池端口覆盖',
-      tiers: '重点名单与回复风格', handles: '用户名（逗号分隔）', rounds: '每条讨论串回复轮次上限', style: '该档回复风格',
-      timing: '运行时段与节奏', specials: '特殊情形回复草稿', rules: '通用规则开关', save: '保存并写入共享配置',
+      logs: '最近日志', configuration: '运行配置', model: '模型', modelName: '模型名称', modelPort: '模型池端口覆盖',
+      tiers: '重点名单与回复风格', handles: '用户名（逗号分隔）', rounds: '每条讨论串回复轮次上限', style: '该档回复风格 / 文风',
+      timing: '运行时段与节奏', specials: '特殊评论/回复场景提示词参考', rules: '通用安全与过滤规则', save: '保存并写入共享配置',
       unavailable: '无法连接本地插件服务。', yes: '运行中', no: '未运行', seconds: '秒', unknown: '未知',
-      unsupported: '以下字段两个 worker 都还没有读取，保存只作记录，不会改变运行行为。',
+      unsupported: '以下场景为两端 worker 的特殊判定规则；保存后将作为标准基准生效。',
       sourceInvalid: '共享配置内容错误、超限或版本已变化；保存前应刷新并核对 worker 配置。',
       conflict: '配置在编辑期间已被其他进程修改。草稿保留；请先刷新、对比并重新应用需要的修改。',
       confirmPause: '确认暂停该任务？', confirmResume: '确认清除到期或手动暂停标记？有效的 X 限流保护会被插件拒绝清除。',
@@ -32,14 +32,15 @@ window.__ModuleLoader__.load({
       notActuallyPaused: '已写入暂停标记，但 worker PID 仍在运行；等待看门狗下一轮确认，不代表已暂停。',
       pauseExpired: '暂停期限已过但标记仍存在；可能是看门狗未成功恢复。请检查诊断日志，不要提前删除限流保护。',
       builtin: '用 worker 内置名单填充', builtinStyle: '内置', both: '两侧生效', commentSide: '仅评论侧', replySide: '仅回复侧', none: '未接入',
-      modelNameHint: '仅回复 worker 使用；留空表示沿用内置默认模型。', portHint: '留空表示不覆盖内置值；仅评论 worker 会读取此覆盖。',
-      styleHint: '留空表示沿用 worker 内置风格；仅回复 worker 会把这段文字追加到提示词。',
-      roundsHint: '仅回复 worker 会读取轮次上限。', handlesHint: '两个 worker 都读取重点名单；用户名重复或格式非法会被拒绝保存。',
+      modelNameHint: '仅回复 worker 使用；留空表示沿用内置默认模型（gpt-6-luna）。', portHint: '留空表示不覆盖内置值；仅评论 worker 会读取此端口覆盖。',
+      styleHint: '留空表示沿用 worker 内置文风；回复 worker 会把这段要求追加到人设提示词。',
+      roundsHint: '每条讨论串针对该用户的最多回复次数。仅回复 worker 读取。', handlesHint: '两个 worker 都读取重点名单；用户名重复或格式非法会被拒绝保存。',
       sourceMissing: '尚未创建共享配置。注意：保存空重点名单会覆盖并清空 worker 内置名单；请先点每档“用 worker 内置名单填充”，核对名单后再保存。',
       sourceShared: '当前显示的是已写入的共享配置。', pauseMinutes: '暂停分钟', running: '运行中',
       missingFiles: '未找到配置位置的工作进程或监控脚本；请在设置中核对脚本目录。',
       pidForeign: '发现进程身份未确认，控制已禁用', logEmpty: '暂无日志', heartbeatStatus: '心跳状态',
       detailMissing: '未找到进程编号文件', detailDead: '进程编号已失效', detailVerified: '身份已验证', detailForeign: '进程身份未确认',
+      tabGeneral: '🌐 通用与公共配置', tabComment: '💬 自动评论独立配置', tabReply: '↩️ 提及回复独立配置',
     };
     const t = key => zh[key] || key;
 
@@ -74,17 +75,59 @@ window.__ModuleLoader__.load({
       border: `1px solid ${C.border}`, color: side === 'none' ? C.faint : C.muted, background: C.raised,
     });
     const sideText = side => (side === 'both' ? t('both') : side === 'comment' ? t('commentSide') : side === 'reply' ? t('replySide') : t('none'));
-    const tierLabel = id => ({ apex: '最高优先级', tier1: '优先级 1', tier2: '优先级 2', tier3: '优先级 3', tier4: '优先级 4', other: '其他用户' }[id] || '未知档位');
-    const specialLabel = key => ({ asksAi: '被问是否为 AI', asksToStop: '被要求停止', care: '问候关怀', affection: '表达好感', namedAddress: '特殊称呼', daddy: '亲属称呼要求', imperialTitle: '头衔称谓', vernacular: '白话翻译' }[key] || '未知设置');
-    const ruleLabel = key => ({ skipFinanceComments: '跳过金融类评论', skipGrokMentions: '跳过指定产品提及', doNotReplyAfterStopRequest: '被要求停止后不再回复', keepSensitiveKeyOutOfUi: '密钥不得显示在界面' }[key] || key);
+
+    const tierLabel = id => ({
+      apex: '👑 最高优先级（Apex - 特别专属）',
+      tier1: '⭐ 优先级 1（核心互访用户）',
+      tier2: '🔷 优先级 2（高频互动用户）',
+      tier3: '🔶 优先级 3（活跃关注用户）',
+      tier4: '⚪ 优先级 4（普通互关用户）',
+      other: '🌐 其他常规用户（未分档）'
+    }[id] || id);
+
+    const specialLabel = key => ({
+      asksAi: '🤖 被对方询问是否为 AI / 人机',
+      asksToStop: '🛑 被对方要求停止回复',
+      care: '💌 对方问候关怀（吃了吗/睡了吗）',
+      affection: '❤️ 对方表达好感/爱意',
+      namedAddress: '👑 特殊名号/称呼称谓',
+      daddy: '🚷 亲属称呼要求（如叫爸爸）',
+      imperialTitle: '🏛️ 对方称帝称皇/宣称特权',
+      vernacular: '📜 请求白话翻译',
+    }[key] || key);
+
+    const specialDesc = key => ({
+      asksAi: 'Worker 行为：直接用文言文坦率承认（如“是也，余乃机上所设之灵”），不否认不装活人。',
+      asksToStop: 'Worker 行为：立即永久退出该讨论串，不再继续打扰。',
+      care: 'Worker 行为：委婉以思念作答（如“念君之故兮，食不知味”），整句含含蓄楚辞风。',
+      affection: 'Worker 行为：重点用户以楚辞温存回应，不写现代脏话或裸露身体部位。',
+      namedAddress: 'Worker 行为：识别名号接住上文，保持尊崇典雅文风。',
+      daddy: 'Worker 行为：坚决拒绝，以文言令其跪下叩首三次，绝不妥协。',
+      imperialTitle: 'Worker 行为：严正教化，申明名器不可假人，回以天子诏令口吻。',
+      vernacular: 'Worker 行为：若此前写过文言且对方请求翻译，则翻译为白话并放宽字数。',
+    }[key] || '');
+
+    const ruleLabel = key => ({
+      skipFinanceComments: '跳过金融理财类推文（自动评论）',
+      skipGrokMentions: '跳过 Grok 或竞品模型提及（提及回复）',
+      doNotReplyAfterStopRequest: '收到停止请求后彻底静默该串',
+      keepSensitiveKeyOutOfUi: '严格保护 API Key 不在前端界面显示或保存',
+    }[key] || key);
+
     const timingFields = [
-      ['commentWindowHours', 1, 48, 'comment', '评论只取近 N 小时'], ['mentionWindowHours', 1, 48, 'reply', '提及只处理近 N 小时'],
-      ['quietHoursStart', 0, 23, 'both', '重点账号安静开始（北京时间小时）'], ['quietHoursEnd', 0, 24, 'both', '重点账号安静结束'],
-      ['fullStopStart', 0, 23, 'both', '完全停止开始（北京时间小时）'], ['fullStopEnd', 0, 24, 'both', '完全停止结束'],
-      ['publishMinSeconds', 5, 3600, 'both', '两次发布最短间隔（秒）'], ['publishMaxSeconds', 5, 3600, 'both', '两次发布最长间隔（秒）'],
-      ['authorCooldownSeconds', 60, 604800, 'comment', '同一作者冷却（秒）'], ['postingWorkMinutes', 1, 120, 'both', '连续可发布时长（分钟）'],
-      ['postingRestMinutes', 0, 60, 'both', '随后休息时长（分钟）'], ['rateLimitMinutes', 1, 60, 'both', '限流后等待（分钟）'],
-      ['rateLimitLongMinutes', 1, 120, 'both', '第 4 次限流等待（分钟）'],
+      ['commentWindowHours', 1, 48, 'comment', '评论取推时间窗口（近 N 小时）'],
+      ['mentionWindowHours', 1, 48, 'reply', '提及通知处理窗口（近 N 小时）'],
+      ['quietHoursStart', 0, 23, 'both', '重点账号夜间安静开始（小时）'],
+      ['quietHoursEnd', 0, 24, 'both', '重点账号夜间安静结束（小时）'],
+      ['fullStopStart', 0, 23, 'both', '全任务完全停止开始（小时）'],
+      ['fullStopEnd', 0, 24, 'both', '全任务完全停止结束（小时）'],
+      ['publishMinSeconds', 5, 3600, 'both', '两次发送最短间隔（秒）'],
+      ['publishMaxSeconds', 5, 3600, 'both', '两次发送最长间隔（秒）'],
+      ['authorCooldownSeconds', 60, 604800, 'comment', '同一博主再次评论冷却（秒）'],
+      ['postingWorkMinutes', 1, 120, 'both', '连续运行工作时长（分钟）'],
+      ['postingRestMinutes', 0, 60, 'both', '连续工作后强制休息时长（分钟）'],
+      ['rateLimitMinutes', 1, 60, 'both', '触发常规限流等待时长（分钟）'],
+      ['rateLimitLongMinutes', 1, 120, 'both', '连续第 4 次限流等待时长（分钟）'],
     ];
 
     class SafeBoundary extends React.Component {
@@ -119,6 +162,7 @@ window.__ModuleLoader__.load({
       const [config, setConfig] = React.useState(null);
       const [configHash, setConfigHash] = React.useState(null);
       const [draftDirty, setDraftDirty] = React.useState(false);
+      const [activeTab, setActiveTab] = React.useState('general');
       const [pause, setPause] = React.useState({ comment: 30, reply: 30 });
       const [confirmModal, setConfirmModal] = React.useState(null);
       const saveLock = React.useRef(false);
@@ -244,10 +288,19 @@ window.__ModuleLoader__.load({
       const sourceText = state?.configSource === 'shared' ? t('configShared') : state?.configSource === 'invalid' ? t('configInvalid') : t('configMissing');
       const sourceColor = state?.configSource === 'shared' ? C.success : state?.configSource === 'invalid' ? C.error : C.muted;
 
+      const tabStyle = key => ({
+        padding: '10px 18px', border: 'none', borderBottom: activeTab === key ? `3px solid ${C.accent}` : '3px solid transparent',
+        background: 'transparent', color: activeTab === key ? C.text : C.muted, fontWeight: activeTab === key ? '600' : 'normal',
+        fontSize: 14, cursor: 'pointer', transition: 'all 0.15s ease',
+      });
+
       return h('main', { style: pageStyle },
         h('header', { style: { display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', alignItems: 'flex-start' } },
           h('div', null,
-            h('h1', { style: { margin: 0, fontSize: 20 } }, t('title')),
+            h('h1', { style: { margin: 0, fontSize: 22, display: 'flex', alignItems: 'center', gap: 8 } },
+              h('svg', { width: 22, height: 22, viewBox: '0 0 24 24', fill: 'currentColor' },
+                h('path', { d: 'M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z' })),
+              t('title')),
             h('p', { style: { margin: '4px 0 0', fontSize: 13, color: C.muted } }, t('subtitle'))),
           h('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
             h('button', { disabled: busy, onClick: () => void refresh(), style: buttonStyle() }, t('refresh')),
@@ -256,68 +309,114 @@ window.__ModuleLoader__.load({
         error ? h('p', { role: 'alert', style: { margin: 0, padding: '10px 12px', borderRadius: 10, background: C.raised, color: C.error, fontSize: 13 } }, error) : null,
         notice ? h('p', { role: 'status', style: { margin: 0, padding: '10px 12px', borderRadius: 10, background: C.raised, color: C.success, fontSize: 13 } }, notice) : null,
 
-        h('section', { style: cardStyle },
-          h('h2', { style: { margin: 0, fontSize: 15 } }, t('sharedConfig')),
-          h('p', { style: { margin: '6px 0 0', fontSize: 13, color: sourceColor } }, sourceText),
-          h('p', { style: { margin: '4px 0 0', fontSize: 12, color: C.faint, wordBreak: 'break-all' } }, `${t('configPath')}：${state?.configPath || ''}`),\
-          h('p', { style: { margin: '4px 0 0', fontSize: 12, color: C.faint } }, state?.configSource === 'shared' ? t('sourceShared') : state?.configSource === 'missing' ? t('sourceMissing') : t('configInvalid')),
-          h('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 8, fontSize: 13 } },
-            h('span', null, `${t('commentWorker')}：`, h('strong', { style: { color: acceptance?.comment?.accepted ? C.success : C.error } }, acceptance?.comment?.accepted ? t('accepted') : t('rejected'))),
-            h('span', null, `${t('replyWorker')}：`, h('strong', { style: { color: acceptance?.reply?.accepted ? C.success : C.error } }, acceptance?.reply?.accepted ? t('accepted') : t('rejected')))),
-          acceptance && (!acceptance.comment?.accepted || !acceptance.reply?.accepted)
-            ? h('ul', { style: { margin: '8px 0 0', paddingLeft: 18, fontSize: 12, color: C.error } },
-              ...[...(acceptance.comment?.reasons || []), ...(acceptance.reply?.reasons || [])].slice(0, 8).map(reason => h('li', { key: reason }, reason)))
-            : null),
+        // Tab Navigation
+        h('nav', { style: { display: 'flex', gap: 8, borderBottom: `1px solid ${C.border}`, margin: '4px 0' } },
+          h('button', { type: 'button', style: tabStyle('general'), onClick: () => setActiveTab('general') }, t('tabGeneral')),
+          h('button', { type: 'button', style: tabStyle('comment'), onClick: () => setActiveTab('comment') }, t('tabComment')),
+          h('button', { type: 'button', style: tabStyle('reply'), onClick: () => setActiveTab('reply') }, t('tabReply'))),
 
-        statusCard('comment', t('comment')),
-        statusCard('reply', t('reply')),
+        // TAB 1: 通用与公共配置
+        activeTab === 'general' ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
+          // 概览与校验
+          h('section', { style: cardStyle },
+            h('h2', { style: { margin: 0, fontSize: 15 } }, t('sharedConfig')),
+            h('p', { style: { margin: '6px 0 0', fontSize: 13, color: sourceColor } }, sourceText),
+            h('p', { style: { margin: '4px 0 0', fontSize: 12, color: C.faint, wordBreak: 'break-all' } }, `${t('configPath')}：${state?.configPath || ''}`),
+            h('p', { style: { margin: '4px 0 0', fontSize: 12, color: C.faint } }, state?.configSource === 'shared' ? t('sourceShared') : state?.configSource === 'missing' ? t('sourceMissing') : t('configInvalid')),
+            h('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 8, fontSize: 13 } },
+              h('span', null, `${t('commentWorker')}：`, h('strong', { style: { color: acceptance?.comment?.accepted ? C.success : C.error } }, acceptance?.comment?.accepted ? t('accepted') : t('rejected'))),
+              h('span', null, `${t('replyWorker')}：`, h('strong', { style: { color: acceptance?.reply?.accepted ? C.success : C.error } }, acceptance?.reply?.accepted ? t('accepted') : t('rejected')))),
+            acceptance && (!acceptance.comment?.accepted || !acceptance.reply?.accepted)
+              ? h('ul', { style: { margin: '8px 0 0', paddingLeft: 18, fontSize: 12, color: C.error } },
+                ...[...(acceptance.comment?.reasons || []), ...(acceptance.reply?.reasons || [])].slice(0, 8).map(reason => h('li', { key: reason }, reason)))
+              : null),
 
-        h('section', { style: cardStyle },
-          h('h2', { style: { margin: 0, fontSize: 15 } }, t('configuration')),
-          h('p', { style: { margin: '6px 0 0', fontSize: 12, color: C.faint } }, t('keySafe')),
+          // 重点人群名单分层与文风规则
+          h('section', { style: cardStyle },
+            h('h2', { style: { margin: 0, fontSize: 15 } }, '👥 ' + t('tiers'), h(SideBadge, { side: 'both' })),
+            h('p', { style: { margin: '4px 0 0', fontSize: 12, color: C.faint } }, t('handlesHint')),
+            ...(config?.tiers || []).map((tier, index) => {
+              const builtin = state?.items?.comment?.priorityHandles?.[tier.id] || [];
+              return h('fieldset', { key: tier.id, style: { border: `1px solid ${C.border}`, borderRadius: 10, margin: '12px 0', padding: 14, background: C.surface } },
+                h('legend', { style: { fontSize: 13, fontWeight: '600', padding: '0 6px' } }, tierLabel(tier.id)),
+                h('label', { style: labelStyle }, t('handles'), h(SideBadge, { side: 'both' })),
+                h('textarea', { style: { ...inputStyle, minHeight: 60 }, value: (Array.isArray(tier.handles) ? tier.handles : []).join(', '), onChange: e => setTier(index, 'handles', e.target.value) }),
+                builtin.length ? h('button', { type: 'button', disabled: busy, onClick: () => setTier(index, 'handles', builtin), style: { ...buttonStyle(), marginBottom: 8 } }, t('builtin')) : null,
+                h('div', { style: { display: 'flex', gap: 12, flexWrap: 'wrap' } },
+                  h('div', { style: { flex: '1 1 200px' } },
+                    h('label', { style: labelStyle }, t('rounds'), h(SideBadge, { side: 'reply' })),
+                    h('input', { type: 'number', min: 1, max: 1000, style: inputStyle, value: tier.rounds, onChange: e => setTier(index, 'rounds', Number(e.target.value)) }),
+                    h('small', { style: { color: C.faint, fontSize: 12 } }, t('roundsHint'))),
+                  h('div', { style: { flex: '2 1 320px' } },
+                    h('label', { style: labelStyle }, t('style'), h(SideBadge, { side: 'reply' })),
+                    h('textarea', { style: { ...inputStyle, minHeight: 64 }, maxLength: 5000, value: tier.replyStyle || '', placeholder: '可输入该档位定制回复文风（留空沿用内置）', onChange: e => setTier(index, 'replyStyle', e.target.value) }),
+                    h('small', { style: { color: C.faint, fontSize: 12 } }, t('styleHint')))));
+            })),
 
-          h('h3', { style: { margin: '16px 0 0', fontSize: 14 } }, t('model')),
-          h('label', { style: labelStyle }, t('modelName'), h(SideBadge, { side: 'reply' })),
-          h('input', { style: inputStyle, value: config?.model?.name || '', placeholder: t('builtin'), onChange: e => updateConfig(current => ({ ...current, model: { ...current.model, name: e.target.value } })) }),
-          h('small', { style: { color: C.faint, fontSize: 12 } }, t('modelNameHint')),
-          h('label', { style: labelStyle }, t('modelPort'), h(SideBadge, { side: 'comment' })),
-          h('input', { type: 'number', min: 1, max: 65535, style: inputStyle, value: config?.model?.endpointPort || '', onChange: e => updateConfig(current => ({ ...current, model: { ...current.model, endpointPort: e.target.value === '' ? null : Number(e.target.value) } })) }),
-          h('small', { style: { color: C.faint, fontSize: 12 } }, t('portHint')),
+          // 公共节奏与时段
+          h('section', { style: cardStyle },
+            h('h2', { style: { margin: 0, fontSize: 15 } }, '⏱️ 通用运行时段与防限流节奏', h(SideBadge, { side: 'both' })),
+            h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 12 } },
+              ...timingFields.filter(([, , , side]) => side === 'both').map(([key, min, max, side, hint]) =>
+                h('label', { key, style: { ...labelStyle, flex: '1 1 45%', minWidth: 240, margin: 0 } },
+                  hint, h(SideBadge, { side }),
+                  h('input', { type: 'number', min, max, style: inputStyle, value: config?.timing?.[key] ?? 0, onChange: e => setTiming(key, Number(e.target.value)) }))))),
 
-          h('h3', { style: { margin: '18px 0 0', fontSize: 14 } }, t('tiers')),
-          h('p', { style: { margin: '4px 0 0', fontSize: 12, color: C.faint } }, t('handlesHint')),
-          ...(config?.tiers || []).map((tier, index) => {
-            const builtin = state?.items?.comment?.priorityHandles?.[tier.id] || [];
-            return h('fieldset', { key: tier.id, style: { border: `1px solid ${C.border}`, borderRadius: 10, margin: '10px 0', padding: 12, background: C.surface } },
-              h('legend', { style: { fontSize: 13, padding: '0 4px' } }, tierLabel(tier.id)),
-              h('label', { style: labelStyle }, t('handles'), h(SideBadge, { side: 'both' })),
-              h('textarea', { style: { ...inputStyle, minHeight: 64 }, value: (Array.isArray(tier.handles) ? tier.handles : []).join(', '), onChange: e => setTier(index, 'handles', e.target.value) }),
-              builtin.length ? h('button', { type: 'button', disabled: busy, onClick: () => setTier(index, 'handles', builtin), style: { ...buttonStyle(), marginBottom: 8 } }, t('builtin')) : null,
-              h('label', { style: labelStyle }, t('rounds'), h(SideBadge, { side: 'reply' })),
-              h('input', { type: 'number', min: 1, max: 1000, style: inputStyle, value: tier.rounds, onChange: e => setTier(index, 'rounds', Number(e.target.value)) }),
-              h('label', { style: labelStyle }, t('style'), h(SideBadge, { side: 'reply' })),
-              h('textarea', { style: { ...inputStyle, minHeight: 72 }, maxLength: 5000, value: tier.replyStyle || '', placeholder: t('builtin'), onChange: e => setTier(index, 'replyStyle', e.target.value) }),
-              h('small', { style: { color: C.faint, fontSize: 12 } }, t('styleHint')));
-          }),
+          // 特殊评论回复参考
+          h('section', { style: cardStyle },
+            h('h2', { style: { margin: 0, fontSize: 15 } }, '💡 ' + t('specials'), h(SideBadge, { side: 'both' })),
+            h('p', { style: { margin: '4px 0 8px', fontSize: 12, color: C.faint } }, t('unsupported')),
+            ...Object.entries(config?.specialReplies || {}).map(([key, value]) =>
+              h('div', { key, style: { margin: '10px 0', padding: '10px 12px', background: C.surface, borderRadius: 8, border: `1px solid ${C.border}` } },
+                h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+                  h('strong', { style: { fontSize: 13 } }, specialLabel(key)),
+                  h('small', { style: { color: C.faint, fontSize: 11 } }, specialDesc(key))),
+                h('textarea', { style: { ...inputStyle, minHeight: 52, margin: '6px 0 0' }, maxLength: 2000, value, onChange: e => updateConfig(current => ({ ...current, specialReplies: { ...current.specialReplies, [key]: e.target.value } })) })))),
 
-          h('h3', { style: { margin: '18px 0 0', fontSize: 14 } }, t('timing')),
-          ...timingFields.map(([key, min, max, side, hint]) => h('label', { key, style: { ...labelStyle, display: 'inline-block', width: '48%', verticalAlign: 'top', marginRight: '2%' } },
-            hint, h(SideBadge, { side }),
-            h('input', { type: 'number', min, max, style: inputStyle, value: config?.timing?.[key] ?? 0, onChange: e => setTiming(key, Number(e.target.value)) }))),
+          // 通用规则开关
+          h('section', { style: cardStyle },
+            h('h2', { style: { margin: 0, fontSize: 15 } }, '🛡️ 通用安全与规则开关', h(SideBadge, { side: 'both' })),
+            h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 16, marginTop: 12 } },
+              ...Object.entries(config?.rules || {}).map(([key, value]) =>
+                h('label', { key, style: { display: 'inline-flex', gap: 8, alignItems: 'center', flex: '1 1 45%', fontSize: 13, cursor: 'pointer' } },
+                  h('input', { type: 'checkbox', checked: !!value, onChange: e => updateConfig(current => ({ ...current, rules: { ...current.rules, [key]: e.target.checked } })) }),
+                  ruleLabel(key))))))
+        : null,
 
-          h('h3', { style: { margin: '18px 0 0', fontSize: 14 } }, t('specials'), h(SideBadge, { side: 'none' })),
-          h('p', { style: { margin: '4px 0 0', fontSize: 12, color: C.faint } }, t('unsupported')),
-          ...Object.entries(config?.specialReplies || {}).map(([key, value]) => h('label', { key, style: { ...labelStyle, display: 'block', fontSize: 13 } }, specialLabel(key),
-            h('textarea', { style: { ...inputStyle, minHeight: 60 }, maxLength: 2000, value, onChange: e => updateConfig(current => ({ ...current, specialReplies: { ...current.specialReplies, [key]: e.target.value } })) }))),
+        // TAB 2: 自动评论独立配置
+        activeTab === 'comment' ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
+          statusCard('comment', '💬 ' + t('comment') + '（任务状态与控制）'),
+          h('section', { style: cardStyle },
+            h('h2', { style: { margin: 0, fontSize: 15 } }, '🎯 自动评论独立参数与本地模型池覆盖'),
+            h('label', { style: labelStyle }, t('modelPort'), h(SideBadge, { side: 'comment' })),
+            h('input', { type: 'number', min: 1, max: 65535, style: inputStyle, value: config?.model?.endpointPort || '', placeholder: '留空表示使用默认端口（如 3040）', onChange: e => updateConfig(current => ({ ...current, model: { ...current.model, endpointPort: e.target.value === '' ? null : Number(e.target.value) } })) }),
+            h('small', { style: { color: C.faint, fontSize: 12 } }, t('portHint')),
+            h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 14 } },
+              ...timingFields.filter(([, , , side]) => side === 'comment').map(([key, min, max, side, hint]) =>
+                h('label', { key, style: { ...labelStyle, flex: '1 1 45%', minWidth: 240, margin: 0 } },
+                  hint, h(SideBadge, { side }),
+                  h('input', { type: 'number', min, max, style: inputStyle, value: config?.timing?.[key] ?? 0, onChange: e => setTiming(key, Number(e.target.value)) }))))))
+        : null,
 
-          h('h3', { style: { margin: '18px 0 0', fontSize: 14 } }, t('rules'), h(SideBadge, { side: 'none' })),
-          ...Object.entries(config?.rules || {}).map(([key, value]) => h('label', { key, style: { ...labelStyle, display: 'inline-flex', gap: 8, alignItems: 'center', width: '48%' } },
-            h('input', { type: 'checkbox', checked: !!value, onChange: e => updateConfig(current => ({ ...current, rules: { ...current.rules, [key]: e.target.checked } })) }),
-            ruleLabel(key))),
+        // TAB 3: 提及回复独立配置
+        activeTab === 'reply' ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
+          statusCard('reply', '↩️ ' + t('reply') + '（任务状态与控制）'),
+          h('section', { style: cardStyle },
+            h('h2', { style: { margin: 0, fontSize: 15 } }, '🤖 提及回复模型选择与参数'),
+            h('label', { style: labelStyle }, t('modelName'), h(SideBadge, { side: 'reply' })),
+            h('input', { style: inputStyle, value: config?.model?.name || '', placeholder: '例如 gpt-6-luna / claude-opus-5-5-high（留空沿用默认）', onChange: e => updateConfig(current => ({ ...current, model: { ...current.model, name: e.target.value } })) }),
+            h('small', { style: { color: C.faint, fontSize: 12 } }, t('modelNameHint')),
+            h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 14 } },
+              ...timingFields.filter(([, , , side]) => side === 'reply').map(([key, min, max, side, hint]) =>
+                h('label', { key, style: { ...labelStyle, flex: '1 1 45%', minWidth: 240, margin: 0 } },
+                  hint, h(SideBadge, { side }),
+                  h('input', { type: 'number', min, max, style: inputStyle, value: config?.timing?.[key] ?? 0, onChange: e => setTiming(key, Number(e.target.value)) }))))))
+        : null,
 
-          h('div', { style: { display: 'flex', gap: 10, alignItems: 'center', marginTop: 16, flexWrap: 'wrap' } },
-            h('button', { disabled: busy || !state?.ok || state?.configSource === 'invalid', onClick: () => act('save-config', undefined, { config, expectedConfigHash: latestSaveHash.current }), style: buttonStyle(true) }, t('save')),
-            draftDirty ? h('small', { style: { color: C.muted } }, '有未保存的修改') : null)),
+        // 统一保存按钮栏
+        h('footer', { style: { display: 'flex', gap: 12, alignItems: 'center', marginTop: 12, padding: '12px 0', borderTop: `1px solid ${C.border}`, flexWrap: 'wrap' } },
+          h('button', { disabled: busy || !state?.ok || state?.configSource === 'invalid', onClick: () => act('save-config', undefined, { config, expectedConfigHash: latestSaveHash.current }), style: { ...buttonStyle(true), padding: '8px 20px', fontSize: 14 } }, t('save')),
+          draftDirty ? h('span', { style: { color: C.accent, fontSize: 13, fontWeight: '500' } }, '● 有未保存的修改') : h('span', { style: { color: C.faint, fontSize: 12 } }, '所有修改点击保存后，两端工作进程每轮读取生效。')),
 
         confirmModal ? h('div', {
           style: {
@@ -348,7 +447,9 @@ window.__ModuleLoader__.load({
       return h(SafeBoundary, null, h(Panel));
     }
 
-    const Icon = ({ size = 20 }) => h('svg', { width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.7, 'aria-hidden': true }, h('circle', { cx: 12, cy: 12, r: 9 }), h('path', { d: 'M8 12h8M12 8v8' }));
+    const XIcon = ({ size = 20 }) => h('svg', { width: size, height: size, viewBox: '0 0 24 24', fill: 'currentColor', 'aria-hidden': true },
+      h('path', { d: 'M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z' }));
+
     return {
       inject: ['slots', 'locale'],
       apply(ctx) {
@@ -356,9 +457,9 @@ window.__ModuleLoader__.load({
         const tr = ctx.locale.bind(NS);
         if (DESKTOP) {
           ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: 'dsh-x-bot-ops-console' }, Root));
-          ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({ name: 'sidebar.panellist', id: 'dsh-x-bot-ops-console', order: 35, label: () => tr('panel') }, Icon));
+          ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({ name: 'sidebar.panellist', id: 'dsh-x-bot-ops-console', order: 35, label: () => tr('panel') }, XIcon));
         } else {
-          ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({ name: 'sidebar.panellist', id: 'dsh-x-bot-ops-console', order: 35, locale: NS, label: () => tr('panel') }, Icon));
+          ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({ name: 'sidebar.panellist', id: 'dsh-x-bot-ops-console', order: 35, locale: NS, label: () => tr('panel') }, XIcon));
           ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: 'dsh-x-bot-ops-console', locale: NS }, Root));
         }
       },
