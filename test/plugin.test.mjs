@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:net';
@@ -68,6 +68,23 @@ test('local target overrides are read from a user-owned file and validated', () 
   rmSync(dir, { recursive:true, force:true });
   assert.deepEqual(resolveTargets(base, join(dir, 'missing.json')).comment, base.comment);
   assert.equal(resolveTargets(base, join(dir, 'missing.json')).reply.port, 9223);
+});
+
+test('local target overrides apply only when a service explicitly opts in', async () => {
+  const f = fixture();
+  const overrideDir = mkdtempSync(join(tmpdir(), 'x-bot-override-'));
+  const overridePath = join(f.dir, 'console-targets.json');
+  writeFileSync(overridePath, JSON.stringify({ targets: { comment: { rate: join(overrideDir, 'rate_limit.json') } } }));
+  try {
+    const plain = createService({ paths: f.paths, configPath: join(f.dir, 'config.json'), platform: 'darwin' });
+    await plain.action({ action: 'pause', target: 'comment', minutes: 5 });
+    assert.equal(existsSync(f.paths.comment.rate), true);
+    assert.equal(existsSync(join(overrideDir, 'rate_limit.json')), false);
+
+    const opted = createService({ paths: f.paths, configPath: join(f.dir, 'config.json'), platform: 'darwin', targetsPath: overridePath });
+    await opted.action({ action: 'pause', target: 'comment', minutes: 5 });
+    assert.equal(existsSync(join(overrideDir, 'rate_limit.json')), true);
+  } finally { rmSync(overrideDir, { recursive: true, force: true }); f.cleanup(); }
 });
 
 test('Desktop UI uses a viewport-sized scrolling panel and local target override', () => {
