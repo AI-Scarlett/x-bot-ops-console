@@ -8,11 +8,11 @@ window.__ModuleLoader__.load({
     const NS = 'xBotOpsConsole';
 
     const zh = {
-      panel: 'X 运维台', title: '𝕏 自动运维台', subtitle: '集中监控自动评论与提及回复，支持通用公共配置与两项任务独立配置',
+      panel: 'X 运维台', title: '𝕏 自动运维台', subtitle: '集中监控自动评论与提及回复，支持重点名单独立维护、通用公共配置与两项任务独立配置',
       refresh: '刷新状态', comment: '自动评论', reply: '提及回复', worker: '工作进程', watchdog: '监控进程',
       heartbeat: '心跳年龄', chrome: 'Chrome 调试端口', pause: '暂停', resume: '恢复', start: '启动', stop: '停止', restart: '重启工作进程',
       logs: '最近日志', configuration: '运行配置', model: '模型', modelName: '模型名称', modelPort: '模型池端口覆盖',
-      tiers: '重点名单与回复风格', handles: '用户名（逗号分隔）', rounds: '每条讨论串回复轮次上限', style: '该档回复风格 / 文风',
+      tiers: '重点名单与回复风格', handles: '用户名（逗号分隔）', rounds: '每条讨论串回复轮次上限', style: '该档回复风格 / 文风提示词',
       timing: '运行时段与节奏', specials: '特殊评论/回复场景提示词参考', rules: '通用安全与过滤规则', save: '保存并写入共享配置',
       unavailable: '无法连接本地插件服务。', yes: '运行中', no: '未运行', seconds: '秒', unknown: '未知',
       unsupported: '以下场景为两端 worker 的特殊判定规则；保存后将作为标准基准生效。',
@@ -40,7 +40,7 @@ window.__ModuleLoader__.load({
       missingFiles: '未找到配置位置的工作进程或监控脚本；请在设置中核对脚本目录。',
       pidForeign: '发现进程身份未确认，控制已禁用', logEmpty: '暂无日志', heartbeatStatus: '心跳状态',
       detailMissing: '未找到进程编号文件', detailDead: '进程编号已失效', detailVerified: '身份已验证', detailForeign: '进程身份未确认',
-      tabGeneral: '🌐 通用与公共配置', tabComment: '💬 自动评论独立配置', tabReply: '↩️ 提及回复独立配置',
+      tabGeneral: '🌐 通用与公共配置', tabTiers: '👥 重点名单与个性化配置', tabComment: '💬 自动评论独立配置', tabReply: '↩️ 提及回复独立配置',
     };
     const t = key => zh[key] || key;
 
@@ -76,21 +76,51 @@ window.__ModuleLoader__.load({
     });
     const sideText = side => (side === 'both' ? t('both') : side === 'comment' ? t('commentSide') : side === 'reply' ? t('replySide') : t('none'));
 
-    const tierLabel = id => ({
-      apex: '👑 最高优先级（Apex - 特别专属）',
-      tier1: '⭐ 优先级 1（核心互访用户）',
-      tier2: '🔷 优先级 2（高频互动用户）',
-      tier3: '🔶 优先级 3（活跃关注用户）',
-      tier4: '⚪ 优先级 4（普通互关用户）',
-      other: '🌐 其他常规用户（未分档）'
-    }[id] || id);
+    const tierInfo = {
+      apex: {
+        title: '👑 Apex 档位（最高优先级 · 专属对象）',
+        desc: '仅针对最高一档的专属用户。支持最露骨、直白的诗词文言互动，情欲直接表达，不受常规含蓄限制。',
+        defaultWorkerVoice: '文言与诗词歌赋，直抒情欲与爱恋。',
+        specialPersonNotice: '当前内置专属用户：4ggug（全系统唯一顶级优先）',
+      },
+      tier1: {
+        title: '⭐ Tier 1 档位（核心互访与易经专属用户）',
+        desc: '核心常来常往的关键好友。楚辞短章接话（必须有「兮」），含蓄委婉，把未尽之意留到私聊。',
+        defaultWorkerVoice: '楚辞短章（含「兮」）。香草江岸，词句婉约。',
+        specialPersonNotice: '特例人物：mrchen1998（在此档中专走《易经》卦象爻辞风格，不走楚辞，不要「兮」）',
+      },
+      tier2: {
+        title: '🔷 Tier 2 档位（高频互动熟人）',
+        desc: '第二档熟人群体。轻吟楚辞短章，香草江岸换着用（蕙、杜若、江离、芙蓉），情意旁敲侧击，不直说情欲。',
+        defaultWorkerVoice: '楚辞短章（含「兮」）。客气温存，点到为止。',
+        specialPersonNotice: '涵盖常互动用户：mzixioxio155612, xiaolikpo, lxl1818 等 21 人',
+      },
+      tier3: {
+        title: '🔶 Tier 3 档位（活跃关注用户）',
+        desc: '第三档活跃用户。楚辞短章客气轻应，言辞更克制婉约，薄帖也接，但只说眼前事，不挑明情意。',
+        defaultWorkerVoice: '楚辞短章（含「兮」）。客气、克制收敛。',
+        specialPersonNotice: '涵盖关注用户：sujing110, hamy8998, jojojo624824460, nz3219798 等',
+      },
+      tier4: {
+        title: '⚪ Tier 4 档位（普通互关用户）',
+        desc: '第四档互关用户。楚辞短章客气应一声，比第三档更收着，不轻轻撩拨，只围绕帖子本身。',
+        defaultWorkerVoice: '楚辞短章（含「兮」）。更收敛客气。',
+        specialPersonNotice: '涵盖普通互关：dmx_flame, julsix2333 等',
+      },
+      other: {
+        title: '🌐 Other 档位（其他常规陌生用户）',
+        desc: '不在重点名单中的普通公开推文用户。男女未知，全面避开情事、春情与身体，采用秦汉魏晋文言，风雅端庄。',
+        defaultWorkerVoice: '秦汉魏晋古奥文言。拿掉情欲，吐纳风雅。',
+        specialPersonNotice: '未分档的所有其他用户均归入此档规则',
+      },
+    };
 
     const specialLabel = key => ({
       asksAi: '🤖 被对方询问是否为 AI / 人机',
       asksToStop: '🛑 被对方要求停止回复',
       care: '💌 对方问候关怀（吃了吗/睡了吗）',
       affection: '❤️ 对方表达好感/爱意',
-      namedAddress: '👑 特殊名号/称呼称谓',
+      namedAddress: '👑 特殊名号/称呼称谓（如姬霸/天子）',
       daddy: '🚷 亲属称呼要求（如叫爸爸）',
       imperialTitle: '🏛️ 对方称帝称皇/宣称特权',
       vernacular: '📜 请求白话翻译',
@@ -162,7 +192,7 @@ window.__ModuleLoader__.load({
       const [config, setConfig] = React.useState(null);
       const [configHash, setConfigHash] = React.useState(null);
       const [draftDirty, setDraftDirty] = React.useState(false);
-      const [activeTab, setActiveTab] = React.useState('general');
+      const [activeTab, setActiveTab] = React.useState('tiers');
       const [pause, setPause] = React.useState({ comment: 30, reply: 30 });
       const [confirmModal, setConfirmModal] = React.useState(null);
       const saveLock = React.useRef(false);
@@ -309,13 +339,79 @@ window.__ModuleLoader__.load({
         error ? h('p', { role: 'alert', style: { margin: 0, padding: '10px 12px', borderRadius: 10, background: C.raised, color: C.error, fontSize: 13 } }, error) : null,
         notice ? h('p', { role: 'status', style: { margin: 0, padding: '10px 12px', borderRadius: 10, background: C.raised, color: C.success, fontSize: 13 } }, notice) : null,
 
-        // Tab Navigation
-        h('nav', { style: { display: 'flex', gap: 8, borderBottom: `1px solid ${C.border}`, margin: '4px 0' } },
+        // Tab Navigation - 4 个 Tab 架构
+        h('nav', { style: { display: 'flex', gap: 8, borderBottom: `1px solid ${C.border}`, margin: '4px 0', overflowX: 'auto', flexWrap: 'nowrap' } },
+          h('button', { type: 'button', style: tabStyle('tiers'), onClick: () => setActiveTab('tiers') }, t('tabTiers')),
           h('button', { type: 'button', style: tabStyle('general'), onClick: () => setActiveTab('general') }, t('tabGeneral')),
           h('button', { type: 'button', style: tabStyle('comment'), onClick: () => setActiveTab('comment') }, t('tabComment')),
           h('button', { type: 'button', style: tabStyle('reply'), onClick: () => setActiveTab('reply') }, t('tabReply'))),
 
-        // TAB 1: 通用与公共配置
+        // TAB 1: 👥 重点名单与个性化配置（独立维护专区）
+        activeTab === 'tiers' ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
+          h('section', { style: { ...cardStyle, background: C.layerTwo } },
+            h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 } },
+              h('div', null,
+                h('h2', { style: { margin: 0, fontSize: 16 } }, '👥 重点人群分层名单与针对性配置'),
+                h('p', { style: { margin: '4px 0 0', fontSize: 12, color: C.faint } }, '每个档位均可单独配置用户名、讨论串轮次上限，以及追加定制文风/人设提示词。两端 Worker 均实时联动。')),
+              h('span', { style: { fontSize: 12, color: C.accent, background: C.raised, padding: '4px 8px', borderRadius: 6 } }, '实时双端生效')),
+
+            ...(config?.tiers || []).map((tier, index) => {
+              const info = tierInfo[tier.id] || { title: tier.id, desc: '', defaultWorkerVoice: '', specialPersonNotice: '' };
+              const builtin = state?.items?.comment?.priorityHandles?.[tier.id] || [];
+              const handlesList = Array.isArray(tier.handles) ? tier.handles : [];
+              return h('div', {
+                key: tier.id,
+                style: {
+                  border: `1px solid ${C.border}`, borderRadius: 12, margin: '14px 0', padding: 16,
+                  background: C.surface, boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
+                }
+              },
+                h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 } },
+                  h('h3', { style: { margin: 0, fontSize: 15, fontWeight: '600' } }, info.title),
+                  h('span', { style: { fontSize: 12, color: C.muted } }, `已配置 ${handlesList.length} 人`)),
+                h('p', { style: { margin: '6px 0 4px', fontSize: 12, color: C.muted, lineHeight: 1.5 } }, info.desc),
+                info.specialPersonNotice ? h('div', {
+                  style: {
+                    margin: '6px 0 10px', padding: '6px 10px', borderRadius: 6,
+                    background: C.raised, borderLeft: `3px solid ${C.accent}`, fontSize: 12, color: C.text,
+                  }
+                }, `💡 关键人物特例：${info.specialPersonNotice}`) : null,
+
+                h('div', { style: { margin: '10px 0 4px' } },
+                  h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 } },
+                    h('label', { style: { ...labelStyle, margin: 0, fontWeight: '500' } }, '关注用户名列表（支持逗号或空格分隔）：', h(SideBadge, { side: 'both' })),
+                    builtin.length ? h('button', {
+                      type: 'button', disabled: busy, onClick: () => setTier(index, 'handles', builtin),
+                      style: { ...buttonStyle(), padding: '3px 8px', fontSize: 11 },
+                    }, '一键恢复内置名单') : null),
+                  h('textarea', {
+                    style: { ...inputStyle, minHeight: 64, margin: '4px 0 6px', fontFamily: 'monospace', fontSize: 13 },
+                    value: handlesList.join(', '), placeholder: '例如：user1, user2, user3',
+                    onChange: e => setTier(index, 'handles', e.target.value)
+                  })),
+
+                h('div', { style: { display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 10 } },
+                  h('div', { style: { flex: '1 1 200px' } },
+                    h('label', { style: { ...labelStyle, margin: 0 } }, '该人群单串回复轮次上限：', h(SideBadge, { side: 'reply' })),
+                    h('input', {
+                      type: 'number', min: 1, max: 1000, style: { ...inputStyle, margin: '6px 0 4px' },
+                      value: tier.rounds, onChange: e => setTier(index, 'rounds', Number(e.target.value))
+                    }),
+                    h('small', { style: { color: C.faint, fontSize: 11 } }, '达到上限后不再继续回复该串，避免死循环')),
+
+                  h('div', { style: { flex: '2 1 340px' } },
+                    h('label', { style: { ...labelStyle, margin: 0 } }, '针对该档位人群的定制回复文风 / 附加提示词：', h(SideBadge, { side: 'reply' })),
+                    h('textarea', {
+                      style: { ...inputStyle, minHeight: 64, margin: '6px 0 4px' }, maxLength: 5000,
+                      value: tier.replyStyle || '',
+                      placeholder: `默认内置文风：${info.defaultWorkerVoice}（可在此输入额外要求，留空则沿用内置）`,
+                      onChange: e => setTier(index, 'replyStyle', e.target.value)
+                    }),
+                    h('small', { style: { color: C.faint, fontSize: 11 } }, '此提示词会直接拼接入 AI 生成 Prompt，影响对此人群的回应口吻'))));
+            })))
+        : null,
+
+        // TAB 2: 🌐 通用与公共配置
         activeTab === 'general' ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
           // 概览与校验
           h('section', { style: cardStyle },
@@ -331,47 +427,26 @@ window.__ModuleLoader__.load({
                 ...[...(acceptance.comment?.reasons || []), ...(acceptance.reply?.reasons || [])].slice(0, 8).map(reason => h('li', { key: reason }, reason)))
               : null),
 
-          // 重点人群名单分层与文风规则
-          h('section', { style: cardStyle },
-            h('h2', { style: { margin: 0, fontSize: 15 } }, '👥 ' + t('tiers'), h(SideBadge, { side: 'both' })),
-            h('p', { style: { margin: '4px 0 0', fontSize: 12, color: C.faint } }, t('handlesHint')),
-            ...(config?.tiers || []).map((tier, index) => {
-              const builtin = state?.items?.comment?.priorityHandles?.[tier.id] || [];
-              return h('fieldset', { key: tier.id, style: { border: `1px solid ${C.border}`, borderRadius: 10, margin: '12px 0', padding: 14, background: C.surface } },
-                h('legend', { style: { fontSize: 13, fontWeight: '600', padding: '0 6px' } }, tierLabel(tier.id)),
-                h('label', { style: labelStyle }, t('handles'), h(SideBadge, { side: 'both' })),
-                h('textarea', { style: { ...inputStyle, minHeight: 60 }, value: (Array.isArray(tier.handles) ? tier.handles : []).join(', '), onChange: e => setTier(index, 'handles', e.target.value) }),
-                builtin.length ? h('button', { type: 'button', disabled: busy, onClick: () => setTier(index, 'handles', builtin), style: { ...buttonStyle(), marginBottom: 8 } }, t('builtin')) : null,
-                h('div', { style: { display: 'flex', gap: 12, flexWrap: 'wrap' } },
-                  h('div', { style: { flex: '1 1 200px' } },
-                    h('label', { style: labelStyle }, t('rounds'), h(SideBadge, { side: 'reply' })),
-                    h('input', { type: 'number', min: 1, max: 1000, style: inputStyle, value: tier.rounds, onChange: e => setTier(index, 'rounds', Number(e.target.value)) }),
-                    h('small', { style: { color: C.faint, fontSize: 12 } }, t('roundsHint'))),
-                  h('div', { style: { flex: '2 1 320px' } },
-                    h('label', { style: labelStyle }, t('style'), h(SideBadge, { side: 'reply' })),
-                    h('textarea', { style: { ...inputStyle, minHeight: 64 }, maxLength: 5000, value: tier.replyStyle || '', placeholder: '可输入该档位定制回复文风（留空沿用内置）', onChange: e => setTier(index, 'replyStyle', e.target.value) }),
-                    h('small', { style: { color: C.faint, fontSize: 12 } }, t('styleHint')))));
-            })),
-
           // 公共节奏与时段
           h('section', { style: cardStyle },
             h('h2', { style: { margin: 0, fontSize: 15 } }, '⏱️ 通用运行时段与防限流节奏', h(SideBadge, { side: 'both' })),
+            h('p', { style: { margin: '4px 0 8px', fontSize: 12, color: C.faint } }, '两端任务严格遵守的休眠与频率限制，避免触发 X 平台风控'),
             h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 12 } },
               ...timingFields.filter(([, , , side]) => side === 'both').map(([key, min, max, side, hint]) =>
                 h('label', { key, style: { ...labelStyle, flex: '1 1 45%', minWidth: 240, margin: 0 } },
                   hint, h(SideBadge, { side }),
                   h('input', { type: 'number', min, max, style: inputStyle, value: config?.timing?.[key] ?? 0, onChange: e => setTiming(key, Number(e.target.value)) }))))),
 
-          // 特殊评论回复参考
+          // 特殊场景与评论回复参考
           h('section', { style: cardStyle },
             h('h2', { style: { margin: 0, fontSize: 15 } }, '💡 ' + t('specials'), h(SideBadge, { side: 'both' })),
-            h('p', { style: { margin: '4px 0 8px', fontSize: 12, color: C.faint } }, t('unsupported')),
+            h('p', { style: { margin: '4px 0 8px', fontSize: 12, color: C.faint } }, '当评论或提及命中下列特定情境时，Worker 的底层处理规则与参考提示词：'),
             ...Object.entries(config?.specialReplies || {}).map(([key, value]) =>
-              h('div', { key, style: { margin: '10px 0', padding: '10px 12px', background: C.surface, borderRadius: 8, border: `1px solid ${C.border}` } },
-                h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+              h('div', { key, style: { margin: '10px 0', padding: '12px 14px', background: C.surface, borderRadius: 8, border: `1px solid ${C.border}` } },
+                h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 } },
                   h('strong', { style: { fontSize: 13 } }, specialLabel(key)),
-                  h('small', { style: { color: C.faint, fontSize: 11 } }, specialDesc(key))),
-                h('textarea', { style: { ...inputStyle, minHeight: 52, margin: '6px 0 0' }, maxLength: 2000, value, onChange: e => updateConfig(current => ({ ...current, specialReplies: { ...current.specialReplies, [key]: e.target.value } })) })))),
+                  h('small', { style: { color: C.accent, fontSize: 12 } }, specialDesc(key))),
+                h('textarea', { style: { ...inputStyle, minHeight: 52, margin: '8px 0 0' }, maxLength: 2000, value, onChange: e => updateConfig(current => ({ ...current, specialReplies: { ...current.specialReplies, [key]: e.target.value } })) })))),
 
           // 通用规则开关
           h('section', { style: cardStyle },
@@ -383,7 +458,7 @@ window.__ModuleLoader__.load({
                   ruleLabel(key))))))
         : null,
 
-        // TAB 2: 自动评论独立配置
+        // TAB 3: 💬 自动评论独立配置
         activeTab === 'comment' ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
           statusCard('comment', '💬 ' + t('comment') + '（任务状态与控制）'),
           h('section', { style: cardStyle },
@@ -398,7 +473,7 @@ window.__ModuleLoader__.load({
                   h('input', { type: 'number', min, max, style: inputStyle, value: config?.timing?.[key] ?? 0, onChange: e => setTiming(key, Number(e.target.value)) }))))))
         : null,
 
-        // TAB 3: 提及回复独立配置
+        // TAB 4: ↩️ 提及回复独立配置
         activeTab === 'reply' ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
           statusCard('reply', '↩️ ' + t('reply') + '（任务状态与控制）'),
           h('section', { style: cardStyle },
