@@ -73,6 +73,8 @@ test('Desktop UI uses relative DSH route and Chinese-first controls', () => {
   assert.doesNotMatch(source, /navigator\.language/);
   assert.match(source, /disabled:\s*busy\s*\|\|\s*!controlsEnabled/);
   assert.match(source, /const pageStyle = /);
+  assert.match(source, /SafeBoundary/);
+  assert.doesNotMatch(source, /window\.confirm/);
 });
 
 test('local target overrides are read from a user-owned file and validated', () => {

@@ -1,6 +1,13 @@
 # X 运维台插件验收状态
 
-**结论：E3 通过（Web 运行时及公开 Connection 鉴权验证完成），准备发布 v0.1.5。**
+**结论：E3 通过，v0.1.6 修复前端白屏与交互问题。**
+
+## v0.1.6 升级说明与白屏修复
+- **修复白屏崩溃**：修复点击“用 worker 内置名单填充”时将 `tier.handles` 赋为字符串导致 React 渲染抛出 `tier.handles.join is not a function` 进而引发整页空白的缺陷。
+- **添加 React 错误边界（SafeBoundary）**：在运维台外层包裹 ErrorBoundary，即使发生偶发渲染异常也会显示错误提示与“重试恢复”按钮，彻底根治白屏崩溃。
+- **替换 window.confirm 为原生安全对话框**：移除 Electron 渲染进程中不兼容的阻塞式 `window.confirm`，改用全平台安全无阻塞的内联模态弹窗（`confirmModal`）。
+- **优化草稿防冲刷机制**：修正自动轮询逻辑，当有未保存草稿时自动保留当前编辑内容，不被后台心跳数据冲刷。
+- **防御性数据访问**：对 `config` 各层属性（`tiers`, `model`, `timing`, `specialReplies`, `rules`）及 `handles` 分割格式化进行全局防御性校验。
 
 ## 当前证据
 

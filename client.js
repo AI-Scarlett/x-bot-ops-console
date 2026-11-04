@@ -87,6 +87,30 @@ window.__ModuleLoader__.load({
       ['rateLimitLongMinutes', 1, 120, 'both', '第 4 次限流等待（分钟）'],
     ];
 
+    class SafeBoundary extends React.Component {
+      constructor(props) {
+        super(props);
+        this.state = { hasError: false, error: null };
+      }
+      static getDerivedStateFromError(error) {
+        return { hasError: true, error };
+      }
+      componentDidCatch(error, info) {
+        console.error('x-bot-ops-console error caught by boundary:', error, info);
+      }
+      render() {
+        if (this.state.hasError) {
+          return h('main', { style: pageStyle },
+            h('h1', { style: { fontSize: 20 } }, t('title')),
+            h('div', { style: { padding: '14px 16px', background: C.raised, border: `1px solid ${C.error}`, borderRadius: 10, margin: '16px 0' } },
+              h('h3', { style: { margin: '0 0 8px', color: C.error, fontSize: 15 } }, '界面渲染遇到错误'),
+              h('pre', { style: { whiteSpace: 'pre-wrap', fontSize: 12, color: C.text, margin: 0 } }, String(this.state.error?.message || this.state.error))),
+            h('button', { type: 'button', style: buttonStyle(true), onClick: () => this.setState({ hasError: false, error: null }) }, '重试恢复'));
+        }
+        return this.props.children;
+      }
+    }
+
     function Panel() {
       const [state, setState] = React.useState(null);
       const [error, setError] = React.useState('');
@@ -96,6 +120,7 @@ window.__ModuleLoader__.load({
       const [configHash, setConfigHash] = React.useState(null);
       const [draftDirty, setDraftDirty] = React.useState(false);
       const [pause, setPause] = React.useState({ comment: 30, reply: 30 });
+      const [confirmModal, setConfirmModal] = React.useState(null);
       const saveLock = React.useRef(false);
       const latestSaveHash = React.useRef(null);
 
@@ -105,7 +130,11 @@ window.__ModuleLoader__.load({
           const data = await response.json();
           if (!response.ok || data.ok === false) throw new Error(data.error || `请求失败，状态码 ${response.status}`);
           setState(data);
-          if (!draftDirty || !preserveDraft) { setConfig(data.config); setConfigHash(data.configHash ?? null); latestSaveHash.current = data.configHash ?? null; }
+          if (!draftDirty && !preserveDraft) {
+            setConfig(data.config);
+            setConfigHash(data.configHash ?? null);
+            latestSaveHash.current = data.configHash ?? null;
+          }
           setError('');
         } catch (err) {
           setError(`${t('unavailable')} ${err.message || ''}`);
@@ -142,8 +171,22 @@ window.__ModuleLoader__.load({
       if (!config) return h('main', { style: pageStyle }, h('h1', null, t('title')), error || '…');
 
       const updateConfig = fn => { setConfig(current => fn(current)); setDraftDirty(true); };
-      const setTier = (index, key, value) => updateConfig(current => ({ ...current, tiers: current.tiers.map((tier, i) => i === index ? { ...tier, [key]: value } : tier) }));
+      const setTier = (index, key, value) => updateConfig(current => ({
+        ...current,
+        tiers: (current.tiers || []).map((tier, i) => {
+          if (i !== index) return tier;
+          if (key === 'handles') {
+            const handles = Array.isArray(value)
+              ? value.map(x => String(x || '').trim().replace(/^@/, '').toLowerCase()).filter(Boolean)
+              : String(value || '').split(/[\s,，]+/).map(x => x.trim().replace(/^@/, '').toLowerCase()).filter(Boolean);
+            return { ...tier, handles };
+          }
+          return { ...tier, [key]: value };
+        }),
+      }));
       const setTiming = (key, value) => updateConfig(current => ({ ...current, timing: { ...current.timing, [key]: value } }));
+
+      const askConfirm = (promptKey, onConfirm) => setConfirmModal({ prompt: t(promptKey), onConfirm });
 
       const SideBadge = ({ side }) => h('span', { style: badgeStyle(side) }, sideText(side));
       const StatusLine = ({ label, value, tone }) => h('div', { style: { display: 'flex', gap: 6, alignItems: 'baseline', flexWrap: 'wrap' } },
@@ -161,7 +204,9 @@ window.__ModuleLoader__.load({
         const disabledReason = foreign ? t('pidForeign') : t('missingFiles');
         const startNeedsPython = !item.watchdog?.running && !item.worker?.running && !item.pythonConfigured;
         const run = (action, text, prompt, primary = false) => h('button', {
-          disabled: busy || !controlsEnabled || (action === 'start' && startNeedsPython), onClick: () => window.confirm(t(prompt)) && act(action, key), style: buttonStyle(primary),
+          disabled: busy || !controlsEnabled || (action === 'start' && startNeedsPython),
+          onClick: () => askConfirm(prompt, () => act(action, key)),
+          style: buttonStyle(primary),
         }, t(text));
         return h('section', { style: cardStyle, key },
           h('header', { style: { display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', alignItems: 'center' } },
@@ -182,10 +227,10 @@ window.__ModuleLoader__.load({
             `${disabledReason}（${t('worker')}：${item.workerScriptExists ? '存在' : '缺失'}；${t('watchdog')}：${item.watchdogScriptExists ? '存在' : '缺失'}）`) : null,
           startNeedsPython ? h('p', { role: 'alert', style: { margin: '8px 0 0', fontSize: 13, color: C.error } }, t('watchdogUnavailable')) : null,
           h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 12 } },
-            h('input', { type: 'number', min: 1, max: 1440, value: pause[key], onChange: e => setPause(current => ({ ...current, [key]: Number(e.target.value) })), style: { ...inputStyle, width: 96, margin: 0 } }),
+            h('input', { type: 'number', min: 1, max: 1440, value: pause[key] || 30, onChange: e => setPause(current => ({ ...current, [key]: Number(e.target.value) || 30 })), style: { ...inputStyle, width: 96, margin: 0 } }),
             h('span', { style: { fontSize: 12, color: C.faint } }, t('pauseMinutes')),
-            h('button', { disabled: busy || !controlsEnabled || !item.watchdog?.running || !item.watchdog?.owned, onClick: () => window.confirm(t('confirmPause')) && act('pause', key, { minutes: pause[key] }), style: buttonStyle(true) }, t('pause')),
-            h('button', { disabled: busy || !controlsEnabled || !pausePending || !item.watchdog?.running || !item.watchdog?.owned, onClick: () => window.confirm(t('confirmResume')) && act('resume', key), style: buttonStyle() }, t('resume')),
+            h('button', { disabled: busy || !controlsEnabled || !item.watchdog?.running || !item.watchdog?.owned, onClick: () => askConfirm('confirmPause', () => act('pause', key, { minutes: pause[key] })), style: buttonStyle(true) }, t('pause')),
+            h('button', { disabled: busy || !controlsEnabled || !pausePending || !item.watchdog?.running || !item.watchdog?.owned, onClick: () => askConfirm('confirmResume', () => act('resume', key)), style: buttonStyle() }, t('resume')),
             run('start', 'start', 'confirmStart'),
             run('stop', 'stop', 'confirmStop'),
             run('restart', 'restart', 'confirmRestart')),
@@ -214,7 +259,7 @@ window.__ModuleLoader__.load({
         h('section', { style: cardStyle },
           h('h2', { style: { margin: 0, fontSize: 15 } }, t('sharedConfig')),
           h('p', { style: { margin: '6px 0 0', fontSize: 13, color: sourceColor } }, sourceText),
-          h('p', { style: { margin: '4px 0 0', fontSize: 12, color: C.faint, wordBreak: 'break-all' } }, `${t('configPath')}：${state?.configPath || ''}`),
+          h('p', { style: { margin: '4px 0 0', fontSize: 12, color: C.faint, wordBreak: 'break-all' } }, `${t('configPath')}：${state?.configPath || ''}`),\
           h('p', { style: { margin: '4px 0 0', fontSize: 12, color: C.faint } }, state?.configSource === 'shared' ? t('sourceShared') : state?.configSource === 'missing' ? t('sourceMissing') : t('configInvalid')),
           h('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 8, fontSize: 13 } },
             h('span', null, `${t('commentWorker')}：`, h('strong', { style: { color: acceptance?.comment?.accepted ? C.success : C.error } }, acceptance?.comment?.accepted ? t('accepted') : t('rejected'))),
@@ -233,21 +278,21 @@ window.__ModuleLoader__.load({
 
           h('h3', { style: { margin: '16px 0 0', fontSize: 14 } }, t('model')),
           h('label', { style: labelStyle }, t('modelName'), h(SideBadge, { side: 'reply' })),
-          h('input', { style: inputStyle, value: config.model.name || '', placeholder: t('builtin'), onChange: e => updateConfig(current => ({ ...current, model: { ...current.model, name: e.target.value } })) }),
+          h('input', { style: inputStyle, value: config?.model?.name || '', placeholder: t('builtin'), onChange: e => updateConfig(current => ({ ...current, model: { ...current.model, name: e.target.value } })) }),
           h('small', { style: { color: C.faint, fontSize: 12 } }, t('modelNameHint')),
           h('label', { style: labelStyle }, t('modelPort'), h(SideBadge, { side: 'comment' })),
-          h('input', { type: 'number', min: 1, max: 65535, style: inputStyle, value: config.model.endpointPort || '', onChange: e => updateConfig(current => ({ ...current, model: { ...current.model, endpointPort: e.target.value === '' ? null : Number(e.target.value) } })) }),
+          h('input', { type: 'number', min: 1, max: 65535, style: inputStyle, value: config?.model?.endpointPort || '', onChange: e => updateConfig(current => ({ ...current, model: { ...current.model, endpointPort: e.target.value === '' ? null : Number(e.target.value) } })) }),
           h('small', { style: { color: C.faint, fontSize: 12 } }, t('portHint')),
 
           h('h3', { style: { margin: '18px 0 0', fontSize: 14 } }, t('tiers')),
           h('p', { style: { margin: '4px 0 0', fontSize: 12, color: C.faint } }, t('handlesHint')),
-          ...config.tiers.map((tier, index) => {
+          ...(config?.tiers || []).map((tier, index) => {
             const builtin = state?.items?.comment?.priorityHandles?.[tier.id] || [];
             return h('fieldset', { key: tier.id, style: { border: `1px solid ${C.border}`, borderRadius: 10, margin: '10px 0', padding: 12, background: C.surface } },
               h('legend', { style: { fontSize: 13, padding: '0 4px' } }, tierLabel(tier.id)),
               h('label', { style: labelStyle }, t('handles'), h(SideBadge, { side: 'both' })),
-              h('textarea', { style: { ...inputStyle, minHeight: 64 }, value: tier.handles.join(', '), onChange: e => setTier(index, 'handles', e.target.value.split(/[\s,，]+/).map(x => x.trim().replace(/^@/, '').toLowerCase()).filter(Boolean)) }),
-              builtin.length ? h('button', { type: 'button', disabled: busy, onClick: () => setTier(index, 'handles', builtin.join(', ')), style: { ...buttonStyle(), marginBottom: 8 } }, t('builtin')) : null,
+              h('textarea', { style: { ...inputStyle, minHeight: 64 }, value: (Array.isArray(tier.handles) ? tier.handles : []).join(', '), onChange: e => setTier(index, 'handles', e.target.value) }),
+              builtin.length ? h('button', { type: 'button', disabled: busy, onClick: () => setTier(index, 'handles', builtin), style: { ...buttonStyle(), marginBottom: 8 } }, t('builtin')) : null,
               h('label', { style: labelStyle }, t('rounds'), h(SideBadge, { side: 'reply' })),
               h('input', { type: 'number', min: 1, max: 1000, style: inputStyle, value: tier.rounds, onChange: e => setTier(index, 'rounds', Number(e.target.value)) }),
               h('label', { style: labelStyle }, t('style'), h(SideBadge, { side: 'reply' })),
@@ -258,21 +303,49 @@ window.__ModuleLoader__.load({
           h('h3', { style: { margin: '18px 0 0', fontSize: 14 } }, t('timing')),
           ...timingFields.map(([key, min, max, side, hint]) => h('label', { key, style: { ...labelStyle, display: 'inline-block', width: '48%', verticalAlign: 'top', marginRight: '2%' } },
             hint, h(SideBadge, { side }),
-            h('input', { type: 'number', min, max, style: inputStyle, value: config.timing[key], onChange: e => setTiming(key, Number(e.target.value)) }))),
+            h('input', { type: 'number', min, max, style: inputStyle, value: config?.timing?.[key] ?? 0, onChange: e => setTiming(key, Number(e.target.value)) }))),
 
           h('h3', { style: { margin: '18px 0 0', fontSize: 14 } }, t('specials'), h(SideBadge, { side: 'none' })),
           h('p', { style: { margin: '4px 0 0', fontSize: 12, color: C.faint } }, t('unsupported')),
-          ...Object.entries(config.specialReplies).map(([key, value]) => h('label', { key, style: { ...labelStyle, display: 'block', fontSize: 13 } }, specialLabel(key),
+          ...Object.entries(config?.specialReplies || {}).map(([key, value]) => h('label', { key, style: { ...labelStyle, display: 'block', fontSize: 13 } }, specialLabel(key),
             h('textarea', { style: { ...inputStyle, minHeight: 60 }, maxLength: 2000, value, onChange: e => updateConfig(current => ({ ...current, specialReplies: { ...current.specialReplies, [key]: e.target.value } })) }))),
 
           h('h3', { style: { margin: '18px 0 0', fontSize: 14 } }, t('rules'), h(SideBadge, { side: 'none' })),
-          ...Object.entries(config.rules).map(([key, value]) => h('label', { key, style: { ...labelStyle, display: 'inline-flex', gap: 8, alignItems: 'center', width: '48%' } },
-            h('input', { type: 'checkbox', checked: value, onChange: e => updateConfig(current => ({ ...current, rules: { ...current.rules, [key]: e.target.checked } })) }),
+          ...Object.entries(config?.rules || {}).map(([key, value]) => h('label', { key, style: { ...labelStyle, display: 'inline-flex', gap: 8, alignItems: 'center', width: '48%' } },
+            h('input', { type: 'checkbox', checked: !!value, onChange: e => updateConfig(current => ({ ...current, rules: { ...current.rules, [key]: e.target.checked } })) }),
             ruleLabel(key))),
 
           h('div', { style: { display: 'flex', gap: 10, alignItems: 'center', marginTop: 16, flexWrap: 'wrap' } },
             h('button', { disabled: busy || !state?.ok || state?.configSource === 'invalid', onClick: () => act('save-config', undefined, { config, expectedConfigHash: latestSaveHash.current }), style: buttonStyle(true) }, t('save')),
-            draftDirty ? h('small', { style: { color: C.muted } }, '有未保存的修改') : null)));
+            draftDirty ? h('small', { style: { color: C.muted } }, '有未保存的修改') : null)),
+
+        confirmModal ? h('div', {
+          style: {
+            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+            background: 'rgba(0, 0, 0, 0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 99999,
+          }
+        },
+          h('div', {
+            role: 'alertdialog',
+            style: {
+              background: C.layerTwo, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20,
+              maxWidth: 420, width: '90%', boxShadow: '0 8px 32px rgba(0,0,0,0.35)',
+            }
+          },
+            h('h3', { style: { margin: '0 0 10px', fontSize: 16 } }, '操作确认'),
+            h('p', { style: { margin: '0 0 20px', fontSize: 13, color: C.text, lineHeight: 1.5 } }, confirmModal.prompt),
+            h('div', { style: { display: 'flex', gap: 10, justifyContent: 'flex-end' } },
+              h('button', { type: 'button', style: buttonStyle(), onClick: () => setConfirmModal(null) }, '取消'),
+              h('button', { type: 'button', style: buttonStyle(true), onClick: () => { const cb = confirmModal.onConfirm; setConfirmModal(null); cb(); } }, '确认执行')
+            )
+          )
+        ) : null
+      );
+    }
+
+    function Root() {
+      return h(SafeBoundary, null, h(Panel));
     }
 
     const Icon = ({ size = 20 }) => h('svg', { width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.7, 'aria-hidden': true }, h('circle', { cx: 12, cy: 12, r: 9 }), h('path', { d: 'M8 12h8M12 8v8' }));
@@ -282,11 +355,11 @@ window.__ModuleLoader__.load({
         ctx.effect(() => ctx.locale.register(NS, { zh }), 'x-bot-ops-console: locale');
         const tr = ctx.locale.bind(NS);
         if (DESKTOP) {
-          ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: 'dsh-x-bot-ops-console' }, Panel));
+          ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: 'dsh-x-bot-ops-console' }, Root));
           ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({ name: 'sidebar.panellist', id: 'dsh-x-bot-ops-console', order: 35, label: () => tr('panel') }, Icon));
         } else {
           ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({ name: 'sidebar.panellist', id: 'dsh-x-bot-ops-console', order: 35, locale: NS, label: () => tr('panel') }, Icon));
-          ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: 'dsh-x-bot-ops-console', locale: NS }, Panel));
+          ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: 'dsh-x-bot-ops-console', locale: NS }, Root));
         }
       },
     };
