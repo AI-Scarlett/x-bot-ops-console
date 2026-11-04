@@ -49,6 +49,8 @@ test('Desktop UI uses relative DSH route and Chinese-first controls', () => {
   assert.match(source, /const t = key => zh\[key\]/);
   assert.doesNotMatch(source, /navigator\.language/);
   assert.match(source, /disabled:busy\|\|!controlsEnabled/);
+  assert.match(source, /height:'100%'.*minHeight:0,overflowY:'auto',overflowX:'hidden'/);
+  assert.match(source, /padding:'20px 24px 64px'/);
 });
 
 test('default config validates and preserves privacy boundaries', () => {
