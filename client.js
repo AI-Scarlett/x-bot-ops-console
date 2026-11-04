@@ -61,7 +61,7 @@ window.__ModuleLoader__.load({
       display: 'flex', flexDirection: 'column', gap: '14px', width: '100%', maxWidth: '1120px', minWidth: 0, minHeight: 0,
       height: 'calc(100vh - 24px)', maxHeight: 'calc(100vh - 24px)', boxSizing: 'border-box', marginInline: 'auto',
       padding: '14px clamp(12px, 2vw, 26px) 32px', overflowX: 'hidden', overflowY: 'auto', overscrollBehaviorY: 'contain',
-      WebkitOverflowScrolling: 'touch', color: C.text, background: C.surface,
+      WebkitOverflowScrolling: 'touch', color: C.text, background: C.surface, position: 'relative',
     };
     const cardStyle = { border: `1px solid ${C.border}`, borderRadius: 12, padding: 16, background: C.layerTwo, width: '100%', boxSizing: 'border-box' };
     const inputStyle = { width: '100%', boxSizing: 'border-box', padding: '8px 10px', margin: '4px 0 10px', border: `1px solid ${C.border}`, borderRadius: 8, background: C.surface, color: C.text };
@@ -345,12 +345,14 @@ window.__ModuleLoader__.load({
         error ? h('p', { role: 'alert', style: { margin: 0, padding: '10px 12px', borderRadius: 10, background: C.raised, color: C.error, fontSize: 13 } }, error) : null,
         notice ? h('p', { role: 'status', style: { margin: 0, padding: '10px 12px', borderRadius: 10, background: C.raised, color: C.success, fontSize: 13 } }, notice) : null,
 
-        // 显式胶囊式 Tab 导航栏
+        // 显式胶囊式 Tab 导航栏（置顶吸顶 Sticky，始终固定在可视区域最上方，不被长列表或滚动挤压）
         h('div', {
           style: {
-            display: 'flex', gap: 10, padding: '8px 10px', background: C.surface,
-            border: `1px solid ${C.border}`, borderRadius: 10, margin: '2px 0 8px',
-            overflowX: 'auto', flexWrap: 'wrap', alignItems: 'center'
+            position: 'sticky', top: 0, zIndex: 100,
+            display: 'flex', gap: 8, padding: '10px 12px', background: C.surface,
+            border: `1px solid ${C.border}`, borderRadius: 12, margin: '0 0 4px',
+            overflowX: 'auto', flexWrap: 'wrap', alignItems: 'center', flexShrink: 0,
+            boxShadow: '0 4px 16px rgba(0, 0, 0, 0.08)', backdropFilter: 'blur(8px)',
           }
         },
           h('button', { type: 'button', style: tabItemStyle('tiers'), onClick: () => setActiveTab('tiers') }, t('tabTiers')),
