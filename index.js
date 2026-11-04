@@ -1,13 +1,14 @@
-import { readFileSync, existsSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
-import { basename, dirname, join } from 'node:path';
+import { readFileSync, existsSync, openSync, closeSync, mkdirSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { execFileSync, spawn } from 'node:child_process';
+import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { createConnection } from 'node:net';
 
 export const CONFIG_NAMESPACE = 'x-bot-ops-console';
 export const PACKAGE_ID = 'dsh-x-bot-ops-console';
-export const WEB_ROUTE = '/_dsh/x-bot-ops-console';
-export const DESKTOP_ROUTE = '/api2/x-bot-ops-console';
+export const WEB_ROUTE = '/api/x-bot-ops-console';
+export const DESKTOP_ROUTE = '/api/x-bot-ops-console';
 const MAX_BODY = 128 * 1024;
 const APP_HOME = homedir();
 export const DEFAULT_COMMENT_DIR = join(APP_HOME, 'XBotOpsConsole', 'comment-worker');
@@ -16,9 +17,74 @@ export const DEFAULT_TARGETS = Object.freeze({
   comment: { dir: DEFAULT_COMMENT_DIR, worker: join(DEFAULT_COMMENT_DIR, 'comment_worker.py'), watchdog: join(DEFAULT_COMMENT_DIR, 'comment_watchdog.py'), watchdogPid: join(DEFAULT_COMMENT_DIR, 'comment_watchdog.pid'), stop: join(DEFAULT_COMMENT_DIR, 'comment_watchdog.stop'), pid: join(DEFAULT_COMMENT_DIR, 'comment_worker.pid'), log: join(DEFAULT_COMMENT_DIR, 'comment_worker.log'), heartbeat: join(DEFAULT_COMMENT_DIR, 'heartbeat.json'), rate: join(DEFAULT_COMMENT_DIR, 'rate_limit.json'), port: 9222 },
   reply: { dir: DEFAULT_REPLY_DIR, worker: join(DEFAULT_REPLY_DIR, 'reply_worker.py'), watchdog: join(DEFAULT_REPLY_DIR, 'reply_watchdog.py'), watchdogPid: join(DEFAULT_REPLY_DIR, 'reply_watchdog.pid'), stop: join(DEFAULT_REPLY_DIR, 'reply_watchdog.stop'), pid: join(DEFAULT_REPLY_DIR, 'reply_worker.pid'), log: join(DEFAULT_REPLY_DIR, 'reply_worker.log'), heartbeat: join(DEFAULT_REPLY_DIR, 'heartbeat.json'), rate: join(DEFAULT_REPLY_DIR, 'rate_limit.json'), port: 9223 },
 });
-const CONFIG_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/config.json');
+export const CONFIG_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/config.json');
 export const TARGETS_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/console-targets.json');
+
 const TARGET_FIELDS = ['dir', 'worker', 'watchdog', 'watchdogPid', 'stop', 'pid', 'log', 'heartbeat', 'rate'];
+
+// Every shared setting, and which worker actually reads it. Mirrors the two Python workers.
+export const FIELD_SIDE = Object.freeze({
+  'model.name': 'reply',
+  'model.endpointPort': 'comment',
+  'timing.commentWindowHours': 'comment',
+  'timing.mentionWindowHours': 'reply',
+  'timing.authorCooldownSeconds': 'comment',
+  'timing.publishMinSeconds': 'both',
+  'timing.publishMaxSeconds': 'both',
+  'timing.quietHoursStart': 'both',
+  'timing.quietHoursEnd': 'both',
+  'timing.fullStopStart': 'both',
+  'timing.fullStopEnd': 'both',
+  'timing.postingWorkMinutes': 'both',
+  'timing.postingRestMinutes': 'both',
+  'timing.rateLimitMinutes': 'both',
+  'timing.rateLimitLongMinutes': 'both',
+  'tiers.handles': 'both',
+  'tiers.rounds': 'reply',
+  'tiers.replyStyle': 'reply',
+  'specialReplies': 'none',
+  'rules': 'none',
+});
+
+// Defaults equal to the values hard-coded in both Python workers, so a fresh save does not change runtime behaviour.
+const DEFAULT_CONFIG = Object.freeze({
+  schemaVersion: 1,
+  note: '两类 Python worker 每轮读取共享配置；未接入的字段会标记为未生效。',
+  model: { name: '', endpointPort: null, keySource: 'LocalModelHub 凭据引用（密钥不会被读取或显示）' },
+  timing: { commentWindowHours: 6, mentionWindowHours: 12, quietHoursStart: 0, quietHoursEnd: 7, fullStopStart: 1, fullStopEnd: 6, publishMinSeconds: 30, publishMaxSeconds: 100, authorCooldownSeconds: 1800, postingWorkMinutes: 20, postingRestMinutes: 5, rateLimitMinutes: 5, rateLimitLongMinutes: 15 },
+  tiers: [
+    { id: 'apex', label: '最高优先级', handles: [], rounds: 3, replyStyle: '' },
+    { id: 'tier1', label: '优先级 1', handles: [], rounds: 3, replyStyle: '' },
+    { id: 'tier2', label: '优先级 2', handles: [], rounds: 3, replyStyle: '' },
+    { id: 'tier3', label: '优先级 3', handles: [], rounds: 3, replyStyle: '' },
+    { id: 'tier4', label: '优先级 4', handles: [], rounds: 3, replyStyle: '' },
+    { id: 'other', label: '其他用户', handles: [], rounds: 3, replyStyle: '' },
+  ],
+  specialReplies: { asksAi: '若被问及是否为 AI，请如实回答。', asksToStop: '若对方要求停止，请勿继续回复该讨论串。', care: '礼貌回应并围绕话题。', affection: '尊重回应，不诱导私下联系。', namedAddress: '以中性方式回应称呼。', daddy: '拒绝不合适的亲属角色扮演。', imperialTitle: '不宣称现实中的权力或身份。', vernacular: '仅在明确请求时翻译。' },
+  rules: { skipFinanceComments: true, skipGrokMentions: false, doNotReplyAfterStopRequest: true, keepSensitiveKeyOutOfUi: true },
+});
+
+const TIMING_BOUNDS = Object.freeze({
+  commentWindowHours: [1, 48], mentionWindowHours: [1, 48], quietHoursStart: [0, 23], quietHoursEnd: [0, 24],
+  fullStopStart: [0, 23], fullStopEnd: [0, 24], publishMinSeconds: [5, 3600], publishMaxSeconds: [5, 3600],
+  authorCooldownSeconds: [60, 604800], postingWorkMinutes: [1, 120], postingRestMinutes: [0, 60],
+  rateLimitMinutes: [1, 60], rateLimitLongMinutes: [1, 120],
+});
+const TIER_IDS = ['apex', 'tier1', 'tier2', 'tier3', 'tier4', 'other'];
+const HANDLE_PATTERN = /^[a-z0-9_]{1,15}$/;
+
+function clone(value) { return JSON.parse(JSON.stringify(value)); }
+function isRecord(value) { return !!value && typeof value === 'object' && !Array.isArray(value); }
+function sanitizeHandle(value) {
+  if (typeof value !== 'string') throw new TypeError('用户名必须是文本');
+  const handle = value.trim().replace(/^@/, '').toLowerCase();
+  if (!HANDLE_PATTERN.test(handle)) throw new TypeError('用户名格式无效');
+  return handle;
+}
+function readJsonSafe(path) {
+  try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; }
+}
+
 export function resolveTargets(base = DEFAULT_TARGETS, overridesPath = TARGETS_PATH) {
   const raw = readJsonSafe(overridesPath);
   if (!isRecord(raw)) return base;
@@ -33,53 +99,35 @@ export function resolveTargets(base = DEFAULT_TARGETS, overridesPath = TARGETS_P
       if (typeof value !== 'string' || !value.startsWith('/') || value.includes('..')) continue;
       next[field] = value;
     }
+    if (typeof patch.python === 'string' && patch.python.startsWith('/') && !patch.python.includes('..') && patch.python.length < 512) next.python = patch.python;
+    if (typeof patch.interpreterPidArgvToken === 'string' && patch.interpreterPidArgvToken.startsWith('/') && !patch.interpreterPidArgvToken.includes('..') && patch.interpreterPidArgvToken.length < 1024) next.interpreterPidArgvToken = patch.interpreterPidArgvToken;
+    for (const key of ['workerPidArgvToken', 'watchdogPidArgvToken']) {
+      if (typeof patch[key] === 'string' && patch[key].startsWith('/') && !patch[key].includes('..') && patch[key].length < 1024) next[key] = patch[key];
+    }
     if (Number.isInteger(patch.port) && patch.port > 0 && patch.port < 65536) next.port = patch.port;
     resolved[key] = next;
   }
   return resolved;
 }
 
-const DEFAULT_CONFIG = Object.freeze({
-  schemaVersion: 1,
-  note: '两类 Python worker 每轮读取共享配置；未接入的字段会标记为未生效。',
-  model: { name: 'your-model-name', endpointPort: null, keySource: 'LocalModelHub 凭据引用（密钥不会被读取或显示）' },
-  timing: { commentWindowHours: 8, mentionWindowHours: 12, quietHoursStart: 0, quietHoursEnd: 7, fullStopStart: 1, fullStopEnd: 6, publishMinSeconds: 60, publishMaxSeconds: 180, authorCooldownSeconds: 7200, postingWorkMinutes: 15, postingRestMinutes: 15, rateLimitMinutes: 10, rateLimitLongMinutes: 30 },
-  tiers: [
-    { id: 'apex', label: '最高优先级', handles: [], rounds: 30, replyStyle: '使用已配置的账号风格，保持尊重并围绕话题。' },
-    { id: 'tier1', label: '优先级 1', handles: [], rounds: 20, replyStyle: '简洁、尊重地回复。' },
-    { id: 'tier2', label: '优先级 2', handles: [], rounds: 10, replyStyle: '认真回应，不诱导私下联系。' },
-    { id: 'tier3', label: '优先级 3', handles: [], rounds: 5, replyStyle: '礼貌并围绕话题。' },
-    { id: 'tier4', label: '优先级 4', handles: [], rounds: 4, replyStyle: '克制且切题。' },
-    { id: 'other', label: '其他用户', handles: [], rounds: 3, replyStyle: '采用中性、尊重的默认风格。' },
-  ],
-  specialReplies: { asksAi: '若被问及是否为 AI，请如实回答。', asksToStop: '若对方要求停止，请勿继续回复该讨论串。', care: '礼貌回应并围绕话题。', affection: '尊重回应，不诱导私下联系。', namedAddress: '以中性方式回应称呼。', daddy: '拒绝不合适的亲属角色扮演。', imperialTitle: '不宣称现实中的权力或身份。', vernacular: '仅在明确请求时翻译。' },
-  rules: { skipFinanceComments: true, skipGrokMentions: false, doNotReplyAfterStopRequest: true, keepSensitiveKeyOutOfUi: true },
-});
-
-function clone(value) { return JSON.parse(JSON.stringify(value)); }
-function isRecord(value) { return !!value && typeof value === 'object' && !Array.isArray(value); }
-function sanitizeHandle(value) {
-  if (typeof value !== 'string') throw new TypeError('用户名必须是文本');
-  const handle = value.trim().replace(/^@/, '').toLowerCase();
-  if (!/^[a-z0-9_]{1,15}$/.test(handle)) throw new TypeError('用户名格式无效');
-  return handle;
+function processInfo(pid) {
+  const read = field => {
+    try { return execFileSync('/bin/ps', ['-o', `${field}=`, '-p', String(pid)], { encoding: 'utf8', timeout: 1500, maxBuffer: 8192 }).trim(); }
+    catch { return ''; }
+  };
+  return { stat: read('stat'), comm: read('comm'), command: read('command') };
 }
-function readJsonSafe(path) {
-  try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; }
-}
-function processState(pidPath, expectedScript, requiredArg = '') {
+function processState(pidPath, expectedScript, requiredArg = '', expectedArgvToken = expectedScript, interpreterToken = '') {
   let pid;
-  try { pid = Number((readFileSync(pidPath, 'utf8') || '').trim()); } catch { return { running: false, pid: null, owned: false }; }
-  if (!Number.isSafeInteger(pid) || pid < 2) return { running: false, pid: null, owned: false };
-  try {
-    const rows = execFileSync('/bin/ps', ['-o','stat=','-o','command=','-p',String(pid)], { encoding:'utf8', timeout:1500, maxBuffer:4096 }).trim();
-    if (!rows || rows.startsWith('Z')) return { running:false, pid, owned:false };
-    const command = rows.replace(/^\S+\s+/, '').trim();
-    const scriptToken = String(expectedScript).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const scriptPattern = new RegExp(`(?:^|\\s)${scriptToken}(?:\\s|$)`);
-    const owned = scriptPattern.test(command) && (!requiredArg || command.split(/\s+/).includes(requiredArg));
-    return { running:true, pid, owned, detail:owned ? '工作进程身份已验证' : '该进程编号属于其他命令，控制已禁用' };
-  } catch { return { running:false, pid, owned:false }; }
+  try { pid = Number((readFileSync(pidPath, 'utf8') || '').trim()); } catch { return { running: false, pid: null, owned: false, detail: '未找到进程编号文件' }; }
+  if (!Number.isSafeInteger(pid) || pid < 2) return { running: false, pid: null, owned: false, detail: '未找到进程编号文件' };
+  const info = processInfo(pid);
+  if (!info.command || info.stat.startsWith('Z')) return { running: false, pid, owned: false, detail: '进程编号已失效' };
+  const scriptToken = String(expectedArgvToken).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const tokens = info.command.match(/(?:"[^"]*"|'[^']*'|\S+)/g) || [];
+  const cleanToken = token => token.replace(/^(?:"(.*)"|'(.*)')$/, (_, doubleQuoted, singleQuoted) => doubleQuoted ?? singleQuoted);
+  const owned = tokens.some(token => cleanToken(token) === String(expectedArgvToken)) && (!requiredArg || tokens.some(token => cleanToken(token) === requiredArg)) && (!interpreterToken || tokens.some(token => cleanToken(token) === interpreterToken));
+  return { running: true, pid, owned, detail: owned ? '工作进程身份已验证' : '该进程编号属于其他命令，控制已禁用' };
 }
 function portListening(port) {
   return new Promise(resolveResult => {
@@ -91,6 +139,71 @@ function portListening(port) {
     socket.once('error', () => finish(false));
   });
 }
+
+// Reads the priority handles that are hard-coded in a worker script, so the UI can offer them as the real current list.
+export function readPriorityHandles(scriptPath) {
+  const result = { apex: [], tier1: [], tier2: [], tier3: [], tier4: [] };
+  let source;
+  try { source = readFileSync(scriptPath, 'utf8'); } catch { return result; }
+  const apex = source.match(/APEX_HANDLE\s*=\s*["']([A-Za-z0-9_]{1,15})["']/);
+  if (apex) result.apex.push(apex[1].toLowerCase());
+  for (const tier of ['tier1', 'tier2', 'tier3', 'tier4']) {
+    const match = source.match(new RegExp(`PRIORITY_${tier.toUpperCase()}\\s*=\\s*\\(([\\s\\S]*?)\\)`));
+    if (!match) continue;
+    const handles = [...match[1].matchAll(/["']([A-Za-z0-9_]{1,15})["']/g)].map(item => item[1].toLowerCase());
+    result[tier] = [...new Set(handles)];
+  }
+  return result;
+}
+
+// Mirrors the validation both Python workers run before they accept the shared config.
+export function workerAcceptance(config) {
+  const report = { comment: { accepted: true, reasons: [] }, reply: { accepted: true, reasons: [] } };
+  const add = (side, reason) => { report[side].accepted = false; report[side].reasons.push(reason); };
+  if (!isRecord(config)) { add('comment', '配置不是对象'); add('reply', '配置不是对象'); return report; }
+  // The comment worker's loader requires these sections to be objects even though it currently ignores their contents.
+  if (!isRecord(config.specialReplies)) add('comment', 'specialReplies 必须是对象');
+  if (!isRecord(config.rules)) add('comment', 'rules 必须是对象');
+  if (config.schemaVersion !== 1) { add('comment', 'schemaVersion 必须为 1'); add('reply', 'schemaVersion 必须为 1'); }
+  const timing = config.timing;
+  if (!isRecord(timing)) { add('comment', 'timing 必须是对象'); add('reply', 'timing 必须是对象'); }
+  else {
+    const commentKeys = ['rateLimitMinutes', 'rateLimitLongMinutes', 'postingWorkMinutes', 'postingRestMinutes', 'commentWindowHours', 'publishMinSeconds', 'publishMaxSeconds', 'authorCooldownSeconds', 'quietHoursStart', 'quietHoursEnd', 'fullStopStart', 'fullStopEnd'];
+    const replyKeys = ['rateLimitMinutes', 'rateLimitLongMinutes', 'postingWorkMinutes', 'postingRestMinutes', 'mentionWindowHours', 'publishMinSeconds', 'publishMaxSeconds', 'quietHoursStart', 'quietHoursEnd', 'fullStopStart', 'fullStopEnd'];
+    for (const [side, keys] of [['comment', commentKeys], ['reply', replyKeys]]) {
+      for (const key of keys) if (typeof timing[key] !== 'number' || !Number.isInteger(timing[key])) add(side, `timing.${key} 必须是整数`);
+    }
+  }
+  const model = config.model;
+  if (!isRecord(model)) { add('comment', 'model 必须是对象'); add('reply', 'model 必须是对象'); }
+  else {
+    if (typeof model.name !== 'string') { add('comment', 'model.name 必须是文本'); add('reply', 'model.name 必须是文本'); }
+    const port = model.endpointPort;
+    if (port !== null && port !== undefined && !(Number.isInteger(port) && port >= 1 && port <= 65535)) add('comment', 'model.endpointPort 必须是 1–65535 或留空');
+  }
+  const tiers = config.tiers;
+  if (!Array.isArray(tiers)) { add('comment', 'tiers 必须是数组'); add('reply', 'tiers 必须是数组'); }
+  else {
+    const ids = new Set();
+    const seen = new Set();
+    for (const tier of tiers) {
+      if (!isRecord(tier) || typeof tier.id !== 'string' || ids.has(tier.id)) { add('comment', 'tiers 结构无效或档位编号重复'); add('reply', 'tiers 结构无效或档位编号重复'); break; }
+      ids.add(tier.id);
+      if (!Number.isInteger(tier.rounds)) { add('comment', `${tier.id} 的 rounds 必须是整数`); add('reply', `${tier.id} 的 rounds 必须是整数`); }
+      if (typeof tier.replyStyle !== 'string') { add('comment', `${tier.id} 的 replyStyle 必须是文本`); add('reply', `${tier.id} 的 replyStyle 必须是文本`); }
+      if (!Array.isArray(tier.handles)) { add('comment', `${tier.id} 的 handles 必须是数组`); add('reply', `${tier.id} 的 handles 必须是数组`); continue; }
+      for (const handle of tier.handles) {
+        if (typeof handle !== 'string' || !HANDLE_PATTERN.test(handle)) { add('comment', `用户名格式无效：${handle}`); add('reply', `用户名格式无效：${handle}`); }
+        else if (seen.has(handle)) { add('comment', `用户名重复：${handle}`); add('reply', `用户名重复：${handle}`); }
+        seen.add(handle);
+      }
+    }
+    const required = new Set(TIER_IDS);
+    if (ids.size !== required.size || [...required].some(id => !ids.has(id))) { add('comment', '档位编号必须恰好是 apex/tier1/tier2/tier3/tier4/other'); add('reply', '档位编号必须恰好是 apex/tier1/tier2/tier3/tier4/other'); }
+  }
+  return report;
+}
+
 function validateConfig(input) {
   if (!isRecord(input) || input.schemaVersion !== 1 || !Array.isArray(input.tiers) || input.tiers.length !== 6) throw new TypeError('配置结构无效');
   const copy = clone(input);
@@ -101,123 +214,181 @@ function validateConfig(input) {
     for (const handle of tier.handles) { if (seen.has(handle)) throw new TypeError(`用户名重复：${handle}`); seen.add(handle); }
   }
   const m = copy.model;
-  if (!isRecord(m) || typeof m.name !== 'string' || !/^[\w./:-]{1,100}$/.test(m.name) || (m.endpointPort !== null && (!Number.isInteger(m.endpointPort) || m.endpointPort < 1 || m.endpointPort > 65535))) throw new TypeError('模型设置无效');
-  for (const id of ['apex','tier1','tier2','tier3','tier4','other']) if (!copy.tiers.some(t => t.id === id)) throw new TypeError(`缺少回复档位：${id}`);
-  if (copy.tiers.some(t => !['apex','tier1','tier2','tier3','tier4','other'].includes(t.id))) throw new TypeError('未知回复档位');
+  if (!isRecord(m) || typeof m.name !== 'string' || m.name.length > 100 || (m.name.length > 0 && !/^[\w./:-]{1,100}$/.test(m.name)) || (m.endpointPort !== null && m.endpointPort !== undefined && (!Number.isInteger(m.endpointPort) || m.endpointPort < 1 || m.endpointPort > 65535))) throw new TypeError('模型设置无效');
+  if (m.endpointPort === undefined) m.endpointPort = null;
+  for (const id of TIER_IDS) if (!copy.tiers.some(t => t.id === id)) throw new TypeError(`缺少回复档位：${id}`);
+  if (copy.tiers.some(t => !TIER_IDS.includes(t.id))) throw new TypeError('未知回复档位');
   if (!isRecord(copy.timing) || !isRecord(copy.specialReplies) || !isRecord(copy.rules)) throw new TypeError('时段或规则设置无效');
-  const bounds = { commentWindowHours:[1,48], mentionWindowHours:[1,48], quietHoursStart:[0,23], quietHoursEnd:[0,24], fullStopStart:[0,23], fullStopEnd:[0,24], publishMinSeconds:[5,3600], publishMaxSeconds:[5,3600], authorCooldownSeconds:[60,604800], postingWorkMinutes:[1,120], postingRestMinutes:[0,60], rateLimitMinutes:[1,60], rateLimitLongMinutes:[1,120] };
-  for (const [key,[min,max]] of Object.entries(bounds)) if (!Number.isInteger(copy.timing[key]) || copy.timing[key] < min || copy.timing[key] > max) throw new TypeError(`时段字段 ${key} 的设置无效`);
+  for (const [key, [min, max]] of Object.entries(TIMING_BOUNDS)) if (!Number.isInteger(copy.timing[key]) || copy.timing[key] < min || copy.timing[key] > max) throw new TypeError(`时段字段 ${key} 的设置无效`);
   if (copy.timing.publishMaxSeconds < copy.timing.publishMinSeconds) throw new TypeError('最长发布间隔必须大于或等于最短发布间隔');
-  for (const [key,value] of Object.entries(copy.specialReplies)) if (typeof key !== 'string' || typeof value !== 'string' || value.length > 2000) throw new TypeError('特殊回复设置无效');
+  for (const [key, value] of Object.entries(copy.specialReplies)) if (typeof key !== 'string' || typeof value !== 'string' || value.length > 2000) throw new TypeError('特殊回复设置无效');
   if (Buffer.byteLength(JSON.stringify(copy)) > MAX_BODY) throw new RangeError('配置内容过大');
-  for (const [key,value] of Object.entries(copy.rules)) if (typeof value !== 'boolean') throw new TypeError(`规则 ${key} 的值无效`);
+  for (const [key, value] of Object.entries(copy.rules)) if (typeof value !== 'boolean') throw new TypeError(`规则 ${key} 的值无效`);
   return copy;
 }
-import * as fsSync from 'node:fs';
 
-export function createService({ subprocess, clock = () => Date.now(), paths = DEFAULT_TARGETS, configPath = CONFIG_PATH, targetsPath = null, platform = process.platform } = {}) {
+export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGETS, configPath = CONFIG_PATH, targetsPath = null, platform = process.platform, spawnProcess = spawn } = {}) {
   let activeConfigPath = configPath;
   const currentTargets = () => (targetsPath ? resolveTargets(paths, targetsPath) : paths);
-  const configMirrorPaths = () => [...new Set([join(currentTargets().comment.dir, 'xops_config.json'), join(currentTargets().reply.dir, 'xops_config.json')])].filter(path => path !== activeConfigPath);
-  const getConfig = () => {
-    for (const path of [activeConfigPath, ...configMirrorPaths()]) {
-      const parsed = readJsonSafe(path);
-      if (parsed === null) continue;
-      return validateConfig(parsed);
+  const readSharedConfig = () => {
+    let raw;
+    try { raw = readFileSync(activeConfigPath, 'utf8'); }
+    catch (error) {
+      return { config: clone(DEFAULT_CONFIG), source: error.code === 'ENOENT' ? 'missing' : 'invalid' };
     }
-    return clone(DEFAULT_CONFIG);
+    if (Buffer.byteLength(raw) > MAX_BODY) return { config: clone(DEFAULT_CONFIG), source: 'invalid' };
+    let parsed;
+    try { parsed = JSON.parse(raw); }
+    catch { return { config: clone(DEFAULT_CONFIG), source: 'invalid' }; }
+    try { return { config: validateConfig(parsed), source: 'shared' }; }
+    catch { return { config: clone(DEFAULT_CONFIG), source: 'invalid' }; }
   };
-  const runtimeCapabilities = { model:'reply-only', modelPortOverride:'comment-only', tierMembership:'both', tierReplyStyle:'prompt-addition', tierRoundLimit:'reply-only', timing:'partial', specialReplies:false, booleanRules:false };
-  const saveConfig = value => {
+  const getConfig = () => readSharedConfig().config;
+  const runtimeCapabilities = {
+    model: 'reply-only', modelPortOverride: 'comment-only', tierMembership: 'both', tierReplyStyle: 'reply-only', tierRoundLimit: 'reply-only',
+    timing: { shared: ['rateLimitMinutes', 'rateLimitLongMinutes', 'postingWorkMinutes', 'postingRestMinutes', 'publishMinSeconds', 'publishMaxSeconds', 'quietHoursStart', 'quietHoursEnd', 'fullStopStart', 'fullStopEnd'], commentOnly: ['commentWindowHours', 'authorCooldownSeconds'], replyOnly: ['mentionWindowHours'] },
+    specialReplies: false, booleanRules: false,
+  };
+  const hashCurrentConfig = () => {
+    try { return createHash('sha256').update(readFileSync(activeConfigPath)).digest('hex'); }
+    catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  };
+  const saveConfig = (value, expectedHash) => {
     const validated = validateConfig(value);
-    fsSync.mkdirSync(dirname(activeConfigPath), { recursive: true, mode: 0o700 });
+    const currentHash = hashCurrentConfig();
+    if (expectedHash === undefined) throw new Error('缺少配置版本标识；请刷新状态后再保存');
+    if (expectedHash !== currentHash) throw new Error('共享配置已被其他进程修改；请刷新状态并重新检查后再保存');
+    mkdirSync(dirname(activeConfigPath), { recursive: true, mode: 0o700 });
     const tmp = `${activeConfigPath}.${process.pid}.tmp`;
-    fsSync.writeFileSync(tmp, `${JSON.stringify(validated, null, 2)}\n`, { mode: 0o600 });
-    fsSync.renameSync(tmp, activeConfigPath);
-    const mirrorContent = `${JSON.stringify(validated, null, 2)}\n`;
-    for (const mirrorPath of configMirrorPaths()) {
-      try {
-        fsSync.mkdirSync(dirname(mirrorPath), { recursive: true, mode: 0o700 });
-        const mirrorTmp = `${mirrorPath}.${process.pid}.tmp`;
-        fsSync.writeFileSync(mirrorTmp, mirrorContent, { mode: 0o600 });
-        fsSync.renameSync(mirrorTmp, mirrorPath);
-      } catch (error) {
-        throw new Error(`配置已保存，但同步工作进程配置失败（${basename(mirrorPath)}）：${error.message}`);
-      }
+    try {
+      writeFileSync(tmp, `${JSON.stringify(validated, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
+      renameSync(tmp, activeConfigPath);
+    } catch (error) {
+      try { unlinkSync(tmp); } catch { /* preserve original error */ }
+      throw error;
     }
-    return clone(validated);
+    return { config: clone(validated), hash: hashCurrentConfig() };
   };
   const inspect = async () => {
     const items = {};
     const active = currentTargets();
     for (const key of ['comment', 'reply']) {
       const t = active[key];
-      const worker = processState(t.pid, t.worker);
-      const watchdog = processState(t.watchdogPid, t.watchdog, key === 'comment' ? '--loop' : '--supervise');
+      const worker = processState(t.pid, t.worker, '', t.workerPidArgvToken || t.worker, t.interpreterPidArgvToken || '');
+      const watchdog = processState(t.watchdogPid, t.watchdog, key === 'comment' ? '--loop' : '--supervise', t.watchdogPidArgvToken || t.watchdog, t.interpreterPidArgvToken || '');
+      const watchdogLogPath = key === 'comment' ? join(t.dir, 'watchdog.log') : join(t.dir, 'reply_watchdog.stdout.log');
+      let watchdogLogTail = '';
+      try { watchdogLogTail = readFileSync(watchdogLogPath, 'utf8').slice(-6000).split('\n').slice(-30).join('\n').replace(/(?:Bearer\s+)[^\s]+/gi, 'Bearer [REDACTED]'); } catch { /* no watchdog log */ }
       const heartbeat = readJsonSafe(t.heartbeat);
       const rate = readJsonSafe(t.rate);
       let logTail = '';
       try { logTail = readFileSync(t.log, 'utf8').slice(-6000).split('\n').slice(-30).join('\n').replace(/(?:Bearer\s+)[^\s]+/gi, 'Bearer [REDACTED]'); } catch { /* no log available */ }
       items[key] = {
-        worker, watchdog, workerScriptExists: existsSync(t.worker), watchdogScriptExists: existsSync(t.watchdog), controlsEnabled: (!worker.running || worker.owned) && (!watchdog.running || watchdog.owned) && existsSync(t.worker) && existsSync(t.watchdog),
+        worker, watchdog, workerScriptExists: existsSync(t.worker), watchdogScriptExists: existsSync(t.watchdog),
+        pythonConfigured: typeof t.python === 'string' ? existsSync(t.python) : false,
+        controlsEnabled: (!worker.running || worker.owned) && (!watchdog.running || watchdog.owned) && existsSync(t.worker) && existsSync(t.watchdog),
         heartbeatAgeSeconds: heartbeat && Number.isFinite(Number(heartbeat.timestamp)) ? Math.max(0, Math.floor(clock() / 1000 - Number(heartbeat.timestamp))) : null,
+        heartbeatStatus: heartbeat && typeof heartbeat.status === 'string' ? heartbeat.status : null,
         pausedUntil: rate && Number.isFinite(Number(rate.until)) ? Number(rate.until) : null,
         pauseReason: rate && ['rate_limit', 'manual'].includes(rate.reason) ? rate.reason : (rate ? 'other' : null),
-        cdpPort: t.port, cdpAvailable: await portListening(t.port), logTail,
+        cdpPort: t.port, cdpAvailable: await portListening(t.port), logTail, watchdogLogTail,
+        priorityHandles: readPriorityHandles(t.worker),
       };
     }
-    return { ok: true, config: getConfig(), runtimeConfigApplied: true, runtimeCapabilities, items, platform, checkedAt: new Date(clock()).toISOString() };
+    const shared = readSharedConfig();
+    const configHash = hashCurrentConfig();
+    return {
+      ok: true, config: shared.config, configSource: shared.source, configPath: activeConfigPath, configHash,
+      runtimeConfigApplied: shared.source === 'shared', runtimeCapabilities, fieldSide: FIELD_SIDE,
+      workerAcceptance: workerAcceptance(shared.config), items, platform, checkedAt: new Date(clock()).toISOString(),
+    };
   };
   async function action(request) {
     if (!isRecord(request) || typeof request.action !== 'string') throw new TypeError('缺少操作类型');
     if (request.action === 'state') return inspect();
     if (request.action === 'save-config') {
-      const saved = saveConfig(request.config);
-      return { config: saved, runtimeConfigApplied: true, note: '两个工作进程会在下轮读取重点名单、风格和时段设置。模型名称和回复轮次仅由回复进程读取；模型端口覆盖仅供评论进程使用。特殊回复文本及布尔规则目前仅为草稿，不会接入运行逻辑。' };
+      const result = saveConfig(request.config, request.expectedConfigHash);
+      const saved = result.config;
+      const acceptance = workerAcceptance(saved);
+      return {
+        config: saved, configHash: result.hash, runtimeConfigApplied: true, workerAcceptance: acceptance,
+        note: '共享配置已写入，两个工作进程会在下轮读取。重点名单与时段两侧生效；模型名称与回复轮次仅由回复进程读取，模型端口覆盖仅由评论进程读取；回复风格仅由回复进程追加到提示词。特殊回复文本与布尔规则目前仅为草稿，不会接入运行逻辑。',
+      };
     }
     if (!['pause', 'resume', 'start', 'stop', 'restart'].includes(request.action)) throw new TypeError('未知操作类型');
     if (!['comment', 'reply'].includes(request.target)) throw new TypeError('目标必须是评论或提及回复');
     if (platform !== 'darwin') throw new Error('进程控制仅支持 macOS');
     const target = currentTargets()[request.target];
-    const watchdogStatus = processState(target.watchdogPid, target.watchdog, request.target === 'comment' ? '--loop' : '--supervise');
-    const workerStatus = processState(target.pid, target.worker);
+    const watchdogStatus = processState(target.watchdogPid, target.watchdog, request.target === 'comment' ? '--loop' : '--supervise', target.watchdogPidArgvToken || target.watchdog, target.interpreterPidArgvToken || '');
+    const workerStatus = processState(target.pid, target.worker, '', target.workerPidArgvToken || target.worker, target.interpreterPidArgvToken || '');
     if (request.action === 'start') {
-      if (watchdogStatus.running && watchdogStatus.owned) return { started:false, note:'监控进程已在运行，已拒绝重复启动。' };
+      if (!watchdogStatus.running && !workerStatus.running && (!target.workerPidArgvToken || !target.watchdogPidArgvToken || !target.interpreterPidArgvToken || !target.python)) throw new Error('启动已停止的 worker 需要在 console-targets.json 配置 python、workerPidArgvToken、watchdogPidArgvToken 和 interpreterPidArgvToken');
+      if (watchdogStatus.running && watchdogStatus.owned) return { started: false, note: '监控进程已在运行，已拒绝重复启动。' };
       if (watchdogStatus.running || workerStatus.running) throw new Error('发现正在运行但身份未验证的进程，已拒绝启动');
-      if (!subprocess?.resolveExecutable || !subprocess?.spawn) throw new Error('DSH 子进程服务不可用');
-      if (fsSync.existsSync(target.stop)) fsSync.unlinkSync(target.stop);
-      const python = await subprocess.resolveExecutable('python3');
+      if (!existsSync(target.watchdog)) throw new Error('未找到监控脚本，请先在设置中核对脚本路径');
+      const python = resolvePython(target);
+      if (existsSync(target.stop)) unlinkSync(target.stop);
       const argv = request.target === 'comment' ? [python, target.watchdog, '--loop'] : [python, target.watchdog, '--supervise'];
-      subprocess.spawn({ argv, cwd: target.dir, stdio: { stdin:'ignore', stdout:{ maxBytes:2048 }, stderr:{ maxBytes:2048 } }, graceMs:5000 });
-      return { started:null, launchRequested:true, note:'启动请求已提交，尚未确认成功。请刷新状态核对监控进程、工作进程和心跳。' };
+      const logPath = request.target === 'comment' ? join(target.dir, 'watchdog.log') : join(target.dir, 'reply_watchdog.stdout.log');
+      let pid = null;
+      let out;
+      try {
+        out = openSync(logPath, 'a');
+        const child = spawnProcess(argv[0], argv.slice(1), { cwd: target.dir, detached: true, stdio: ['ignore', out, out] });
+        if (child?.error) throw child.error;
+        if (typeof child?.unref === 'function') child.unref();
+        pid = child?.pid ?? null;
+        if (pid == null) throw new Error('系统未返回新进程编号');
+      } catch (error) {
+        throw new Error(`启动监控进程失败：${error.message}`);
+      } finally {
+        if (out !== undefined) { try { closeSync(out); } catch { /* ignore close failure */ } }
+      }
+      return { started: null, launchRequested: true, pid, note: '启动请求已提交，尚未确认成功。监控进程会自行拉起工作进程，请刷新状态核对进程与心跳。' };
     }
     if (request.action === 'stop') {
       if (!watchdogStatus.running || !watchdogStatus.owned) throw new Error('监控进程身份未验证，拒绝停止');
       if (workerStatus.running && !workerStatus.owned) throw new Error('工作进程身份未验证，拒绝停止');
-      fsSync.writeFileSync(target.stop, 'stop\n', { mode:0o600 });
-      return { stopping:true, pid:watchdogStatus.pid, note:'已请求协作式停止；监控进程将停止其托管的工作进程并退出。' };
+      writeFileSync(target.stop, 'stop\n', { mode: 0o600 });
+      return { stopping: true, pid: watchdogStatus.pid, note: '已请求协作式停止；监控进程将停止其托管的工作进程并退出。' };
     }
     if (request.action === 'restart') {
       if (!watchdogStatus.running || !watchdogStatus.owned) throw new Error('监控进程身份未验证，拒绝重启');
       if (workerStatus.running && !workerStatus.owned) throw new Error('工作进程身份未验证，拒绝重启');
-      if (!workerStatus.running) return { restarted:false, note:'工作进程当前未运行；现有监控进程将在下次检查时尝试启动。' };
+      if (!workerStatus.running) return { restarted: false, note: '工作进程当前未运行；现有监控进程将在下次检查时尝试启动。' };
       process.kill(workerStatus.pid, 'SIGTERM');
-      return { restarted:true, pid:workerStatus.pid, note:'已向身份确认的工作进程发送终止信号；后续重启由监控进程负责。' };
+      return { restarted: true, pid: workerStatus.pid, note: '已向身份确认的工作进程发送终止信号；后续重启由监控进程负责。' };
     }
     if (request.action === 'pause') {
       const minutes = Number(request.minutes);
       if (!Number.isFinite(minutes) || minutes < 1 || minutes > 1440) throw new RangeError('暂停时长必须为 1–1440 分钟');
+      const existingRate = readJsonSafe(target.rate);
+      if (existingRate?.reason === 'rate_limit' && Number(existingRate.until) > Math.floor(clock() / 1000)) throw new Error('X 限流保护仍有效；不能用手动暂停覆盖或缩短保护时间');
+      if (!watchdogStatus.running || !watchdogStatus.owned) throw new Error('监控进程未运行或身份未验证，暂停标记不会生效，已拒绝操作');
       if (workerStatus.running && !workerStatus.owned) throw new Error('工作进程身份未验证，拒绝暂停');
       const until = Math.floor(clock() / 1000) + Math.floor(minutes * 60);
-      fsSync.writeFileSync(target.rate, JSON.stringify({ until, resume_at: new Date(until * 1000).toISOString(), reason: 'manual', source: 'x-bot-ops-console' }), { mode: 0o600 });
-      return { pausedUntil: until, note: '监控进程将遵守暂停标记。请刷新状态核对工作进程是否已停止。' };
+      writeFileSync(target.rate, JSON.stringify({ until, resume_at: new Date(until * 1000).toISOString(), reason: 'manual', source: 'x-bot-ops-console' }), { mode: 0o600 });
+      return { pausedUntil: until, note: '监控进程将遵守暂停标记（读到 until 为止）。请刷新状态核对工作进程是否已停止。' };
     }
     if (request.action === 'resume') {
-      try { fsSync.unlinkSync(target.rate); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-      return { note: '已移除暂停标记；监控进程可能在下个周期恢复工作进程。' };
+      const existingRate = readJsonSafe(target.rate);
+      if (existingRate?.reason === 'rate_limit' && Number(existingRate.until) > Math.floor(clock() / 1000)) throw new Error('X 限流保护仍有效；为了账号安全，不能提前恢复');
+      if (!watchdogStatus.running || !watchdogStatus.owned) throw new Error('监控进程未运行或身份未验证，无法安全恢复');
+      if (workerStatus.running && !workerStatus.owned) throw new Error('工作进程身份未验证，拒绝恢复');
+      if (existingRate?.reason === 'rate_limit' && Number(existingRate.until) > Math.floor(clock() / 1000)) throw new Error('X 限流保护仍有效；为了账号安全，不能提前恢复');
+      try { unlinkSync(target.rate); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      return { note: '已移除到期或手动暂停标记；监控进程可能在下个周期恢复工作进程。' };
     }
   }
   return { inspect, action, getConfig, saveConfig };
+}
+
+// Uses the same interpreter the worker already runs under, so optional dependencies keep resolving.
+function resolvePython(target) {
+  const python = target.python;
+  if (typeof python !== 'string' || !python.startsWith('/') || !existsSync(python)) throw new Error('配置的 Python 解释器不存在或不是绝对路径');
+  if (target.interpreterPidArgvToken !== python) throw new Error('interpreterPidArgvToken 必须与 python 可执行路径一致');
+  return python;
 }
 
 export async function authorize(req, connection) {
@@ -247,27 +418,33 @@ function send(res, status, value) {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'content-length': data.length, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'; frame-ancestors 'none'" }); res.end(data);
 }
 export function installRoute(ctx, service, { desktop = false } = {}) {
-  ctx.inject(['webServer', 'connection'], webCtx => {
-    const connection = webCtx.connection;
-    const routePath = desktop ? DESKTOP_ROUTE : WEB_ROUTE;
-    webCtx.effect(() => webCtx.webServer.register({ kind: 'exact', path: routePath, handler: async (req, res) => {
+  if (typeof ctx.connection?.fetch?.register !== 'function') throw new Error('DSH Connection Fetch service is unavailable');
+  const routePath = desktop ? DESKTOP_ROUTE : WEB_ROUTE;
+  const registered = ctx.connection.fetch.register({
+    path: routePath,
+    methods: ['GET', 'POST'],
+    requestBody: 'buffered',
+    fetch: async request => {
       try {
-        const auth = await authorize(req, connection);
-        if (auth === 'unavailable') return send(res, 503, { ok: false, error: 'DSH 请求授权服务不可用' });
-        if (!auth) return send(res, 403, { ok: false, error: 'DSH 拒绝了此请求的授权' });
-        if (req.method === 'GET') return send(res, 200, await service.inspect());
-        if (req.method !== 'POST') return send(res, 405, { ok: false, error: '不支持此请求方法' });
-        const result = await service.action(await bodyJson(req));
-        return send(res, 200, { ok: true, value: result });
-      } catch (error) { return send(res, error instanceof RangeError ? 413 : 400, { ok: false, error: String(error?.message ?? error).slice(0, 250) }); }
-    } }), 'x-bot-ops-console: route');
+        if (request.method === 'GET') return new Response(JSON.stringify(await service.inspect()), { status: 200, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'; frame-ancestors 'none'" } });
+        if (request.method !== 'POST') return new Response(JSON.stringify({ ok: false, error: '不支持此请求方法' }), { status: 405, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
+        const body = await request.arrayBuffer();
+        if (body.byteLength > MAX_BODY) return new Response(JSON.stringify({ ok: false, error: '请求内容过大' }), { status: 413, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
+        const result = await service.action(JSON.parse(new TextDecoder().decode(body)));
+        return new Response(JSON.stringify({ ok: true, value: result }), { status: 200, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'; frame-ancestors 'none'" } });
+      } catch (error) {
+        const status = error instanceof RangeError ? 413 : 400;
+        return new Response(JSON.stringify({ ok: false, error: String(error?.message ?? error).slice(0, 250) }), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
+      }
+    },
   });
+  ctx.effect(() => registered, 'x-bot-ops-console: authenticated Connection Fetch route');
 }
-export const inject = ['subprocess', 'connection'];
+export const inject = ['connection'];
 export function apply(ctx) {
-  const service = createService({ subprocess: ctx.subprocess, targetsPath: TARGETS_PATH });
+  const service = createService({ targetsPath: TARGETS_PATH });
   const desktop = ctx.profileContext?.name === 'desktop';
   installRoute(ctx, service, { desktop });
 }
 
-export { DEFAULT_CONFIG, validateConfig };
+export { DEFAULT_CONFIG, TIMING_BOUNDS, TIER_IDS, validateConfig };

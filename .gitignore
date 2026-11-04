@@ -6,3 +6,5 @@ node_modules/
 !*.example
 *.pem
 *.key
+*.tgz
+*.sha256

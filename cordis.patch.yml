@@ -1,9 +1,4 @@
 - insert:
     - id: dsh-x-bot-ops-console
       name: dsh-x-bot-ops-console
-      config: {}
-- extend:
-    - target: dsh-x-bot-ops-console
-      field: config
-      value:
-        client: true
+      inject: [connection]

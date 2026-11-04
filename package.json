@@ -24,6 +24,7 @@
     "config.default.json",
     "README.md",
     "SECURITY.md",
+    "ACCEPTANCE-STATUS.md",
     "LICENSE",
     "test/plugin.test.mjs"
   ],
