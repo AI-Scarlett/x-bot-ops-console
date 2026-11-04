@@ -38,24 +38,35 @@ test('Desktop and Web Host adapters register separate routes and require public 
     assert.deepEqual(injection.deps, ['webServer', 'connection']);
     injection.callback(webCtx);
     assert.equal(registered.path, expected);
+    if (desktop) assert.equal(registered.path.startsWith('/api2/'), true);
     assert.equal(registered.kind, 'exact');
   }
+});
+
+test('Desktop UI uses relative DSH route and Chinese-first controls', () => {
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.match(source, /DESKTOP \? '\/api2\/x-bot-ops-console'/);
+  assert.match(source, /const t = key => zh\[key\]/);
+  assert.doesNotMatch(source, /navigator\.language/);
+  assert.match(source, /disabled:busy\|\|!controlsEnabled/);
 });
 
 test('default config validates and preserves privacy boundaries', () => {
   const config = structuredClone(DEFAULT_CONFIG);
   assert.equal(validateConfig(config).model.name, 'your-model-name');
-  assert.match(config.model.keySource, /secret never read/);
-  assert.throws(()=>validateConfig({...config,tiers:[]}),/invalid config/);
+  assert.match(validateConfig(config).tiers[0].label, /优先级/);
+  assert.match(validateConfig(config).specialReplies.asksAi, /如实回答/);
+  assert.match(config.model.keySource, /密钥不会被读取或显示/);
+  assert.throws(()=>validateConfig({...config,tiers:[]}),/配置结构无效/);
 });
 
 test('rejects duplicate or malformed priority handles', () => {
   const config = structuredClone(DEFAULT_CONFIG);
   config.tiers[1].handles.push('priorityuser');
   config.tiers[0].handles.push('priorityuser');
-  assert.throws(()=>validateConfig(config),/duplicate handle/);
+  assert.throws(()=>validateConfig(config),/用户名重复/);
   const invalid = structuredClone(DEFAULT_CONFIG); invalid.tiers[0].handles=['bad handle'];
-  assert.throws(()=>validateConfig(invalid),/valid X username/);
+  assert.throws(()=>validateConfig(invalid),/用户名格式无效/);
 });
 
 test('saves bounded user-owned config without real home writes', async () => {
@@ -67,8 +78,8 @@ test('saves bounded user-owned config without real home writes', async () => {
     const result=await service.action({action:'save-config',config:changed});
     assert.equal(result.config.model.name,'gpt-test');
     assert.equal(result.runtimeConfigApplied,true);
-    assert.equal(result.note.includes('SpecialReplies'),true);
-    assert.equal(result.note.includes('round caps only by replies'),true);
+    assert.equal(result.note.includes('仅为草稿'),true);
+    assert.equal(result.note.includes('回复轮次仅由回复进程读取'),true);
     assert.equal(JSON.parse(readFileSync(configPath,'utf8')).model.name,'gpt-test');
   } finally { f.cleanup(); }
 });
@@ -93,7 +104,7 @@ test('validates numeric timing, reply rules and copies input without mutation', 
   const bad=structuredClone(DEFAULT_CONFIG); bad.timing.publishMaxSeconds=1;
   assert.throws(()=>validateConfig(bad),/timing|publishMax/);
   const oversized=structuredClone(DEFAULT_CONFIG); oversized.specialReplies.care='x'.repeat(2001);
-  assert.throws(()=>validateConfig(oversized),/special reply/);
+  assert.throws(()=>validateConfig(oversized),/特殊回复设置无效/);
 });
 
 test('start reports a request, not an unverified success', async () => {
@@ -116,8 +127,8 @@ test('distinguishes live foreign PID from stopped PID and fails closed', async (
     const state=await service.inspect();
     assert.equal(state.items.comment.watchdog.running,true);
     assert.equal(state.items.comment.watchdog.owned,false);
-    await assert.rejects(service.action({action:'stop',target:'comment'}),/watchdog identity not verified/);
-    await assert.rejects(service.action({action:'start',target:'comment'}),/live process has an unverified identity/);
+    await assert.rejects(service.action({action:'stop',target:'comment'}),/监控进程身份未验证/);
+    await assert.rejects(service.action({action:'start',target:'comment'}),/发现正在运行但身份未验证/);
   } finally { f.cleanup(); }
 });
 
@@ -125,8 +136,8 @@ test('refuses process actions without verified owned PID identity', async () => 
   const f=fixture();
   try {
     const service=createService({paths:f.paths,configPath:join(f.dir,'config.json'),platform:'darwin'});
-    await assert.rejects(service.action({action:'stop',target:'comment'}),/watchdog identity not verified/);
-    await assert.rejects(service.action({action:'restart',target:'reply'}),/watchdog identity not verified/);
+    await assert.rejects(service.action({action:'stop',target:'comment'}),/监控进程身份未验证/);
+    await assert.rejects(service.action({action:'restart',target:'reply'}),/监控进程身份未验证/);
   } finally { f.cleanup(); }
 });
 
@@ -134,8 +145,8 @@ test('rejects unsafe actions and non-mac process control', async () => {
   const f=fixture();
   try {
     const service=createService({paths:f.paths,configPath:join(f.dir,'config.json'),platform:'linux'});
-    await assert.rejects(service.action({action:'start-watchdog',target:'comment'}),/unknown action/);
-    await assert.rejects(service.action({action:'shell',command:'rm -rf /'}),/unknown action/);
-    await assert.rejects(service.action({action:'pause',target:'bad',minutes:3}),/target must be comment or reply/);
+    await assert.rejects(service.action({action:'start-watchdog',target:'comment'}),/未知操作类型/);
+    await assert.rejects(service.action({action:'shell',command:'rm -rf /'}),/未知操作类型/);
+    await assert.rejects(service.action({action:'pause',target:'bad',minutes:3}),/目标必须是评论或提及回复/);
   } finally { f.cleanup(); }
 });

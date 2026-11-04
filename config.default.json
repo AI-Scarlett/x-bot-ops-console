@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "note": "Shared runtime configuration read by both Python workers each cycle; any unimplemented field is shown as not applied.",
-  "model": { "name": "your-model-name", "endpointPort": null, "keySource": "LocalModelHub credential reference (secret never read or displayed)" },
+  "note": "两类 Python worker 每轮读取共享配置；未接入的字段会标记为未生效。",
+  "model": { "name": "your-model-name", "endpointPort": null, "keySource": "LocalModelHub 凭据引用（密钥不会被读取或显示）" },
   "timing": { "commentWindowHours": 8, "mentionWindowHours": 12, "quietHoursStart": 0, "quietHoursEnd": 7, "fullStopStart": 1, "fullStopEnd": 6, "publishMinSeconds": 60, "publishMaxSeconds": 180, "authorCooldownSeconds": 7200, "postingWorkMinutes": 15, "postingRestMinutes": 15, "rateLimitMinutes": 10, "rateLimitLongMinutes": 30 },
   "tiers": [
     { "id": "apex", "label": "最高优先级", "handles": [], "rounds": 30, "replyStyle": "使用为该账号配置的风格，保持尊重并围绕话题。" },
@@ -11,6 +11,6 @@
     { "id": "tier4", "label": "优先级 4", "handles": [], "rounds": 4, "replyStyle": "克制且切题。" },
     { "id": "other", "label": "其他用户", "handles": [], "rounds": 3, "replyStyle": "采用中性、尊重的默认风格。" }
   ],
-  "specialReplies": { "asksAi": "If asked whether you are AI, answer honestly.", "asksToStop": "If asked to stop, do not continue replying in that thread.", "care": "Reply politely and stay on topic.", "affection": "Respond respectfully without encouraging private contact.", "namedAddress": "Respond neutrally to forms of address.", "daddy": "Decline inappropriate familial roleplay.", "imperialTitle": "Do not claim real-world authority or status.", "vernacular": "Translate only when explicitly requested." },
+  "specialReplies": { "asksAi": "若被问及是否为 AI，请如实回答。", "asksToStop": "若对方要求停止，请勿继续回复该讨论串。", "care": "礼貌回应并围绕话题。", "affection": "尊重回应，不诱导私下联系。", "namedAddress": "以中性方式回应称呼。", "daddy": "拒绝不合适的亲属角色扮演。", "imperialTitle": "不宣称现实中的权力或身份。", "vernacular": "仅在明确请求时翻译。" },
   "rules": { "skipFinanceComments": true, "skipGrokMentions": false, "doNotReplyAfterStopRequest": true, "keepSensitiveKeyOutOfUi": true }
 }
