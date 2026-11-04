@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "note": "Shared runtime configuration read by both Python workers each cycle; any unimplemented field is shown as not applied.",
+  "model": { "name": "your-model-name", "endpointPort": null, "keySource": "LocalModelHub credential reference (secret never read or displayed)" },
+  "timing": { "commentWindowHours": 8, "mentionWindowHours": 12, "quietHoursStart": 0, "quietHoursEnd": 7, "fullStopStart": 1, "fullStopEnd": 6, "publishMinSeconds": 60, "publishMaxSeconds": 180, "authorCooldownSeconds": 7200, "postingWorkMinutes": 15, "postingRestMinutes": 15, "rateLimitMinutes": 10, "rateLimitLongMinutes": 30 },
+  "tiers": [
+    { "id": "apex", "label": "最高优先级", "handles": [], "rounds": 30, "replyStyle": "使用为该账号配置的风格，保持尊重并围绕话题。" },
+    { "id": "tier1", "label": "优先级 1", "handles": [], "rounds": 20, "replyStyle": "简洁、尊重地回复。" },
+    { "id": "tier2", "label": "优先级 2", "handles": [], "rounds": 10, "replyStyle": "认真回应，不诱导私下联系。" },
+    { "id": "tier3", "label": "优先级 3", "handles": [], "rounds": 5, "replyStyle": "礼貌并围绕话题。" },
+    { "id": "tier4", "label": "优先级 4", "handles": [], "rounds": 4, "replyStyle": "克制且切题。" },
+    { "id": "other", "label": "其他用户", "handles": [], "rounds": 3, "replyStyle": "采用中性、尊重的默认风格。" }
+  ],
+  "specialReplies": { "asksAi": "If asked whether you are AI, answer honestly.", "asksToStop": "If asked to stop, do not continue replying in that thread.", "care": "Reply politely and stay on topic.", "affection": "Respond respectfully without encouraging private contact.", "namedAddress": "Respond neutrally to forms of address.", "daddy": "Decline inappropriate familial roleplay.", "imperialTitle": "Do not claim real-world authority or status.", "vernacular": "Translate only when explicitly requested." },
+  "rules": { "skipFinanceComments": true, "skipGrokMentions": false, "doNotReplyAfterStopRequest": true, "keepSensitiveKeyOutOfUi": true }
+}
