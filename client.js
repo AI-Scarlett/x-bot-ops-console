@@ -8,7 +8,7 @@ window.__ModuleLoader__.load({
     const NS = 'xBotOpsConsole';
 
     const zh = {
-      panel: 'X 运维台', title: '𝕏 自动运维台', subtitle: '集中监控自动评论与提及回复，支持重点名单独立维护、通用公共配置与两项任务独立配置',
+      panel: 'X 运维台', title: '𝕏 自动运维台', subtitle: '集中监控自动评论与提及回复，支持重点名单、通用公共配置与两项任务独立配置',
       refresh: '刷新状态', comment: '自动评论', reply: '提及回复', worker: '工作进程', watchdog: '监控进程',
       heartbeat: '心跳年龄', chrome: 'Chrome 调试端口', pause: '暂停', resume: '恢复', start: '启动', stop: '停止', restart: '重启工作进程',
       logs: '最近日志', configuration: '运行配置', model: '模型', modelName: '模型名称', modelPort: '模型池端口覆盖',
@@ -40,7 +40,7 @@ window.__ModuleLoader__.load({
       missingFiles: '未找到配置位置的工作进程或监控脚本；请在设置中核对脚本目录。',
       pidForeign: '发现进程身份未确认，控制已禁用', logEmpty: '暂无日志', heartbeatStatus: '心跳状态',
       detailMissing: '未找到进程编号文件', detailDead: '进程编号已失效', detailVerified: '身份已验证', detailForeign: '进程身份未确认',
-      tabGeneral: '🌐 通用与公共配置', tabTiers: '👥 重点名单与个性化配置', tabComment: '💬 自动评论独立配置', tabReply: '↩️ 提及回复独立配置',
+      tabTiers: '👥 重点名单与个性化', tabGeneral: '🌐 通用与公共配置', tabComment: '💬 自动评论', tabReply: '↩️ 提及回复',
     };
     const t = key => zh[key] || key;
 
@@ -67,7 +67,7 @@ window.__ModuleLoader__.load({
     const inputStyle = { width: '100%', boxSizing: 'border-box', padding: '8px 10px', margin: '4px 0 10px', border: `1px solid ${C.border}`, borderRadius: 8, background: C.surface, color: C.text };
     const labelStyle = { display: 'block', fontSize: 13, color: C.muted, marginTop: 8 };
     const buttonStyle = (primary = false, disabled = false) => ({
-      padding: '7px 12px', border: `1px solid ${C.border}`, borderRadius: 8, cursor: disabled ? 'not-allowed' : 'pointer',
+      padding: '7px 14px', border: `1px solid ${C.border}`, borderRadius: 8, cursor: disabled ? 'not-allowed' : 'pointer',
       background: primary ? C.accent : C.surface, color: primary ? C.onAccent : C.text, opacity: disabled ? 0.55 : 1, fontSize: 13,
     });
     const badgeStyle = side => ({
@@ -318,11 +318,17 @@ window.__ModuleLoader__.load({
       const sourceText = state?.configSource === 'shared' ? t('configShared') : state?.configSource === 'invalid' ? t('configInvalid') : t('configMissing');
       const sourceColor = state?.configSource === 'shared' ? C.success : state?.configSource === 'invalid' ? C.error : C.muted;
 
-      const tabStyle = key => ({
-        padding: '10px 18px', border: 'none', borderBottom: activeTab === key ? `3px solid ${C.accent}` : '3px solid transparent',
-        background: 'transparent', color: activeTab === key ? C.text : C.muted, fontWeight: activeTab === key ? '600' : 'normal',
-        fontSize: 14, cursor: 'pointer', transition: 'all 0.15s ease',
-      });
+      // 显式胶囊式 Tab 样式，对比度极高，选中高亮明显
+      const tabItemStyle = key => {
+        const active = activeTab === key;
+        return {
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          padding: '8px 16px', borderRadius: 8, border: `1px solid ${active ? C.accent : C.border}`,
+          background: active ? C.accent : C.layerTwo, color: active ? C.onAccent : C.text,
+          fontWeight: active ? '600' : 'normal', fontSize: 13, cursor: 'pointer',
+          userSelect: 'none', transition: 'all 0.15s ease', flexShrink: 0,
+        };
+      };
 
       return h('main', { style: pageStyle },
         h('header', { style: { display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', alignItems: 'flex-start' } },
@@ -339,12 +345,18 @@ window.__ModuleLoader__.load({
         error ? h('p', { role: 'alert', style: { margin: 0, padding: '10px 12px', borderRadius: 10, background: C.raised, color: C.error, fontSize: 13 } }, error) : null,
         notice ? h('p', { role: 'status', style: { margin: 0, padding: '10px 12px', borderRadius: 10, background: C.raised, color: C.success, fontSize: 13 } }, notice) : null,
 
-        // Tab Navigation - 4 个 Tab 架构
-        h('nav', { style: { display: 'flex', gap: 8, borderBottom: `1px solid ${C.border}`, margin: '4px 0', overflowX: 'auto', flexWrap: 'nowrap' } },
-          h('button', { type: 'button', style: tabStyle('tiers'), onClick: () => setActiveTab('tiers') }, t('tabTiers')),
-          h('button', { type: 'button', style: tabStyle('general'), onClick: () => setActiveTab('general') }, t('tabGeneral')),
-          h('button', { type: 'button', style: tabStyle('comment'), onClick: () => setActiveTab('comment') }, t('tabComment')),
-          h('button', { type: 'button', style: tabStyle('reply'), onClick: () => setActiveTab('reply') }, t('tabReply'))),
+        // 显式胶囊式 Tab 导航栏
+        h('div', {
+          style: {
+            display: 'flex', gap: 10, padding: '8px 10px', background: C.surface,
+            border: `1px solid ${C.border}`, borderRadius: 10, margin: '2px 0 8px',
+            overflowX: 'auto', flexWrap: 'wrap', alignItems: 'center'
+          }
+        },
+          h('button', { type: 'button', style: tabItemStyle('tiers'), onClick: () => setActiveTab('tiers') }, t('tabTiers')),
+          h('button', { type: 'button', style: tabItemStyle('general'), onClick: () => setActiveTab('general') }, t('tabGeneral')),
+          h('button', { type: 'button', style: tabItemStyle('comment'), onClick: () => setActiveTab('comment') }, t('tabComment')),
+          h('button', { type: 'button', style: tabItemStyle('reply'), onClick: () => setActiveTab('reply') }, t('tabReply'))),
 
         // TAB 1: 👥 重点名单与个性化配置（独立维护专区）
         activeTab === 'tiers' ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
