@@ -4,11 +4,11 @@
   "model": { "name": "", "endpointPort": null, "keySource": "LocalModelHub 凭据引用（密钥不会被读取或显示）" },
   "timing": { "commentWindowHours": 6, "mentionWindowHours": 12, "quietHoursStart": 0, "quietHoursEnd": 7, "fullStopStart": 1, "fullStopEnd": 6, "publishMinSeconds": 30, "publishMaxSeconds": 100, "authorCooldownSeconds": 1800, "postingWorkMinutes": 20, "postingRestMinutes": 5, "rateLimitMinutes": 5, "rateLimitLongMinutes": 15 },
   "tiers": [
-    { "id": "apex", "label": "最高优先级", "handles": [], "rounds": 3, "replyStyle": "" },
-    { "id": "tier1", "label": "优先级 1", "handles": [], "rounds": 3, "replyStyle": "" },
-    { "id": "tier2", "label": "优先级 2", "handles": [], "rounds": 3, "replyStyle": "" },
-    { "id": "tier3", "label": "优先级 3", "handles": [], "rounds": 3, "replyStyle": "" },
-    { "id": "tier4", "label": "优先级 4", "handles": [], "rounds": 3, "replyStyle": "" },
+    { "id": "apex", "label": "最高优先级", "handles": [], "rounds": 30, "replyStyle": "" },
+    { "id": "tier1", "label": "优先级 1", "handles": [], "rounds": 20, "replyStyle": "" },
+    { "id": "tier2", "label": "优先级 2", "handles": [], "rounds": 10, "replyStyle": "" },
+    { "id": "tier3", "label": "优先级 3", "handles": [], "rounds": 5, "replyStyle": "" },
+    { "id": "tier4", "label": "优先级 4", "handles": [], "rounds": 4, "replyStyle": "" },
     { "id": "other", "label": "其他用户", "handles": [], "rounds": 3, "replyStyle": "" }
   ],
   "specialReplies": { "asksAi": "若被问及是否为 AI，请如实回答。", "asksToStop": "若对方要求停止，请勿继续回复该讨论串。", "care": "礼貌回应并围绕话题。", "affection": "尊重回应，不诱导私下联系。", "namedAddress": "以中性方式回应称呼。", "daddy": "拒绝不合适的亲属角色扮演。", "imperialTitle": "不宣称现实中的权力或身份。", "vernacular": "仅在明确请求时翻译。" },

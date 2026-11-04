@@ -115,6 +115,52 @@ window.__ModuleLoader__.load({
       },
     };
 
+    const specialPersons = [
+      {
+        handle: '4ggug',
+        badge: '👑 Apex 专属对象（最高优先级）',
+        rounds: '30 轮上限',
+        voice: '文言与诗词歌赋，直抒情欲与爱恋',
+        rules: [
+          '直白露骨：可以直接写想与她睡觉、同床、做爱、云雨、同衾、共枕，不装含蓄。',
+          '免除「兮」字：不同于常规重点账号，无需强制包含「兮」。',
+          '关闭日常问候：对方问吃了没/睡了没时，不回“食不知味”，避免冲淡露骨口吻。',
+          '爱意回应特例：当对方表达好感/爱意时，情欲写透并把未尽之意留到私聊（严禁写“私信我”三字，禁止问句）。',
+        ],
+      },
+      {
+        handle: 'mrchen1998',
+        badge: '⭐ Tier 1 易经专属特例',
+        rounds: '不封顶（无限交互）',
+        voice: '《易经》卦象与爻辞，阴阳吉凶往来',
+        rules: [
+          '卦象爻辞：整句从卦象、爻辞、阴阳、吉凶来写（如“阴阳相感，亨而有庆；二气相求，吉而无咎”）。',
+          '严禁楚辞与「兮」：不写楚辞风格，严禁出现「兮」字。',
+          '严禁大段抄书与身体部位：严禁大段抄录《周易》原文，严禁写咸卦等身体部位，不写身体/云雨/春情，不主动引导私聊。',
+          '唯一特例分支：当且仅当她说出“喜欢你、爱你”时，打破易经规则，改用楚辞更撩+私室再叙（此句必须有「兮」，但不写身体）。',
+        ],
+      },
+      {
+        handle: 'bottlecap8699 等',
+        badge: '⭐ Tier 1 核心互访群',
+        rounds: '20 轮上限',
+        voice: '楚辞短章（含「兮」），香草江岸，婉约含蓄',
+        rules: [
+          '楚辞短章接话：哪怕对方只有几个字，也用楚辞短章接住，词句必须有「兮」。',
+          '私聊引导：委婉把未尽之意留到私聊，但严禁直接写“私信我”三个字，严禁问句，不写身体部位。',
+        ],
+      },
+      {
+        handle: 'grok',
+        badge: '🤖 免打扰机器人',
+        rounds: '0 轮（直接跳过）',
+        voice: '不予回复',
+        rules: [
+          '整词匹配 @grok：当提及作者为 grok 时自动跳过，避免机器人间陷入无休止相互回复。',
+        ],
+      },
+    ];
+
     const specialLabel = key => ({
       asksAi: '🤖 被对方询问是否为 AI / 人机',
       asksToStop: '🛑 被对方要求停止回复',
@@ -362,11 +408,37 @@ window.__ModuleLoader__.load({
 
         // TAB 1: 👥 重点名单与个性化配置（独立维护专区）
         activeTab === 'tiers' ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
+          // 1. 关键特例人物专属回复配置
+          h('section', { style: { ...cardStyle, background: C.layerTwo } },
+            h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 } },
+              h('div', null,
+                h('h2', { style: { margin: 0, fontSize: 16 } }, '🌟 关键特例人物专属回复配置（Special Person Rules）'),
+                h('p', { style: { margin: '4px 0 0', fontSize: 12, color: C.faint } }, '系统对核心特例人物执行底层代码级专属策略（轮次、露骨文言权限、易经卦象及分支特例）。')),
+              h('span', { style: { fontSize: 12, color: C.accent, background: C.raised, padding: '4px 8px', borderRadius: 6 } }, 'Worker 核心内置策略')),
+            h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12, marginTop: 14 } },
+              specialPersons.map(p =>
+                h('div', {
+                  key: p.handle,
+                  style: {
+                    background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 14,
+                    display: 'flex', flexDirection: 'column', gap: 8, boxShadow: '0 2px 6px rgba(0,0,0,0.04)'
+                  }
+                },
+                  h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+                    h('strong', { style: { fontSize: 14, color: C.text } }, `@${p.handle}`),
+                    h('span', { style: { fontSize: 11, fontWeight: '600', color: C.accent, background: C.raised, padding: '2px 6px', borderRadius: 4 } }, p.rounds)),
+                  h('div', { style: { fontSize: 12, fontWeight: '500', color: C.muted } }, p.badge),
+                  h('div', { style: { fontSize: 12, color: C.text, background: C.layerTwo, padding: '6px 8px', borderRadius: 6 } },
+                    h('strong', { style: { color: C.muted } }, '文风口吻：'), p.voice),
+                  h('ul', { style: { margin: '4px 0 0', paddingLeft: 18, fontSize: 11, color: C.faint, lineHeight: 1.5 } },
+                    p.rules.map((rule, idx) => h('li', { key: idx, style: { margin: '2px 0' } }, rule))))))),
+
+          // 2. 重点人群分层名单维护
           h('section', { style: { ...cardStyle, background: C.layerTwo } },
             h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 } },
               h('div', null,
                 h('h2', { style: { margin: 0, fontSize: 16 } }, '👥 重点人群分层名单与针对性配置'),
-                h('p', { style: { margin: '4px 0 0', fontSize: 12, color: C.faint } }, '每个档位均可单独配置用户名、讨论串轮次上限，以及追加定制文风/人设提示词。两端 Worker 均实时联动。')),
+                h('p', { style: { margin: '4px 0 0', fontSize: 12, color: C.faint } }, '各档位已同步标准回复轮次（Apex 30轮、Tier 1 20轮、Tier 2 10轮、Tier 3 5轮、Tier 4 4轮、其他 3轮）。两端 Worker 实时联动。')),
               h('span', { style: { fontSize: 12, color: C.accent, background: C.raised, padding: '4px 8px', borderRadius: 6 } }, '实时双端生效')),
 
             ...(config?.tiers || []).map((tier, index) => {
@@ -411,7 +483,10 @@ window.__ModuleLoader__.load({
                       type: 'number', min: 1, max: 1000, style: { ...inputStyle, margin: '6px 0 4px' },
                       value: tier.rounds, onChange: e => setTier(index, 'rounds', Number(e.target.value))
                     }),
-                    h('small', { style: { color: C.faint, fontSize: 11 } }, '达到上限后不再继续回复该串，避免死循环')),
+                    h('small', { style: { color: C.faint, fontSize: 11 } },
+                      tier.id === 'tier1' ? '达到上限后停止回复。注意：本档特例 mrchen1998 经代码豁免为不封顶。' :
+                      tier.id === 'apex' ? '达到上限（标准 30 轮）后停止回复，避免死循环。' :
+                      '达到上限后不再继续回复该串，避免死循环')),
 
                   h('div', { style: { flex: '2 1 340px' } },
                     h('label', { style: { ...labelStyle, margin: 0 } }, '针对该档位人群的定制回复文风 / 附加提示词：', h(SideBadge, { side: 'reply' })),
@@ -422,7 +497,18 @@ window.__ModuleLoader__.load({
                       onChange: e => setTier(index, 'replyStyle', e.target.value)
                     }),
                     h('small', { style: { color: C.faint, fontSize: 11 } }, '此提示词会直接拼接入 AI 生成 Prompt，影响对此人群的回应口吻'))));
-            })))
+            })),
+
+          // 3. 对话意图特殊分支回复配置
+          h('section', { style: { ...cardStyle, background: C.layerTwo } },
+            h('h2', { style: { margin: 0, fontSize: 16 } }, '🎭 对话意图特殊分支回复配置（Special Situation Replies）', h(SideBadge, { side: 'both' })),
+            h('p', { style: { margin: '4px 0 12px', fontSize: 12, color: C.faint } }, '当评论或提及命中下列特定意图时，两端 Worker 的底层处理规则与参考提示词（可直接编辑保存）：'),
+            ...Object.entries(config?.specialReplies || {}).map(([key, value]) =>
+              h('div', { key, style: { margin: '10px 0', padding: '12px 14px', background: C.surface, borderRadius: 8, border: `1px solid ${C.border}` } },
+                h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 } },
+                  h('strong', { style: { fontSize: 13 } }, specialLabel(key)),
+                  h('small', { style: { color: C.accent, fontSize: 12 } }, specialDesc(key))),
+                h('textarea', { style: { ...inputStyle, minHeight: 52, margin: '8px 0 0' }, maxLength: 2000, value, onChange: e => updateConfig(current => ({ ...current, specialReplies: { ...current.specialReplies, [key]: e.target.value } })) })))))
         : null,
 
         // TAB 2: 🌐 通用与公共配置
