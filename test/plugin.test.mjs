@@ -133,6 +133,8 @@ test('default config validates and preserves privacy boundaries', () => {
   assert.equal(validateConfig(config).timing.mentionWindowHours, 12);
   assert.match(validateConfig(config).tiers[0].label, /优先级/);
   assert.match(validateConfig(config).specialReplies.asksAi, /如实回答/);
+  assert.equal(validateConfig(config).specialPersons.apex.handle, '4ggug');
+  assert.deepEqual(validateConfig(config).specialPersons.skipReplyHandles, ['grok']);
   assert.match(config.model.keySource, /密钥不会被读取或显示/);
   assert.throws(()=>validateConfig({...config,tiers:[]}),/配置结构无效/);
 });
@@ -231,8 +233,8 @@ test('saves bounded user-owned config without real home writes', async () => {
     assert.equal(result.config.model.name,'gpt-test');
     assert.match(result.configHash,/^[0-9a-f]{64}$/);
     assert.equal(result.runtimeConfigApplied,true);
-    assert.equal(result.note.includes('仅为草稿'),true);
-    assert.equal(result.note.includes('回复轮次仅由回复进程读取'),true);
+    assert.equal(result.note.includes('仍为建议字段'),true);
+    assert.equal(result.note.includes('回复轮次'),true);
     assert.equal(JSON.parse(readFileSync(configPath,'utf8')).model.name,'gpt-test');
   } finally { f.cleanup(); }
 });
@@ -288,6 +290,10 @@ test('validates numeric timing, reply rules and copies input without mutation', 
   assert.throws(()=>validateConfig(bad),/timing|publishMax/);
   const oversized=structuredClone(DEFAULT_CONFIG); oversized.specialReplies.care='x'.repeat(2001);
   assert.throws(()=>validateConfig(oversized),/特殊回复设置无效/);
+  const invalidSpecial=structuredClone(DEFAULT_CONFIG); invalidSpecial.specialPersons.skipReplyHandles=['bad handle'];
+  assert.throws(()=>validateConfig(invalidSpecial),/用户名格式无效/);
+  const tooLongStyle=structuredClone(DEFAULT_CONFIG); tooLongStyle.specialPersons.apex.replyStyle='x'.repeat(3001);
+  assert.throws(()=>validateConfig(tooLongStyle),/关键人物 apex 设置无效/);
 });
 
 test('start reports a request, not an unverified success', async () => {

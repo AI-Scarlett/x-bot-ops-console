@@ -13,9 +13,13 @@ const MAX_BODY = 128 * 1024;
 const APP_HOME = homedir();
 export const DEFAULT_COMMENT_DIR = join(APP_HOME, 'XBotOpsConsole', 'comment-worker');
 export const DEFAULT_REPLY_DIR = join(APP_HOME, 'XBotOpsConsole', 'reply-worker');
+export const DEFAULT_POST_DIR = join(APP_HOME, 'XBotOpsConsole', 'post-worker');
+export const DEFAULT_PROFILE_DIR = join(APP_HOME, 'XBotOpsConsole', 'profile-worker');
 export const DEFAULT_TARGETS = Object.freeze({
   comment: { dir: DEFAULT_COMMENT_DIR, worker: join(DEFAULT_COMMENT_DIR, 'comment_worker.py'), watchdog: join(DEFAULT_COMMENT_DIR, 'comment_watchdog.py'), watchdogPid: join(DEFAULT_COMMENT_DIR, 'comment_watchdog.pid'), stop: join(DEFAULT_COMMENT_DIR, 'comment_watchdog.stop'), pid: join(DEFAULT_COMMENT_DIR, 'comment_worker.pid'), log: join(DEFAULT_COMMENT_DIR, 'comment_worker.log'), heartbeat: join(DEFAULT_COMMENT_DIR, 'heartbeat.json'), rate: join(DEFAULT_COMMENT_DIR, 'rate_limit.json'), port: 9222 },
   reply: { dir: DEFAULT_REPLY_DIR, worker: join(DEFAULT_REPLY_DIR, 'reply_worker.py'), watchdog: join(DEFAULT_REPLY_DIR, 'reply_watchdog.py'), watchdogPid: join(DEFAULT_REPLY_DIR, 'reply_watchdog.pid'), stop: join(DEFAULT_REPLY_DIR, 'reply_watchdog.stop'), pid: join(DEFAULT_REPLY_DIR, 'reply_worker.pid'), log: join(DEFAULT_REPLY_DIR, 'reply_worker.log'), heartbeat: join(DEFAULT_REPLY_DIR, 'heartbeat.json'), rate: join(DEFAULT_REPLY_DIR, 'rate_limit.json'), port: 9223 },
+  post: { dir: DEFAULT_POST_DIR, worker: join(DEFAULT_POST_DIR, 'post_worker.py'), watchdog: join(DEFAULT_POST_DIR, 'post_watchdog.py'), watchdogPid: join(DEFAULT_POST_DIR, 'post_watchdog.pid'), stop: join(DEFAULT_POST_DIR, 'post_watchdog.stop'), pid: join(DEFAULT_POST_DIR, 'post_worker.pid'), log: join(DEFAULT_POST_DIR, 'post_worker.log'), heartbeat: join(DEFAULT_POST_DIR, 'post_heartbeat.json'), rate: join(DEFAULT_POST_DIR, 'post_rate_limit.json'), port: 9224 },
+  profile: { dir: DEFAULT_PROFILE_DIR, worker: join(DEFAULT_PROFILE_DIR, 'profile_worker.py'), watchdog: join(DEFAULT_PROFILE_DIR, 'profile_watchdog.py'), watchdogPid: join(DEFAULT_PROFILE_DIR, 'profile_watchdog.pid'), stop: join(DEFAULT_PROFILE_DIR, 'profile_watchdog.stop'), pid: join(DEFAULT_PROFILE_DIR, 'profile_worker.pid'), log: join(DEFAULT_PROFILE_DIR, 'profile_worker.log'), heartbeat: join(DEFAULT_PROFILE_DIR, 'profile_heartbeat.json'), rate: join(DEFAULT_PROFILE_DIR, 'profile_rate_limit.json'), port: 9225 },
 });
 export const CONFIG_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/config.json');
 export const TARGETS_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/console-targets.json');
@@ -42,8 +46,22 @@ export const FIELD_SIDE = Object.freeze({
   'tiers.handles': 'both',
   'tiers.rounds': 'reply',
   'tiers.replyStyle': 'reply',
+  'specialPersons.apex.handle': 'both',
+  'specialPersons.yijing.handle': 'both',
+  'specialPersons.replyStyle': 'both',
+  'specialPersons.skipReplyHandles': 'reply',
   'specialReplies': 'none',
-  'rules': 'none',
+  'rules.skipFinanceComments': 'comment',
+  'postSettings.enabled': 'post',
+  'postSettings.intervalMinutes': 'post',
+  'postSettings.topics': 'post',
+  'postSettings.customPrompt': 'post',
+  'cruiseSettings.enabled': 'profile',
+  'cruiseSettings.dailyTargetCount': 'profile',
+  'cruiseSettings.crawlFollowing': 'profile',
+  'cruiseSettings.crawlFollowers': 'profile',
+  'cruiseSettings.interactionCooldownHours': 'profile',
+  'cruiseSettings.autoVisitInvited': 'profile',
 });
 
 // Defaults equal to the values hard-coded in both Python workers, so a fresh save does not change runtime behaviour.
@@ -53,15 +71,35 @@ const DEFAULT_CONFIG = Object.freeze({
   model: { name: '', endpointPort: null, keySource: 'LocalModelHub 凭据引用（密钥不会被读取或显示）' },
   timing: { commentWindowHours: 6, mentionWindowHours: 12, quietHoursStart: 0, quietHoursEnd: 7, fullStopStart: 1, fullStopEnd: 6, publishMinSeconds: 30, publishMaxSeconds: 100, authorCooldownSeconds: 1800, postingWorkMinutes: 20, postingRestMinutes: 5, rateLimitMinutes: 5, rateLimitLongMinutes: 15 },
   tiers: [
-    { id: 'apex', label: '最高优先级', handles: [], rounds: 30, replyStyle: '' },
-    { id: 'tier1', label: '优先级 1', handles: [], rounds: 20, replyStyle: '' },
-    { id: 'tier2', label: '优先级 2', handles: [], rounds: 10, replyStyle: '' },
-    { id: 'tier3', label: '优先级 3', handles: [], rounds: 5, replyStyle: '' },
-    { id: 'tier4', label: '优先级 4', handles: [], rounds: 4, replyStyle: '' },
+    { id: 'apex', label: '最高优先级', handles: ['4ggug'], rounds: 30, replyStyle: '' },
+    { id: 'tier1', label: '优先级 1', handles: ['bottlecap8699', 'nguynbanph', 'mrchen1998', 'maiga23698'], rounds: 20, replyStyle: '' },
+    { id: 'tier2', label: '优先级 2', handles: ['mzixioxio155612', 'xiaolikpo', 'lxl1818', 'hanxue9xue', 'kimmykimol', 'katherine1198', 'hnrr163487', '7gongg', 'lucia000000001', 'litteyyyue1229', 'pbftzogtmp43068', 'hhedy666', 'bmxdawang111', 'gqing0930', 'yoyomao9', 'hpyhh7', 'aquarius_0909', 'xzmokk', 'mia_linh01', 'wrt_win', 'xiaoyezimama'], rounds: 10, replyStyle: '' },
+    { id: 'tier3', label: '优先级 3', handles: ['sujing110', 'hamy8998', 'jojojo624824460', 'nz3219798'], rounds: 5, replyStyle: '' },
+    { id: 'tier4', label: '优先级 4', handles: ['dmx_flame', 'julsix2333'], rounds: 4, replyStyle: '' },
     { id: 'other', label: '其他用户', handles: [], rounds: 3, replyStyle: '' },
   ],
+  specialPersons: {
+    apex: { handle: '4ggug', enabled: true, rules: { careEnabled: false } },
+    yijing: { handle: 'mrchen1998', enabled: true },
+    skipReplyHandles: ['grok'],
+  },
   specialReplies: { asksAi: '若被问及是否为 AI，请如实回答。', asksToStop: '若对方要求停止，请勿继续回复该讨论串。', care: '礼貌回应并围绕话题。', affection: '尊重回应，不诱导私下联系。', namedAddress: '以中性方式回应称呼。', daddy: '拒绝不合适的亲属角色扮演。', imperialTitle: '不宣称现实中的权力或身份。', vernacular: '仅在明确请求时翻译。' },
   rules: { skipFinanceComments: true, skipGrokMentions: false, doNotReplyAfterStopRequest: true, keepSensitiveKeyOutOfUi: true },
+  postSettings: {
+    enabled: true,
+    intervalMinutes: 180,
+    topics: ['文言雅趣', '周朝掌故', '易经随笔', '日常感悟'],
+    model: '',
+    customPrompt: '你在推特(X)上用周天子姬霸的人设发一条原创推文。文风为幽默、古奥的文言文或诗词歌赋，自称周天子、姬霸或夫子，不要露骨，禁止提现代网络低俗梗，字数在30到90字之间。',
+  },
+  cruiseSettings: {
+    enabled: true,
+    dailyTargetCount: 50,
+    crawlFollowing: true,
+    crawlFollowers: true,
+    interactionCooldownHours: 48,
+    autoVisitInvited: true,
+  },
 });
 
 const TIMING_BOUNDS = Object.freeze({
@@ -90,10 +128,10 @@ export function resolveTargets(base = DEFAULT_TARGETS, overridesPath = TARGETS_P
   if (!isRecord(raw)) return base;
   const patches = isRecord(raw.targets) ? raw.targets : raw;
   const resolved = { ...base };
-  for (const key of ['comment', 'reply']) {
+  for (const key of ['comment', 'reply', 'post', 'profile']) {
     const patch = isRecord(patches[key]) ? patches[key] : null;
     if (!patch) continue;
-    const next = { ...base[key] };
+    const next = { ...(base[key] || {}) };
     for (const field of TARGET_FIELDS) {
       const value = patch[field];
       if (typeof value !== 'string' || !value.startsWith('/') || value.includes('..')) continue;
@@ -101,8 +139,8 @@ export function resolveTargets(base = DEFAULT_TARGETS, overridesPath = TARGETS_P
     }
     if (typeof patch.python === 'string' && patch.python.startsWith('/') && !patch.python.includes('..') && patch.python.length < 512) next.python = patch.python;
     if (typeof patch.interpreterPidArgvToken === 'string' && patch.interpreterPidArgvToken.startsWith('/') && !patch.interpreterPidArgvToken.includes('..') && patch.interpreterPidArgvToken.length < 1024) next.interpreterPidArgvToken = patch.interpreterPidArgvToken;
-    for (const key of ['workerPidArgvToken', 'watchdogPidArgvToken']) {
-      if (typeof patch[key] === 'string' && patch[key].startsWith('/') && !patch[key].includes('..') && patch[key].length < 1024) next[key] = patch[key];
+    for (const tokenKey of ['workerPidArgvToken', 'watchdogPidArgvToken']) {
+      if (typeof patch[tokenKey] === 'string' && patch[tokenKey].startsWith('/') && !patch[tokenKey].includes('..') && patch[tokenKey].length < 1024) next[tokenKey] = patch[tokenKey];
     }
     if (Number.isInteger(patch.port) && patch.port > 0 && patch.port < 65536) next.port = patch.port;
     resolved[key] = next;
@@ -218,10 +256,24 @@ function validateConfig(input) {
   if (m.endpointPort === undefined) m.endpointPort = null;
   for (const id of TIER_IDS) if (!copy.tiers.some(t => t.id === id)) throw new TypeError(`缺少回复档位：${id}`);
   if (copy.tiers.some(t => !TIER_IDS.includes(t.id))) throw new TypeError('未知回复档位');
-  if (!isRecord(copy.timing) || !isRecord(copy.specialReplies) || !isRecord(copy.rules)) throw new TypeError('时段或规则设置无效');
+  if (!isRecord(copy.timing) || !isRecord(copy.specialReplies) || !isRecord(copy.rules) || !isRecord(copy.specialPersons)) throw new TypeError('时段或规则设置无效');
+  if (copy.postSettings !== undefined) {
+    if (!isRecord(copy.postSettings) || typeof copy.postSettings.enabled !== 'boolean' || !Number.isInteger(copy.postSettings.intervalMinutes) || copy.postSettings.intervalMinutes < 10 || copy.postSettings.intervalMinutes > 1440 || (copy.postSettings.customPrompt !== undefined && typeof copy.postSettings.customPrompt !== 'string') || (copy.postSettings.topics !== undefined && !Array.isArray(copy.postSettings.topics))) throw new TypeError('发帖设置无效');
+  }
+  if (copy.cruiseSettings !== undefined) {
+    if (!isRecord(copy.cruiseSettings) || typeof copy.cruiseSettings.enabled !== 'boolean' || !Number.isInteger(copy.cruiseSettings.dailyTargetCount) || copy.cruiseSettings.dailyTargetCount < 1 || copy.cruiseSettings.dailyTargetCount > 500) throw new TypeError('巡航设置无效');
+  }
   for (const [key, [min, max]] of Object.entries(TIMING_BOUNDS)) if (!Number.isInteger(copy.timing[key]) || copy.timing[key] < min || copy.timing[key] > max) throw new TypeError(`时段字段 ${key} 的设置无效`);
   if (copy.timing.publishMaxSeconds < copy.timing.publishMinSeconds) throw new TypeError('最长发布间隔必须大于或等于最短发布间隔');
   for (const [key, value] of Object.entries(copy.specialReplies)) if (typeof key !== 'string' || typeof value !== 'string' || value.length > 2000) throw new TypeError('特殊回复设置无效');
+  if (!isRecord(copy.specialPersons.apex) || !isRecord(copy.specialPersons.yijing) || !Array.isArray(copy.specialPersons.skipReplyHandles)) throw new TypeError('关键人物规则结构无效');
+  for (const key of ['apex', 'yijing']) {
+    const person = copy.specialPersons[key];
+    if (typeof person.handle !== 'string' || typeof person.enabled !== 'boolean' || (person.rules !== undefined && !isRecord(person.rules)) || (person.replyStyle !== undefined && (typeof person.replyStyle !== 'string' || person.replyStyle.length > 3000))) throw new TypeError(`关键人物 ${key} 设置无效`);
+    person.handle = sanitizeHandle(person.handle);
+  }
+  if (copy.specialPersons.skipReplyHandles.length > 500) throw new TypeError('免回复名单过长');
+  copy.specialPersons.skipReplyHandles = [...new Set(copy.specialPersons.skipReplyHandles.map(sanitizeHandle))];
   if (Buffer.byteLength(JSON.stringify(copy)) > MAX_BODY) throw new RangeError('配置内容过大');
   for (const [key, value] of Object.entries(copy.rules)) if (typeof value !== 'boolean') throw new TypeError(`规则 ${key} 的值无效`);
   return copy;
@@ -247,7 +299,8 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
   const runtimeCapabilities = {
     model: 'reply-only', modelPortOverride: 'comment-only', tierMembership: 'both', tierReplyStyle: 'reply-only', tierRoundLimit: 'reply-only',
     timing: { shared: ['rateLimitMinutes', 'rateLimitLongMinutes', 'postingWorkMinutes', 'postingRestMinutes', 'publishMinSeconds', 'publishMaxSeconds', 'quietHoursStart', 'quietHoursEnd', 'fullStopStart', 'fullStopEnd'], commentOnly: ['commentWindowHours', 'authorCooldownSeconds'], replyOnly: ['mentionWindowHours'] },
-    specialReplies: false, booleanRules: false,
+    specialPersons: { handles: 'both', enabled: 'both', replyStyle: 'both', skipReplyHandles: 'reply-only' },
+    specialReplies: false, booleanRules: { skipFinanceComments: 'comment-only' },
   };
   const hashCurrentConfig = () => {
     try { return createHash('sha256').update(readFileSync(activeConfigPath)).digest('hex'); }
@@ -272,11 +325,13 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
   const inspect = async () => {
     const items = {};
     const active = currentTargets();
-    for (const key of ['comment', 'reply']) {
-      const t = active[key];
+    for (const key of ['comment', 'reply', 'post', 'profile']) {
+      const t = active[key] || DEFAULT_TARGETS[key];
+      if (!t) continue;
+      const watchdogFlag = key === 'comment' ? '--loop' : '--supervise';
       const worker = processState(t.pid, t.worker, '', t.workerPidArgvToken || t.worker, t.interpreterPidArgvToken || '');
-      const watchdog = processState(t.watchdogPid, t.watchdog, key === 'comment' ? '--loop' : '--supervise', t.watchdogPidArgvToken || t.watchdog, t.interpreterPidArgvToken || '');
-      const watchdogLogPath = key === 'comment' ? join(t.dir, 'watchdog.log') : join(t.dir, 'reply_watchdog.stdout.log');
+      const watchdog = processState(t.watchdogPid, t.watchdog, watchdogFlag, t.watchdogPidArgvToken || t.watchdog, t.interpreterPidArgvToken || '');
+      const watchdogLogPath = key === 'comment' ? join(t.dir, 'watchdog.log') : join(t.dir, `${key}_watchdog.stdout.log`);
       let watchdogLogTail = '';
       try { watchdogLogTail = readFileSync(watchdogLogPath, 'utf8').slice(-6000).split('\n').slice(-30).join('\n').replace(/(?:Bearer\s+)[^\s]+/gi, 'Bearer [REDACTED]'); } catch { /* no watchdog log */ }
       const heartbeat = readJsonSafe(t.heartbeat);
@@ -312,14 +367,15 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       const acceptance = workerAcceptance(saved);
       return {
         config: saved, configHash: result.hash, runtimeConfigApplied: true, workerAcceptance: acceptance,
-        note: '共享配置已写入，两个工作进程会在下轮读取。重点名单与时段两侧生效；模型名称与回复轮次仅由回复进程读取，模型端口覆盖仅由评论进程读取；回复风格仅由回复进程追加到提示词。特殊回复文本与布尔规则目前仅为草稿，不会接入运行逻辑。',
+        note: '共享配置已写入，两个工作进程会在下轮读取。重点名单与人物特例句柄/提示词两侧生效；回复轮次、免回复名单由回复进程读取；skipFinanceComments 由评论进程读取。specialReplies 及其余规则仍为建议字段，不保证改变 Worker 分支逻辑。',
       };
     }
     if (!['pause', 'resume', 'start', 'stop', 'restart'].includes(request.action)) throw new TypeError('未知操作类型');
-    if (!['comment', 'reply'].includes(request.target)) throw new TypeError('目标必须是评论或提及回复');
+    if (!['comment', 'reply', 'post', 'profile'].includes(request.target)) throw new TypeError('目标必须是评论或提及回复');
     if (platform !== 'darwin') throw new Error('进程控制仅支持 macOS');
     const target = currentTargets()[request.target];
-    const watchdogStatus = processState(target.watchdogPid, target.watchdog, request.target === 'comment' ? '--loop' : '--supervise', target.watchdogPidArgvToken || target.watchdog, target.interpreterPidArgvToken || '');
+    const watchdogFlag = request.target === 'comment' ? '--loop' : '--supervise';
+    const watchdogStatus = processState(target.watchdogPid, target.watchdog, watchdogFlag, target.watchdogPidArgvToken || target.watchdog, target.interpreterPidArgvToken || '');
     const workerStatus = processState(target.pid, target.worker, '', target.workerPidArgvToken || target.worker, target.interpreterPidArgvToken || '');
     if (request.action === 'start') {
       if (!watchdogStatus.running && !workerStatus.running && (!target.workerPidArgvToken || !target.watchdogPidArgvToken || !target.interpreterPidArgvToken || !target.python)) throw new Error('启动已停止的 worker 需要在 console-targets.json 配置 python、workerPidArgvToken、watchdogPidArgvToken 和 interpreterPidArgvToken');
@@ -329,7 +385,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       const python = resolvePython(target);
       if (existsSync(target.stop)) unlinkSync(target.stop);
       const argv = request.target === 'comment' ? [python, target.watchdog, '--loop'] : [python, target.watchdog, '--supervise'];
-      const logPath = request.target === 'comment' ? join(target.dir, 'watchdog.log') : join(target.dir, 'reply_watchdog.stdout.log');
+      const logPath = request.target === 'comment' ? join(target.dir, 'watchdog.log') : join(target.dir, `${request.target}_watchdog.stdout.log`);
       let pid = null;
       let out;
       try {
