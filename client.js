@@ -453,7 +453,7 @@ window.__ModuleLoader__.load({
               t('title')),
             h('p', { style: { margin: '4px 0 0', fontSize: 13, color: C.muted } }, t('subtitle'))),
           h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.9.0'),
+            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.9.1'),
             h('button', {
               type: 'button',
               disabled: busy || updating,
@@ -1127,6 +1127,19 @@ window.__ModuleLoader__.load({
                 updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), topics: parsed } }));
               },
             })),
+
+          // 格式硬性要求
+          h('section', { style: cardStyle },
+            h('h2', { style: { margin: 0, fontSize: 15 } }, '📐 格式硬性要求'),
+            h('label', { style: { display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginTop: 8 } },
+              h('input', {
+                type: 'checkbox',
+                checked: config?.postSettings?.oneSentencePerLine !== false,
+                onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), oneSentencePerLine: e.target.checked } })),
+              }),
+              '强制「一句一行」，禁止整段连写', h(SideBadge, { side: 'post' })),
+            h('p', { style: { margin: '8px 0 0', fontSize: 12, color: C.faint, lineHeight: 1.6 } },
+              '开启后在两处生效：① 提示词里明确要求模型逐句换行；② 生成后按标点强制重排（中文 。！？；、英文 .!? 断句，收尾引号跟随前句），所以即使模型不配合也会被纠正。发帖前还会再兜底一次，队列里的旧稿同样适用。')),
 
           // 批次休息
           h('section', { style: cardStyle },

@@ -899,6 +899,56 @@ test('the general tab no longer duplicates task-specific send settings', async (
   assert.match(source, /timingFields\.filter\(\(\[, , , side\]\) => side === 'both'\)/);
 });
 
+test('one-sentence-per-line formatter splits Chinese and English correctly', async () => {
+  const { enforceOneSentencePerLine } = await import('../index.js');
+
+  assert.equal(
+    enforceOneSentencePerLine('周天子观卦。乾为天！寡人曰：先搞钱？'),
+    '周天子观卦。\n乾为天！\n寡人曰：先搞钱？',
+  );
+  // Already-paragraphed input is flattened and rebuilt.
+  assert.equal(
+    enforceOneSentencePerLine('第一句。\n第二句。\n\n第三句。'),
+    '第一句。\n第二句。\n第三句。',
+  );
+  // A closing quote stays with its own sentence; the rest still breaks.
+  assert.equal(
+    enforceOneSentencePerLine('掌柜曰：「此事急。」孤问何时发俸。'),
+    '掌柜曰：「此事急。」\n孤问何时发俸。',
+  );
+  // English
+  assert.equal(
+    enforceOneSentencePerLine('He works hard. She reads books!'),
+    'He works hard.\nShe reads books!',
+  );
+  // Decimals must not be treated as sentence ends.
+  assert.equal(enforceOneSentencePerLine('涨了 3.5% 而已。'), '涨了 3.5% 而已。');
+  // No punctuation: leave it as a single line.
+  assert.equal(enforceOneSentencePerLine('没有标点的一句话'), '没有标点的一句话');
+  assert.equal(enforceOneSentencePerLine('   '), '');
+});
+
+test('one-sentence rule is on by default and can be turned off', async () => {
+  const config = clone(DEFAULT_CONFIG);
+  assert.equal(config.postSettings.oneSentencePerLine, true);
+  assert.equal(validateConfig(config).postSettings.oneSentencePerLine, true);
+
+  const off = clone(DEFAULT_CONFIG);
+  off.postSettings.oneSentencePerLine = false;
+  assert.equal(validateConfig(off).postSettings.oneSentencePerLine, false);
+
+  const bad = clone(DEFAULT_CONFIG);
+  bad.postSettings.oneSentencePerLine = 'yes';
+  assert.throws(() => validateConfig(bad), /一句一行开关无效/);
+
+  const { FIELD_SIDE } = await import('../index.js');
+  assert.equal(FIELD_SIDE['postSettings.oneSentencePerLine'], 'post');
+
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.match(source, /格式硬性要求/);
+  assert.match(source, /强制「一句一行」/);
+});
+
 test('save rebases onto disk so untouched prompts are never wiped', async () => {
   const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
 

@@ -80,6 +80,7 @@ export const FIELD_SIDE = Object.freeze({
   'postSettings.queueAutoRefill': 'post',
   'postSettings.queueMaxSize': 'post',
   'postSettings.styleSchedule': 'post',
+  'postSettings.oneSentencePerLine': 'post',
   'postSettings.restEveryPosts': 'post',
   'postSettings.restMinutes': 'post',
   'postSettings.learningInfluence': 'post',
@@ -416,6 +417,39 @@ export function mutateLearnings(mutator, learningsPath = LEARNINGS_PATH) {
   }, `${learningsPath}.lock`, '发帖学习记录');
 }
 
+// Hard format rule: every sentence gets its own line, never one solid paragraph.
+// Applied after generation so the model cannot ignore it.
+export function enforceOneSentencePerLine(text) {
+  const raw = String(text || '').replace(/\r\n?/g, '\n').trim();
+  if (!raw) return raw;
+  // Flatten whatever layout the model produced, then rebuild it deterministically.
+  const flat = raw.replace(/\n+/g, ' ').replace(/[ \t]{2,}/g, ' ').trim();
+  if (!flat) return '';
+  const lines = [];
+  // Only the closing quote/bracket itself joins the previous line; whatever the
+  // model wrote after it still starts a new line.
+  const leadingClosers = /^([」』”’"'）)\]】》〉]+)([\s\S]*)$/;
+  for (const chunk of flat.split(/(?<=[。！？；!?;])\s*/)) {
+    if (!chunk) continue;
+    // English sentences also end with ". " followed by a capital or a quote.
+    for (const piece of chunk.split(/(?<=[.!?])\s+(?=[A-Z"“'‘（(])/)) {
+      const line = piece.trim();
+      if (!line) continue;
+      const closers = lines.length ? line.match(leadingClosers) : null;
+      if (closers) {
+        lines[lines.length - 1] += closers[1];
+        const rest = closers[2].trim();
+        if (rest) lines.push(rest);
+      } else {
+        lines.push(line);
+      }
+    }
+  }
+  return lines.length ? lines.join('\n') : flat;
+}
+
+export const ONE_SENTENCE_RULE = '【格式硬性要求】每一句话必须单独占一行，句与句之间必须换行；禁止把多句连成一整段，禁止使用空行。';
+
 // Pick a content theme by weight, so the mix config drives what gets written about.
 export function pickTopicTheme(mix, random = Math.random) {
   const usable = (Array.isArray(mix) ? mix : []).filter(item => isRecord(item) && Number(item.weight) > 0);
@@ -671,6 +705,8 @@ const DEFAULT_CONFIG = Object.freeze({
     queueLowThreshold: 3,
     queueAutoRefill: true,
     queueMaxSize: 100,
+    // Hard format rule: one sentence per line, never a single block of text.
+    oneSentencePerLine: true,
     // Take a break after this many posts (0 disables the counter-based rest).
     restEveryPosts: 8,
     restMinutes: 3,
@@ -900,6 +936,7 @@ function validateConfig(input) {
       copy.postSettings.queueMaxSize = maxSize;
     }
     if (copy.postSettings.queueAutoRefill !== undefined && typeof copy.postSettings.queueAutoRefill !== 'boolean') throw new TypeError('自动补仓开关无效');
+    if (copy.postSettings.oneSentencePerLine !== undefined && typeof copy.postSettings.oneSentencePerLine !== 'boolean') throw new TypeError('一句一行开关无效');
     if (copy.postSettings.restEveryPosts !== undefined) {
       const every = Number(copy.postSettings.restEveryPosts);
       if (!Number.isInteger(every) || every < 0 || every > 100) throw new TypeError('发帖批次数需为 0~100 的整数（0 表示不按条数休息）');
@@ -1211,6 +1248,8 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       const count = Math.max(1, Math.min(50, Number.isFinite(requested) && requested > 0 ? Math.floor(requested) : batchSize));
       // A one-off prompt overrides the global style prompt for this batch only.
       const oneOffPrompt = typeof request.prompt === 'string' && request.prompt.trim() ? request.prompt.trim() : '';
+      const onePerLine = postCfg.oneSentencePerLine !== false;
+      const formatRule = onePerLine ? `\n\n${ONE_SENTENCE_RULE}` : '';
       const basePrompt = oneOffPrompt || postCfg.customPrompt || '你在推特(X)上用周天子姬霸的人设发一条原创推文。文风为幽默、古奥的文言文或诗词歌赋，自称周天子、姬霸或夫子，不要露骨，禁止提现代网络低俗梗，字数在30到90字之间。';
       // Learned patterns steer topic choice and structure; the writing style above stays authoritative.
       const learnings = readLearnings(activeLearningsPath);
@@ -1237,9 +1276,10 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
           ? `\n\n【本条主题方向：${theme.label}】（约占 ${theme.weight}%）${theme.prompt ? ` ${theme.prompt}` : ''}`
           : '';
         const topicHint = theme ? `\n（请紧扣「${theme.label}」这个主题方向，不要跑题）` : `\n（当前话题灵感参考：${topic}）`;
-        const prompt = basePrompt + themeBlock + learningBlock + topicHint;
+        const prompt = basePrompt + themeBlock + learningBlock + topicHint + formatRule;
         try {
-          const draftText = await generateTweetViaLmh(prompt, { model, port });
+          const rawDraft = await generateTweetViaLmh(prompt, { model, port });
+          const draftText = onePerLine ? enforceOneSentencePerLine(rawDraft) : rawDraft;
           if (draftText) {
             generated.push({
               id: `post_ai_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 6)}`,
