@@ -157,8 +157,8 @@ window.__ModuleLoader__.load({
       ['quietHoursEnd', 0, 24, 'both', '重点账号夜间安静结束（小时）'],
       ['fullStopStart', 0, 23, 'both', '全任务完全停止开始（小时）'],
       ['fullStopEnd', 0, 24, 'both', '全任务完全停止结束（小时）'],
-      ['publishMinSeconds', 5, 3600, 'both', '两次发送最短间隔（秒）'],
-      ['publishMaxSeconds', 5, 3600, 'both', '两次发送最长间隔（秒）'],
+      ['publishMinSeconds', 5, 3600, 'send', '发送最短间隔（秒）'],
+      ['publishMaxSeconds', 5, 3600, 'send', '发送最长间隔（秒）'],
       ['authorCooldownSeconds', 60, 604800, 'comment', '同一博主再次评论冷却（秒）'],
       ['postingWorkMinutes', 1, 120, 'both', '连续运行工作时长（分钟）'],
       ['postingRestMinutes', 0, 60, 'both', '连续工作后强制休息时长（分钟）'],
@@ -453,7 +453,7 @@ window.__ModuleLoader__.load({
               t('title')),
             h('p', { style: { margin: '4px 0 0', fontSize: 13, color: C.muted } }, t('subtitle'))),
           h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.8.1'),
+            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.9.0'),
             h('button', {
               type: 'button',
               disabled: busy || updating,
@@ -711,6 +711,10 @@ window.__ModuleLoader__.load({
           // 概览与校验
           h('section', { style: cardStyle },
             h('h2', { style: { margin: 0, fontSize: 15 } }, t('sharedConfig')),
+            h('div', { style: { marginTop: 8, padding: '8px 10px', borderRadius: 8, background: C.layerTwo, borderLeft: `3px solid ${C.accent}`, fontSize: 12, color: C.text, lineHeight: 1.7 } },
+              h('div', { style: { fontWeight: '600' } }, '这里只放「全局作息与风控」'),
+              h('div', { style: { color: C.muted } },
+                '模型、提示词、发送间隔、窗口、轮次等任务专属参数已各自收拢到「💬 自动评论」「↩️ 提及回复」「📝 自动发帖」「🧭 主页巡航」「🧠 发帖学习」对应 Tab，本页不再重复出现。')),
             h('p', { style: { margin: '6px 0 0', fontSize: 13, color: sourceColor } }, sourceText),
             h('p', { style: { margin: '4px 0 0', fontSize: 12, color: C.faint, wordBreak: 'break-all' } }, `${t('configPath')}：${state?.configPath || ''}`),
             h('p', { style: { margin: '4px 0 0', fontSize: 12, color: C.faint } }, state?.configSource === 'shared' ? t('sourceShared') : state?.configSource === 'missing' ? t('sourceMissing') : t('configInvalid')),
@@ -778,7 +782,7 @@ window.__ModuleLoader__.load({
             h('input', { type: 'number', min: 1, max: 65535, style: inputStyle, value: config?.model?.endpointPort || '', placeholder: '留空表示使用默认端口（如 3040）', onChange: e => updateConfig(current => ({ ...current, model: { ...current.model, endpointPort: e.target.value === '' ? null : Number(e.target.value) } })) }),
             h('small', { style: { color: C.faint, fontSize: 12 } }, t('portHint')),
             h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 14 } },
-              ...timingFields.filter(([, , , side]) => side === 'comment').map(([key, min, max, side, hint]) =>
+              ...timingFields.filter(([, , , side]) => side === 'comment' || side === 'send').map(([key, min, max, side, hint]) =>
                 h('label', { key, style: { ...labelStyle, flex: '1 1 45%', minWidth: 240, margin: 0 } },
                   hint, h(SideBadge, { side }),
                   h('input', { type: 'number', min, max, style: inputStyle, value: config?.timing?.[key] ?? 0, onChange: e => setTiming(key, Number(e.target.value)) }))))))
@@ -866,7 +870,7 @@ window.__ModuleLoader__.load({
               ? h('small', { style: { color: C.success, fontSize: 12 } }, `✓ 已设置（${config.replySettings.customPrompt.length} 字），生效于提及回复 Worker`)
               : h('small', { style: { color: C.error, fontSize: 12 } }, '⚠️ 当前为空：提及回复将只使用 Worker 内置文风，不会应用任何自定义补充要求。'),
             h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 14 } },
-              ...timingFields.filter(([, , , side]) => side === 'reply').map(([key, min, max, side, hint]) =>
+              ...timingFields.filter(([, , , side]) => side === 'reply' || side === 'send').map(([key, min, max, side, hint]) =>
                 h('label', { key, style: { ...labelStyle, flex: '1 1 45%', minWidth: 240, margin: 0 } },
                   hint, h(SideBadge, { side }),
                   h('input', { type: 'number', min, max, style: inputStyle, value: config?.timing?.[key] ?? 0, onChange: e => setTiming(key, Number(e.target.value)) }))))))
@@ -1123,6 +1127,35 @@ window.__ModuleLoader__.load({
                 updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), topics: parsed } }));
               },
             })),
+
+          // 批次休息
+          h('section', { style: cardStyle },
+            h('h2', { style: { margin: 0, fontSize: 15 } }, '😴 发帖批次休息'),
+            h('p', { style: { margin: '6px 0 10px', fontSize: 12, color: C.faint, lineHeight: 1.6 } },
+              '按「条数」触发的休息，与通用配置里按「时长」触发的工作/休息周期相互独立：这里每发满 N 条就停 M 分钟，让人工号更像真人节奏。'),
+            h('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' } },
+              h('label', { style: { ...labelStyle, flex: '1 1 200px' } },
+                '每发多少条后休息（0=关闭）：', h(SideBadge, { side: 'post' }),
+                h('input', {
+                  type: 'number', min: 0, max: 100, style: inputStyle,
+                  value: config?.postSettings?.restEveryPosts ?? 8,
+                  onChange: e => {
+                    const val = e.target.value === '' ? '' : Number(e.target.value);
+                    updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), restEveryPosts: val } }));
+                  }
+                })),
+              h('label', { style: { ...labelStyle, flex: '1 1 200px' } },
+                '每次休息多少分钟：', h(SideBadge, { side: 'post' }),
+                h('input', {
+                  type: 'number', min: 1, max: 240, style: inputStyle,
+                  value: config?.postSettings?.restMinutes ?? 3,
+                  onChange: e => {
+                    const val = e.target.value === '' ? '' : Number(e.target.value);
+                    updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), restMinutes: val } }));
+                  }
+                }))),
+            h('small', { style: { color: C.faint, fontSize: 12, marginTop: 8, display: 'block' } },
+              `当前：${(config?.postSettings?.restEveryPosts ?? 8) === 0 ? '不按条数休息' : `每发 ${config?.postSettings?.restEveryPosts ?? 8} 条后休息 ${config?.postSettings?.restMinutes ?? 3} 分钟`}；计数器在 Worker 重启后继续累计，不会因为重启而永远不休息。`)),
 
           // 生成配比：学习规则强度 + 主题配比
           h('section', { style: cardStyle },

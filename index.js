@@ -80,6 +80,8 @@ export const FIELD_SIDE = Object.freeze({
   'postSettings.queueAutoRefill': 'post',
   'postSettings.queueMaxSize': 'post',
   'postSettings.styleSchedule': 'post',
+  'postSettings.restEveryPosts': 'post',
+  'postSettings.restMinutes': 'post',
   'postSettings.learningInfluence': 'post',
   'postSettings.topicMix': 'post',
   'postSettings.topics': 'post',
@@ -669,6 +671,9 @@ const DEFAULT_CONFIG = Object.freeze({
     queueLowThreshold: 3,
     queueAutoRefill: true,
     queueMaxSize: 100,
+    // Take a break after this many posts (0 disables the counter-based rest).
+    restEveryPosts: 8,
+    restMinutes: 3,
     // How strongly learned rules are injected (0 = prompt only, 100 = full).
     learningInfluence: 100,
     // Weighted content themes. Weights must add up to 100. Empty = disabled.
@@ -895,6 +900,16 @@ function validateConfig(input) {
       copy.postSettings.queueMaxSize = maxSize;
     }
     if (copy.postSettings.queueAutoRefill !== undefined && typeof copy.postSettings.queueAutoRefill !== 'boolean') throw new TypeError('自动补仓开关无效');
+    if (copy.postSettings.restEveryPosts !== undefined) {
+      const every = Number(copy.postSettings.restEveryPosts);
+      if (!Number.isInteger(every) || every < 0 || every > 100) throw new TypeError('发帖批次数需为 0~100 的整数（0 表示不按条数休息）');
+      copy.postSettings.restEveryPosts = every;
+    }
+    if (copy.postSettings.restMinutes !== undefined) {
+      const minutes = Number(copy.postSettings.restMinutes);
+      if (!Number.isInteger(minutes) || minutes < 1 || minutes > 240) throw new TypeError('发帖批次休息时长需为 1~240 分钟');
+      copy.postSettings.restMinutes = minutes;
+    }
     if (copy.postSettings.learningInfluence !== undefined) {
       const influence = Number(copy.postSettings.learningInfluence);
       if (!Number.isInteger(influence) || influence < 0 || influence > 100) throw new TypeError('学习规则强度需为 0~100 的整数');

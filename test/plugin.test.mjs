@@ -859,6 +859,46 @@ test('learning influence and topic mix validate and weight picks correctly', asy
   assert.match(source, /主题配比（合计需为 100%）/);
 });
 
+test('post batch rest settings validate and stay post-owned', async () => {
+  const config = clone(DEFAULT_CONFIG);
+  assert.equal(config.postSettings.restEveryPosts, 8);
+  assert.equal(config.postSettings.restMinutes, 3);
+  const ok = validateConfig(config);
+  assert.equal(ok.postSettings.restEveryPosts, 8);
+  assert.equal(ok.postSettings.restMinutes, 3);
+
+  const off = clone(DEFAULT_CONFIG);
+  off.postSettings.restEveryPosts = 0;
+  assert.equal(validateConfig(off).postSettings.restEveryPosts, 0);
+
+  const badEvery = clone(DEFAULT_CONFIG);
+  badEvery.postSettings.restEveryPosts = 101;
+  assert.throws(() => validateConfig(badEvery), /发帖批次数/);
+
+  const badMinutes = clone(DEFAULT_CONFIG);
+  badMinutes.postSettings.restMinutes = 0;
+  assert.throws(() => validateConfig(badMinutes), /发帖批次休息时长/);
+
+  const { FIELD_SIDE } = await import('../index.js');
+  assert.equal(FIELD_SIDE['postSettings.restEveryPosts'], 'post');
+  assert.equal(FIELD_SIDE['postSettings.restMinutes'], 'post');
+
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.match(source, /发帖批次休息/);
+  assert.match(source, /每发多少条后休息/);
+});
+
+test('the general tab no longer duplicates task-specific send settings', async () => {
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  // The send gap belongs to the comment/reply tabs now, not the shared page.
+  assert.match(source, /\['publishMinSeconds', 5, 3600, 'send'/);
+  assert.match(source, /side === 'comment' \|\| side === 'send'/);
+  assert.match(source, /side === 'reply' \|\| side === 'send'/);
+  assert.match(source, /这里只放「全局作息与风控」/);
+  // General tab must only render the 'both' bucket.
+  assert.match(source, /timingFields\.filter\(\(\[, , , side\]\) => side === 'both'\)/);
+});
+
 test('save rebases onto disk so untouched prompts are never wiped', async () => {
   const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
 
