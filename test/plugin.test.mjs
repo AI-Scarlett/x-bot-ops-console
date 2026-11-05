@@ -648,6 +648,31 @@ test('cruise priority sweep interval is bounded and explained in the UI', async 
   assert.match(source, /每隔多少小时轮巡一次全部重点名单/);
 });
 
+test('cruise comments per profile is bounded and configurable', async () => {
+  const config = clone(DEFAULT_CONFIG);
+  assert.equal(config.cruiseSettings.commentsPerProfile, 1);
+  assert.equal(validateConfig(config).cruiseSettings.commentsPerProfile, 1);
+
+  const two = clone(DEFAULT_CONFIG);
+  two.cruiseSettings.commentsPerProfile = 2;
+  assert.equal(validateConfig(two).cruiseSettings.commentsPerProfile, 2);
+
+  // 0 means browse only, and must stay valid.
+  const off = clone(DEFAULT_CONFIG);
+  off.cruiseSettings.commentsPerProfile = 0;
+  assert.equal(validateConfig(off).cruiseSettings.commentsPerProfile, 0);
+
+  const bad = clone(DEFAULT_CONFIG);
+  bad.cruiseSettings.commentsPerProfile = 11;
+  assert.throws(() => validateConfig(bad), /每次巡航评论条数/);
+
+  const { FIELD_SIDE } = await import('../index.js');
+  assert.equal(FIELD_SIDE['cruiseSettings.commentsPerProfile'], 'profile');
+
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.match(source, /每次巡览对该主页评论几条/);
+});
+
 test('readCruiseSweep reports pending progress or an empty state', async () => {
   const { readCruiseSweep } = await import('../index.js');
   const f = fixture();

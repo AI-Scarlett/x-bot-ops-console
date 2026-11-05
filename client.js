@@ -404,7 +404,7 @@ window.__ModuleLoader__.load({
               t('title')),
             h('p', { style: { margin: '4px 0 0', fontSize: 13, color: C.muted } }, t('subtitle'))),
           h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.4.0'),
+            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.4.1'),
             h('button', {
               type: 'button',
               disabled: busy || updating,
@@ -1358,6 +1358,19 @@ window.__ModuleLoader__.load({
                 updateConfig(c => ({ ...c, cruiseSettings: { ...(c.cruiseSettings || {}), tierSweepHours: val } }));
               }
             }),
+            h('div', { style: { display: 'flex', gap: 16, marginTop: 12, flexWrap: 'wrap' } },
+              h('label', { style: { ...labelStyle, flex: '1 1 260px', margin: 0 } },
+                '每次巡览对该主页评论几条「未评论过」的帖子（0=只看不评）：', h(SideBadge, { side: 'profile' }),
+                h('input', {
+                  type: 'number', min: 0, max: 10, style: inputStyle,
+                  value: config?.cruiseSettings?.commentsPerProfile ?? 1,
+                  onChange: e => {
+                    const val = e.target.value === '' ? '' : Number(e.target.value);
+                    updateConfig(c => ({ ...c, cruiseSettings: { ...(c.cruiseSettings || {}), commentsPerProfile: val } }));
+                  }
+                })),
+              h('div', { style: { flex: '1 1 260px', fontSize: 12, color: C.faint, lineHeight: 1.6, paddingTop: 22 } },
+                'Worker 会记住已评论过的帖子 ID，重复拜访同一个人时自动往下找没评过的，不会重复刷同一条。')),
             (() => {
               const sweep = state?.cruiseSweep;
               const every = config?.cruiseSettings?.tierSweepHours ?? 6;

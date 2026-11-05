@@ -82,6 +82,7 @@ export const FIELD_SIDE = Object.freeze({
   'cruiseSettings.crawlFollowers': 'profile',
   'cruiseSettings.interactionCooldownHours': 'profile',
   'cruiseSettings.tierSweepHours': 'profile',
+  'cruiseSettings.commentsPerProfile': 'profile',
   'cruiseSettings.autoVisitInvited': 'profile',
   'cruiseSettings.model': 'profile',
   'cruiseSettings.customPrompt': 'profile',
@@ -559,6 +560,7 @@ const DEFAULT_CONFIG = Object.freeze({
     crawlFollowers: true,
     interactionCooldownHours: 48,
     tierSweepHours: 6,
+    commentsPerProfile: 1,
     autoVisitInvited: true,
     model: '',
     customPrompt: '你在推特(X)上用周天子姬霸的人设回复好友主页的最新推文。\n要求：用文言文或微言大义轻幽默回应对方的话题，亲切称呼对方，不要任何问句，不要现代粗俗脏话，字数在12到30字之间。直接输出纯文本。',
@@ -781,6 +783,11 @@ function validateConfig(input) {
       const sweep = Number(copy.cruiseSettings.tierSweepHours);
       if (!Number.isInteger(sweep) || sweep < 0 || sweep > 720) throw new TypeError('重点名单轮巡间隔需为 0~720 小时之间的整数（0 表示关闭）');
       copy.cruiseSettings.tierSweepHours = sweep;
+    }
+    if (copy.cruiseSettings.commentsPerProfile !== undefined) {
+      const per = Number(copy.cruiseSettings.commentsPerProfile);
+      if (!Number.isInteger(per) || per < 0 || per > 10) throw new TypeError('每次巡航评论条数需为 0~10 之间的整数（0 表示只浏览不评论）');
+      copy.cruiseSettings.commentsPerProfile = per;
     }
     if (copy.cruiseSettings.crawlFollowing !== undefined && typeof copy.cruiseSettings.crawlFollowing !== 'boolean') throw new TypeError('巡航关注列表开关无效');
     if (copy.cruiseSettings.crawlFollowers !== undefined && typeof copy.cruiseSettings.crawlFollowers !== 'boolean') throw new TypeError('巡航粉丝列表开关无效');
