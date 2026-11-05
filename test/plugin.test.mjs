@@ -754,6 +754,60 @@ test('restore rejects a tampered backup name', async () => {
   } finally { f.cleanup(); }
 });
 
+test('time-window style schedule validates and is worker-owned', async () => {
+  const config = clone(DEFAULT_CONFIG);
+  assert.equal(config.postSettings.styleSchedule.length, 3);
+  const ok = validateConfig(config);
+  assert.deepEqual(
+    ok.postSettings.styleSchedule.map(slot => `${slot.label}:${slot.startHour}-${slot.endHour}`),
+    ['楚辞:0-1', '英文:1-7', '文言文:7-24'],
+  );
+
+  const { FIELD_SIDE } = await import('../index.js');
+  assert.equal(FIELD_SIDE['postSettings.styleSchedule'], 'post');
+
+  const inverted = clone(DEFAULT_CONFIG);
+  inverted.postSettings.styleSchedule = [{ id: 'x', label: '坏', startHour: 8, endHour: 8, prompt: '' }];
+  assert.throws(() => validateConfig(inverted), /结束小时必须大于开始小时/);
+
+  const outOfRange = clone(DEFAULT_CONFIG);
+  outOfRange.postSettings.styleSchedule = [{ id: 'x', label: '坏', startHour: 0, endHour: 25, prompt: '' }];
+  assert.throws(() => validateConfig(outOfRange), /0~24/);
+
+  const duplicate = clone(DEFAULT_CONFIG);
+  duplicate.postSettings.styleSchedule = [
+    { id: 'same', label: 'A', startHour: 0, endHour: 1, prompt: '' },
+    { id: 'same', label: 'B', startHour: 1, endHour: 2, prompt: '' },
+  ];
+  assert.throws(() => validateConfig(duplicate), /编号缺失或重复/);
+
+  const noLabel = clone(DEFAULT_CONFIG);
+  noLabel.postSettings.styleSchedule = [{ id: 'x', label: '  ', startHour: 0, endHour: 1, prompt: '' }];
+  assert.throws(() => validateConfig(noLabel), /名称需为/);
+
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.match(source, /分时段文风调度/);
+  assert.match(source, /当前生效/);
+});
+
+test('config history keeps only the most recent snapshots', async () => {
+  const { backupConfigFile, listConfigBackups } = await import('../index.js');
+  const f = fixture();
+  try {
+    const configPath = join(f.dir, 'config.json');
+    const backupDir = join(f.dir, 'config-history');
+    writeFileSync(configPath, JSON.stringify({ schemaVersion: 1 }));
+    for (let i = 0; i < 25; i += 1) {
+      backupConfigFile(configPath, backupDir);
+      // Timestamped names only differ by milliseconds, so make each unique.
+      await new Promise(resolve => setTimeout(resolve, 2));
+    }
+    const backups = listConfigBackups(backupDir);
+    assert.ok(backups.length <= 20, `expected at most 20 snapshots, got ${backups.length}`);
+    assert.ok(backups[0].savedAt, 'newest snapshot should carry a timestamp');
+  } finally { f.cleanup(); }
+});
+
 test('save rebases onto disk so untouched prompts are never wiped', async () => {
   const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
 

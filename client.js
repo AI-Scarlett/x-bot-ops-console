@@ -453,7 +453,7 @@ window.__ModuleLoader__.load({
               t('title')),
             h('p', { style: { margin: '4px 0 0', fontSize: 13, color: C.muted } }, t('subtitle'))),
           h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.6.0'),
+            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.7.0'),
             h('button', {
               type: 'button',
               disabled: busy || updating,
@@ -1123,6 +1123,94 @@ window.__ModuleLoader__.load({
                 updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), topics: parsed } }));
               },
             })),
+
+          // 分时段文风调度
+          h('section', { style: cardStyle },
+            h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 } },
+              h('div', null,
+                h('h2', { style: { margin: 0, fontSize: 15 } }, '🕰️ 分时段文风调度（北京时间）'),
+                h('p', { style: { margin: '4px 0 0', fontSize: 12, color: C.faint, lineHeight: 1.6 } },
+                  '按时段切换文风：落在一段区间内就用该段的提示词，都没命中则回落到上面的「原创发帖文案提示词」。时间段左闭右开，例如 1~7 表示 01:00 到 06:59。')),
+              h('button', {
+                type: 'button',
+                disabled: busy,
+                style: { ...buttonStyle(false), fontSize: 12, padding: '4px 10px' },
+                onClick: () => updateConfig(c => {
+                  const slots = [...(c.postSettings?.styleSchedule || [])];
+                  if (slots.length >= 12) return c;
+                  const id = `slot-${Date.now()}`;
+                  slots.push({ id, label: '新时段', startHour: 0, endHour: 1, prompt: '' });
+                  return { ...c, postSettings: { ...(c.postSettings || {}), styleSchedule: slots } };
+                })
+              }, '➕ 新增时段')),
+            (() => {
+              const slots = config?.postSettings?.styleSchedule || [];
+              const nowHour = (new Date().getUTCHours() + 8) % 24;
+              const patchSlot = (id, patch) => updateConfig(c => ({
+                ...c,
+                postSettings: {
+                  ...(c.postSettings || {}),
+                  styleSchedule: (c.postSettings?.styleSchedule || []).map(slot => (
+                    slot.id === id ? { ...slot, ...patch } : slot
+                  )),
+                },
+              }));
+              if (!slots.length) {
+                return h('div', { style: { marginTop: 10, padding: '12px', background: C.layerTwo, borderRadius: 8, fontSize: 12, color: C.faint } },
+                  '还没有分时段配置，当前所有时间都用同一条全局提示词。点右上角「➕ 新增时段」开始。');
+              }
+              return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 } },
+                ...slots.map(slot => {
+                  const active = nowHour >= slot.startHour && nowHour < slot.endHour;
+                  return h('div', {
+                    key: slot.id,
+                    style: {
+                      padding: '10px 12px', borderRadius: 8, background: C.layerTwo,
+                      border: `1px solid ${active ? C.accent : C.border}`,
+                      borderLeft: `4px solid ${active ? C.accent : C.border}`,
+                    }
+                  },
+                    h('div', { style: { display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' } },
+                      h('input', {
+                        style: { ...inputStyle, flex: '1 1 120px', margin: 0 },
+                        placeholder: '时段名称，如 文言文 / 英文 / 楚辞',
+                        value: slot.label,
+                        onChange: e => patchSlot(slot.id, { label: e.target.value }),
+                      }),
+                      h('div', { style: { display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, color: C.muted } },
+                        h('input', {
+                          type: 'number', min: 0, max: 23, style: { ...inputStyle, width: 72, margin: 0 },
+                          value: slot.startHour,
+                          onChange: e => patchSlot(slot.id, { startHour: e.target.value === '' ? 0 : Number(e.target.value) }),
+                        }),
+                        '时 ~',
+                        h('input', {
+                          type: 'number', min: 1, max: 24, style: { ...inputStyle, width: 72, margin: 0 },
+                          value: slot.endHour,
+                          onChange: e => patchSlot(slot.id, { endHour: e.target.value === '' ? 24 : Number(e.target.value) }),
+                        }),
+                        '时'),
+                      active ? h('span', { style: { fontSize: 11, padding: '2px 8px', borderRadius: 999, background: C.accent, color: '#fff' } }, '当前生效') : null,
+                      h('button', {
+                        type: 'button',
+                        disabled: busy,
+                        style: { ...buttonStyle(false), padding: '2px 8px', fontSize: 11, color: C.error, borderColor: C.error },
+                        onClick: () => updateConfig(c => ({
+                          ...c,
+                          postSettings: {
+                            ...(c.postSettings || {}),
+                            styleSchedule: (c.postSettings?.styleSchedule || []).filter(item => item.id !== slot.id),
+                          },
+                        })),
+                      }, '✕ 删除')),
+                    h('textarea', {
+                      style: { ...inputStyle, minHeight: 56, marginTop: 8, fontSize: 12 },
+                      placeholder: '该时段的文风要求，例如：用楚辞体写，多用「兮」字句与香草美人意象…',
+                      value: slot.prompt || '',
+                      onChange: e => patchSlot(slot.id, { prompt: e.target.value }),
+                    }));
+                }));
+            })()),
 
           // 队列补仓策略设置
           h('section', { style: cardStyle },

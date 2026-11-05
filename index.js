@@ -79,6 +79,7 @@ export const FIELD_SIDE = Object.freeze({
   'postSettings.queueLowThreshold': 'post',
   'postSettings.queueAutoRefill': 'post',
   'postSettings.queueMaxSize': 'post',
+  'postSettings.styleSchedule': 'post',
   'postSettings.topics': 'post',
   'postSettings.model': 'post',
   'postSettings.customPrompt': 'post',
@@ -649,6 +650,12 @@ const DEFAULT_CONFIG = Object.freeze({
     queueLowThreshold: 3,
     queueAutoRefill: true,
     queueMaxSize: 100,
+    // Post style windows, in Beijing time. The first window containing the hour wins.
+    styleSchedule: [
+      { id: 'slot-0', label: '楚辞', startHour: 0, endHour: 1, prompt: '用楚辞体（骚体）写：多用「兮」字句、香草美人意象、上下求索的磅礴气势，句式长短错落。' },
+      { id: 'slot-1', label: '英文', startHour: 1, endHour: 7, prompt: 'Write in English. Keep the persona of a playful ancient Chinese sovereign, witty and self-deprecating, 30-90 words, no profanity.' },
+      { id: 'slot-2', label: '文言文', startHour: 7, endHour: 24, prompt: '用文言文／浅近文言，古奥幽默，自称周天子、姬霸或夫子，可夹杂诗词意象，字数30-90字。' },
+    ],
     topics: ['文言雅趣', '周朝掌故', '易经随笔', '日常感悟'],
     model: '',
     customPrompt: '你在推特(X)上用周天子姬霸的人设发一条原创推文。文风为幽默、古奥的文言文或诗词歌赋，自称周天子、姬霸或夫子，不要露骨，禁止提现代网络低俗梗，字数在30到90字之间。',
@@ -865,6 +872,24 @@ function validateConfig(input) {
       copy.postSettings.queueMaxSize = maxSize;
     }
     if (copy.postSettings.queueAutoRefill !== undefined && typeof copy.postSettings.queueAutoRefill !== 'boolean') throw new TypeError('自动补仓开关无效');
+    if (copy.postSettings.styleSchedule !== undefined) {
+      const slots = copy.postSettings.styleSchedule;
+      if (!Array.isArray(slots) || slots.length > 12) throw new TypeError('分时段文风最多 12 条');
+      const seenIds = new Set();
+      for (const slot of slots) {
+        if (!isRecord(slot)) throw new TypeError('分时段文风条目无效');
+        if (typeof slot.id !== 'string' || !slot.id || seenIds.has(slot.id)) throw new TypeError('分时段文风条目编号缺失或重复');
+        seenIds.add(slot.id);
+        if (typeof slot.label !== 'string' || !slot.label.trim() || slot.label.length > 40) throw new TypeError('分时段文风名称需为 1~40 字');
+        for (const key of ['startHour', 'endHour']) {
+          const hour = Number(slot[key]);
+          if (!Number.isInteger(hour) || hour < 0 || hour > 24) throw new TypeError('分时段的开始/结束小时需为 0~24 的整数');
+          slot[key] = hour;
+        }
+        if (slot.endHour <= slot.startHour) throw new TypeError('分时段的结束小时必须大于开始小时');
+        if (slot.prompt !== undefined && (typeof slot.prompt !== 'string' || slot.prompt.length > 3000)) throw new TypeError('分时段提示词需为不超过 3000 字的文本');
+      }
+    }
   }
   if (copy.cruiseSettings !== undefined) {
     if (!isRecord(copy.cruiseSettings)) throw new TypeError('巡航设置无效');
