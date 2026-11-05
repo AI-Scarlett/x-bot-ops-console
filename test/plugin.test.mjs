@@ -522,3 +522,36 @@ test('queue settings are exposed to the post worker side', async () => {
   assert.equal(FIELD_SIDE['postSettings.queueAutoRefill'], 'post');
   assert.equal(FIELD_SIDE['postSettings.queueMaxSize'], 'post');
 });
+
+test('comma separated inputs keep raw text so a typed separator is not swallowed', async () => {
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+
+  // The separator fields must not re-parse the raw value on every keystroke,
+  // otherwise the comma the user just typed disappears immediately.
+  assert.doesNotMatch(source, /onChange: e => updateConfig\(c => \(\{ \.\.\.c, postSettings: \{ \.\.\.\(c\.postSettings \|\| \{\}\), topics: e\.target\.value\.split/);
+  assert.doesNotMatch(source, /onChange: e => setTier\(index, 'handles', e\.target\.value\)/);
+  assert.doesNotMatch(source, /onChange: e => setSkipHandles\(e\.target\.value\)/);
+
+  // Raw text is held in local state and committed on blur plus at save time.
+  assert.match(source, /onChange: e => setTopicsText\(e\.target\.value\)/);
+  assert.match(source, /onChange: e => setSkipHandlesText\(e\.target\.value\)/);
+  assert.match(source, /onChange: e => setTierHandlesText\(/);
+  assert.match(source, /onBlur: e => \{/);
+  assert.match(source, /topics: splitTopics\(topicsText\)/);
+  assert.match(source, /skipReplyHandles: splitList\(skipHandlesText\)/);
+
+  // The parser itself must split on real commas, not on a literal backslash.
+  const splitTopics = source.match(/const splitTopics = value => String\(value \|\| ''\)\.split\(([^)]*)\)/);
+  assert.ok(splitTopics, 'splitTopics helper is missing');
+  assert.match(splitTopics[1], /\\s/);
+  assert.doesNotMatch(splitTopics[1], /\\\\s/);
+});
+
+test('the topics parser keeps every comma separated entry', async () => {
+  const { validateConfig } = await import('../index.js');
+  const config = clone(DEFAULT_CONFIG);
+  const raw = '文言雅趣, 周朝掌故, 易经随笔, 日常感悟';
+  config.postSettings.topics = raw.split(/[,，\s]+/).map(x => x.trim()).filter(Boolean);
+  assert.deepEqual(config.postSettings.topics, ['文言雅趣', '周朝掌故', '易经随笔', '日常感悟']);
+  assert.deepEqual(validateConfig(config).postSettings.topics, config.postSettings.topics);
+});

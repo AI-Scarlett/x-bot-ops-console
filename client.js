@@ -207,6 +207,12 @@ window.__ModuleLoader__.load({
       const [showGenPanel, setShowGenPanel] = React.useState(false);
       const [draftGenCount, setDraftGenCount] = React.useState(10);
       const [draftGenPrompt, setDraftGenPrompt] = React.useState('');
+      // Free-text drafts for comma/space separated fields. These inputs keep the
+      // raw text locally so a typed separator is never swallowed by re-parsing
+      // on every keystroke; the parsed array is committed on blur and on save.
+      const [topicsText, setTopicsText] = React.useState('');
+      const [skipHandlesText, setSkipHandlesText] = React.useState('');
+      const [tierHandlesText, setTierHandlesText] = React.useState({});
       const saveLock = React.useRef(false);
       const latestSaveHash = React.useRef(null);
 
@@ -218,6 +224,13 @@ window.__ModuleLoader__.load({
           setState(data);
           if (!draftDirty && !preserveDraft) {
             setConfig(data.config);
+            // Seed the free-text drafts from the server so the inputs show the
+            // stored values while no local edit is in flight.
+            setTopicsText((data.config?.postSettings?.topics || []).join(', '));
+            setSkipHandlesText((data.config?.specialPersons?.skipReplyHandles || []).join(', '));
+            const tierText = {};
+            for (const tier of data.config?.tiers || []) tierText[tier.id] = (tier.handles || []).join(', ');
+            setTierHandlesText(tierText);
           }
           setConfigHash(data.configHash ?? null);
           latestSaveHash.current = data.configHash ?? null;
@@ -260,6 +273,8 @@ window.__ModuleLoader__.load({
       if (!config) return h('main', { style: pageStyle }, h('h1', null, t('title')), error || '…');
 
       const updateConfig = fn => { setConfig(current => fn(current)); setDraftDirty(true); };
+      const splitList = value => String(value || '').split(/[\s,，]+/).map(x => x.trim().replace(/^@/, '').toLowerCase()).filter(Boolean);
+      const splitTopics = value => String(value || '').split(/[,，\s]+/).map(x => x.trim()).filter(Boolean);
       const setTier = (index, key, value) => updateConfig(current => ({
         ...current,
         tiers: (current.tiers || []).map((tier, i) => {
@@ -267,7 +282,7 @@ window.__ModuleLoader__.load({
           if (key === 'handles') {
             const handles = Array.isArray(value)
               ? value.map(x => String(x || '').trim().replace(/^@/, '').toLowerCase()).filter(Boolean)
-              : String(value || '').split(/[\s,，]+/).map(x => x.trim().replace(/^@/, '').toLowerCase()).filter(Boolean);
+              : splitList(value);
             return { ...tier, handles };
           }
           return { ...tier, [key]: value };
@@ -275,7 +290,7 @@ window.__ModuleLoader__.load({
       }));
       const setTiming = (key, value) => updateConfig(current => ({ ...current, timing: { ...current.timing, [key]: value } }));
       const setSpecialPerson = (key, field, value) => updateConfig(current => ({ ...current, specialPersons: { ...current.specialPersons, [key]: { ...current.specialPersons[key], [field]: value } } }));
-      const setSkipHandles = value => updateConfig(current => ({ ...current, specialPersons: { ...current.specialPersons, skipReplyHandles: Array.isArray(value) ? value : String(value || '').split(/[\s,，]+/).map(x => x.trim().replace(/^@/, '').toLowerCase()).filter(Boolean) } }));
+      const setSkipHandles = value => updateConfig(current => ({ ...current, specialPersons: { ...current.specialPersons, skipReplyHandles: Array.isArray(value) ? value : splitList(value) } }));
 
       const askConfirm = (promptKey, onConfirm) => setConfirmModal({ prompt: t(promptKey), onConfirm });
 
@@ -386,7 +401,7 @@ window.__ModuleLoader__.load({
               t('title')),
             h('p', { style: { margin: '4px 0 0', fontSize: 13, color: C.muted } }, t('subtitle'))),
           h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.2.7'),
+            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.2.8'),
             h('button', {
               type: 'button',
               disabled: busy || updating,
@@ -476,7 +491,16 @@ window.__ModuleLoader__.load({
             h('section', { style: { marginTop: 12, padding: 14, border: `1px solid ${C.border}`, borderRadius: 10, background: C.surface } },
               h('h3', { style: { margin: '0 0 6px', fontSize: 14 } }, '🤖 回复时跳过名单'),
               h('p', { style: { margin: '0 0 8px', fontSize: 12, color: C.faint } }, '这些句柄不会进入 mention 回复流程；支持增加、删除和批量粘贴。'),
-              h('textarea', { style: { ...inputStyle, minHeight: 70, fontFamily: 'monospace' }, value: (config?.specialPersons?.skipReplyHandles || []).join(', '), onChange: e => setSkipHandles(e.target.value) }),
+              h('textarea', {
+                style: { ...inputStyle, minHeight: 70, fontFamily: 'monospace' },
+                value: skipHandlesText,
+                onChange: e => setSkipHandlesText(e.target.value),
+                onBlur: e => {
+                  const parsed = splitList(e.target.value);
+                  setSkipHandlesText(parsed.join(', '));
+                  setSkipHandles(parsed);
+                },
+              }),
               h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 } }, ...(config?.specialPersons?.skipReplyHandles || []).map(handle => h('button', { type: 'button', key: handle, onClick: () => setSkipHandles((config.specialPersons.skipReplyHandles || []).filter(item => item !== handle)), style: { ...buttonStyle(), padding: '3px 8px', fontSize: 11 } }, `@${handle} ×`))))),
 
           // 2. 重点人群分层名单维护
@@ -513,16 +537,26 @@ window.__ModuleLoader__.load({
                   h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 } },
                     h('label', { style: { ...labelStyle, margin: 0, fontWeight: '500' } }, '关注用户名列表（支持逗号或空格分隔）：', h(SideBadge, { side: 'both' })),
                     builtin.length ? h('button', {
-                      type: 'button', disabled: busy, onClick: () => setTier(index, 'handles', builtin),
+                      type: 'button', disabled: busy,
+                      onClick: () => {
+                        setTier(index, 'handles', builtin);
+                        setTierHandlesText(current => ({ ...current, [tier.id]: builtin.join(', ') }));
+                      },
                       style: { ...buttonStyle(), padding: '3px 8px', fontSize: 11 },
                     }, '一键恢复内置名单') : null),
                   h('textarea', {
                     style: { ...inputStyle, minHeight: 64, margin: '4px 0 6px', fontFamily: 'monospace', fontSize: 13 },
-                    value: handlesList.join(', '), placeholder: '例如：user1, user2, user3',
-                    onChange: e => setTier(index, 'handles', e.target.value)
+                    value: tierHandlesText[tier.id] ?? handlesList.join(', '),
+                    placeholder: '例如：user1, user2, user3',
+                    onChange: e => setTierHandlesText(current => ({ ...current, [tier.id]: e.target.value })),
+                    onBlur: e => {
+                      const parsed = splitList(e.target.value);
+                      setTierHandlesText(current => ({ ...current, [tier.id]: parsed.join(', ') }));
+                      setTier(index, 'handles', parsed);
+                    },
                   }),
                   h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 4 } },
-                    ...handlesList.map(handle => h('button', { key: handle, type: 'button', disabled: busy, title: `移除 @${handle}`, onClick: () => setTier(index, 'handles', handlesList.filter(item => item !== handle)), style: { ...buttonStyle(), padding: '3px 8px', fontSize: 11 } }, `@${handle} ×`)),
+                    ...handlesList.map(handle => h('button', { key: handle, type: 'button', disabled: busy, title: `移除 @${handle}`, onClick: () => { const next = handlesList.filter(item => item !== handle); setTier(index, 'handles', next); setTierHandlesText(current => ({ ...current, [tier.id]: next.join(', ') })); }, style: { ...buttonStyle(), padding: '3px 8px', fontSize: 11 } }, `@${handle} ×`)),
                     !handlesList.length ? h('small', { style: { color: C.faint } }, '名单为空，可在上方输入框新增。') : null)),
 
                 h('div', { style: { display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 10 } },
@@ -900,7 +934,17 @@ window.__ModuleLoader__.load({
             h('label', { style: { ...labelStyle, marginTop: 10 } }, '原创发帖文案提示词（自定义 Prompt）：', h(SideBadge, { side: 'post' })),
             h('textarea', { style: { ...inputStyle, minHeight: 90 }, value: config?.postSettings?.customPrompt || '', onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), customPrompt: e.target.value } })) }),
             h('label', { style: { ...labelStyle, marginTop: 10 } }, '随机发帖话题灵感池（逗号分隔）：', h(SideBadge, { side: 'post' })),
-            h('input', { style: inputStyle, value: (config?.postSettings?.topics || []).join(', '), onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), topics: e.target.value.split(/[,，\s]+/).filter(Boolean) } })) })),
+            h('input', {
+              style: inputStyle,
+              value: topicsText,
+              placeholder: '例如：文言雅趣, 周朝掌故, 易经随笔',
+              onChange: e => setTopicsText(e.target.value),
+              onBlur: e => {
+                const parsed = splitTopics(e.target.value);
+                setTopicsText(parsed.join(', '));
+                updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), topics: parsed } }));
+              },
+            })),
 
           // 队列补仓策略设置
           h('section', { style: cardStyle },
@@ -1019,7 +1063,28 @@ window.__ModuleLoader__.load({
 
         // 统一保存按钮栏
         h('footer', { style: { display: 'flex', gap: 12, alignItems: 'center', marginTop: 12, padding: '12px 0', borderTop: `1px solid ${C.border}`, flexWrap: 'wrap' } },
-          h('button', { disabled: busy || !state?.ok || state?.configSource === 'invalid', onClick: () => act('save-config', undefined, { config, expectedConfigHash: latestSaveHash.current }), style: { ...buttonStyle(true), padding: '8px 20px', fontSize: 14 } }, t('save')),
+          h('button', {
+            disabled: busy || !state?.ok || state?.configSource === 'invalid',
+            onClick: () => {
+              // Commit the free-text fields at save time so a value typed but not
+              // yet blurred is still persisted.
+              const saveConfig = {
+                ...config,
+                postSettings: { ...(config.postSettings || {}), topics: splitTopics(topicsText) },
+                specialPersons: {
+                  ...(config.specialPersons || {}),
+                  skipReplyHandles: splitList(skipHandlesText),
+                },
+                tiers: (config.tiers || []).map(tier => (
+                  tierHandlesText[tier.id] !== undefined
+                    ? { ...tier, handles: splitList(tierHandlesText[tier.id]) }
+                    : tier
+                )),
+              };
+              act('save-config', undefined, { config: saveConfig, expectedConfigHash: latestSaveHash.current });
+            },
+            style: { ...buttonStyle(true), padding: '8px 20px', fontSize: 14 }
+          }, t('save')),
           draftDirty ? h('span', { style: { color: C.accent, fontSize: 13, fontWeight: '500' } }, '● 有未保存的修改') : h('span', { style: { color: C.faint, fontSize: 12 } }, '所有修改点击保存后，两端工作进程每轮读取生效。')),
 
         confirmModal ? h('div', {
