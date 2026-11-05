@@ -1069,7 +1069,7 @@ window.__ModuleLoader__.load({
           h('section', { style: cardStyle },
             h('h2', { style: { margin: 0, fontSize: 15 } }, '① 我的历史发帖表现'),
             h('p', { style: { margin: '6px 0 10px', fontSize: 12, color: C.faint, lineHeight: 1.6 } },
-              'Worker 会读你主页最近推文的曝光/点赞/评论。达到任一门槛的帖子进入学习；同一话题反复不达标会被拉黑，之后不再写。'),
+              'Worker 会读你主页最近推文的曝光/点赞/评论。为公平起见，只判定发布超过 6 小时、曝光已稳定的帖子。达到任一门槛的进入学习；同一话题反复不达标会被拉黑，之后不再写。'),
             h('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' } },
               h('label', { style: { ...labelStyle, flex: '1 1 150px' } },
                 '检查间隔（分钟）：', h(SideBadge, { side: 'post' }),
