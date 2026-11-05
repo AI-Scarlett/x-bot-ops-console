@@ -453,7 +453,7 @@ window.__ModuleLoader__.load({
               t('title')),
             h('p', { style: { margin: '4px 0 0', fontSize: 13, color: C.muted } }, t('subtitle'))),
           h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.5.1'),
+            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.6.0'),
             h('button', {
               type: 'button',
               disabled: busy || updating,
@@ -649,6 +649,65 @@ window.__ModuleLoader__.load({
 
         // TAB 2: 🌐 通用与公共配置
         activeTab === 'general' ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
+
+          // 配置备份与恢复
+          h('section', { style: cardStyle },
+            h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 } },
+              h('div', null,
+                h('h2', { style: { margin: 0, fontSize: 15 } }, '🗂️ 配置备份与恢复'),
+                h('p', { style: { margin: '4px 0 0', fontSize: 12, color: C.faint, lineHeight: 1.6 } },
+                  '每次保存前都会自动存一份快照（保留最近 20 份）。如果发现模型、提示词或名单被误清空，可在这里一键退回。')),
+              h('button', {
+                type: 'button',
+                disabled: busy,
+                style: { ...buttonStyle(false), padding: '6px 14px', fontSize: 12 },
+                onClick: async () => {
+                  try {
+                    await act('backup-config-now');
+                    setNotice('已为当前配置创建一份快照。');
+                  } catch (err) { setError(err.message || String(err)); }
+                }
+              }, '📌 立即创建快照')),
+            (() => {
+              const backups = state?.configBackups || [];
+              if (!backups.length) {
+                return h('div', { style: { marginTop: 10, padding: '12px', background: C.layerTwo, borderRadius: 8, fontSize: 12, color: C.faint } },
+                  '还没有备份。下次保存配置时会自动生成第一份。');
+              }
+              return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6, marginTop: 10, maxHeight: 260, overflowY: 'auto' } },
+                ...backups.map((item, idx) => h('div', {
+                  key: item.name,
+                  style: {
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10,
+                    padding: '8px 10px', background: C.layerTwo, borderRadius: 6,
+                    border: `1px solid ${C.border}`,
+                  }
+                },
+                  h('div', { style: { minWidth: 0 } },
+                    h('div', { style: { fontSize: 12, color: C.text } },
+                      item.savedAt ? new Date(item.savedAt).toLocaleString() : item.name,
+                      idx === 0 ? h('span', { style: { marginLeft: 8, fontSize: 11, color: C.accent } }, '最近一次') : null),
+                    h('div', { style: { fontSize: 11, color: C.faint } },
+                      `${item.name} · ${Math.max(1, Math.round((item.size || 0) / 102.4) / 10)} KB`)),
+                  h('button', {
+                    type: 'button',
+                    disabled: busy,
+                    style: { ...buttonStyle(false), padding: '3px 10px', fontSize: 11, color: C.accent, borderColor: C.accent, flexShrink: 0 },
+                    onClick: () => setConfirmModal({
+                      title: '恢复配置快照',
+                      prompt: `确认把配置恢复到 ${item.savedAt ? new Date(item.savedAt).toLocaleString() : item.name} 的版本吗？\n\n当前配置会先自动备份一份，所以这一步可以再撤回。`,
+                      confirmText: '确认恢复',
+                      onConfirm: async () => {
+                        try {
+                          await act('restore-config-backup', undefined, { name: item.name });
+                          setNotice('配置已恢复。两个 Worker 下一轮读取即生效。');
+                        } catch (err) { setError(`恢复失败：${err.message || String(err)}`); }
+                      },
+                    })
+                  }, '↩️ 恢复此版本')))
+              );
+            })()),
+
           // 概览与校验
           h('section', { style: cardStyle },
             h('h2', { style: { margin: 0, fontSize: 15 } }, t('sharedConfig')),

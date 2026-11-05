@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, openSync, closeSync, mkdirSync, writeFileSync, renameSync, unlinkSync, statSync } from 'node:fs';
+import { readFileSync, existsSync, openSync, closeSync, mkdirSync, writeFileSync, renameSync, unlinkSync, statSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -33,6 +33,8 @@ export const LEARNINGS_PATH = join(APP_HOME, 'Library/Application Support/XBotOp
 export const POST_METRICS_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/post_metrics.json');
 export const LEARN_TRIGGER_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/learn_now.trigger');
 export const CRUISE_HISTORY_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/profile_cruise_history.json');
+export const CONFIG_BACKUP_DIR = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/config-history');
+const MAX_CONFIG_BACKUPS = 20;
 
 const TARGET_FIELDS = ['dir', 'worker', 'watchdog', 'watchdogPid', 'stop', 'pid', 'log', 'heartbeat', 'rate'];
 
@@ -296,6 +298,52 @@ export function readCruiseSweep(historyPath = CRUISE_HISTORY_PATH) {
     };
   } catch {
     return { pending: 0, total: 0, done: 0, lastFinishedAt: null, startedAt: null };
+  }
+}
+
+// Every successful save snapshots the previous file first, so an accidental
+// overwrite (a stale page wiping prompts or model choices) is always reversible.
+export function backupConfigFile(configPath = CONFIG_PATH, backupDir = CONFIG_BACKUP_DIR) {
+  try {
+    if (!existsSync(configPath)) return null;
+    const raw = readFileSync(configPath);
+    mkdirSync(backupDir, { recursive: true, mode: 0o700 });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const file = join(backupDir, `config-${stamp}.json`);
+    writeFileSync(file, raw, { mode: 0o600 });
+    const files = readdirSync(backupDir)
+      .filter(name => name.startsWith('config-') && name.endsWith('.json'))
+      .sort();
+    for (const stale of files.slice(0, Math.max(0, files.length - MAX_CONFIG_BACKUPS))) {
+      try { unlinkSync(join(backupDir, stale)); } catch { /* ignore */ }
+    }
+    return file;
+  } catch {
+    return null;
+  }
+}
+
+export function listConfigBackups(backupDir = CONFIG_BACKUP_DIR) {
+  try {
+    if (!existsSync(backupDir)) return [];
+    return readdirSync(backupDir)
+      .filter(name => name.startsWith('config-') && name.endsWith('.json'))
+      .sort()
+      .reverse()
+      .slice(0, MAX_CONFIG_BACKUPS)
+      .map(name => {
+        const full = join(backupDir, name);
+        let savedAt = null;
+        let size = 0;
+        try {
+          const info = statSync(full);
+          savedAt = new Date(info.mtimeMs).toISOString();
+          size = info.size;
+        } catch { /* keep nulls */ }
+        return { name, savedAt, size };
+      });
+  } catch {
+    return [];
   }
 }
 
@@ -891,10 +939,11 @@ function validateConfig(input) {
   return copy;
 }
 
-export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGETS, configPath = CONFIG_PATH, targetsPath = null, platform = process.platform, spawnProcess = spawn, queuePath = POST_QUEUE_PATH, learningsPath = LEARNINGS_PATH } = {}) {
+export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGETS, configPath = CONFIG_PATH, targetsPath = null, platform = process.platform, spawnProcess = spawn, queuePath = POST_QUEUE_PATH, learningsPath = LEARNINGS_PATH, backupDir = CONFIG_BACKUP_DIR } = {}) {
   let activeConfigPath = configPath;
   const activeQueuePath = queuePath;
   const activeLearningsPath = learningsPath;
+  const activeBackupDir = backupDir;
   const currentTargets = () => (targetsPath ? resolveTargets(paths, targetsPath) : paths);
   const readSharedConfig = () => {
     let raw;
@@ -925,6 +974,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
     const currentHash = hashCurrentConfig();
     if (expectedHash === undefined) throw new Error('缺少配置版本标识；请刷新状态后再保存');
     if (expectedHash !== currentHash) throw new Error('共享配置已被其他进程修改；请刷新状态并重新检查后再保存');
+    backupConfigFile(activeConfigPath, activeBackupDir);
     mkdirSync(dirname(activeConfigPath), { recursive: true, mode: 0o700 });
     const tmp = `${activeConfigPath}.${process.pid}.tmp`;
     try {
@@ -985,6 +1035,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       learnings: readLearnings(activeLearningsPath),
       cruiseSweep: readCruiseSweep(),
       replyDiagnostics: readReplyDiagnostics(items.reply ? items.reply.stateDir : null),
+      configBackups: listConfigBackups(activeBackupDir),
       learnTriggerPending: existsSync(LEARN_TRIGGER_PATH),
       workerAcceptance: workerAcceptance(shared.config), items, platform, checkedAt: new Date(clock()).toISOString(),
     };
@@ -1120,6 +1171,44 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         queue: payload.queue,
         failed: failures.length,
         note: `已成功由大模型生成并追加 ${generated.length} 条推文草稿入队！${failures.length ? `另有 ${failures.length} 条生成失败。` : ''}`,
+      };
+    }
+    if (request.action === 'restore-config-backup') {
+      const name = String(request.name || '');
+      // No slashes allowed, so a crafted name can never escape the backup directory.
+      if (!/^config-[A-Za-z0-9._-]+\.json$/.test(name) || name.includes('..')) throw new TypeError('备份文件名无效');
+      const source = join(activeBackupDir, name);
+      if (!existsSync(source)) throw new Error('找不到该备份文件');
+      let parsed;
+      try { parsed = JSON.parse(readFileSync(source, 'utf8')); }
+      catch { throw new Error('该备份文件内容已损坏，无法恢复'); }
+      const validated = validateConfig(parsed);
+      backupConfigFile(activeConfigPath, activeBackupDir);
+      mkdirSync(dirname(activeConfigPath), { recursive: true, mode: 0o700 });
+      const tmp = `${activeConfigPath}.${process.pid}.restore.tmp`;
+      try {
+        writeFileSync(tmp, `${JSON.stringify(validated, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
+        renameSync(tmp, activeConfigPath);
+      } catch (error) {
+        try { unlinkSync(tmp); } catch { /* keep original error */ }
+        throw error;
+      }
+      return {
+        ok: true,
+        action: 'restore-config-backup',
+        config: clone(validated),
+        configHash: hashCurrentConfig(),
+        workerAcceptance: workerAcceptance(validated),
+        note: `已恢复至 ${name} 的配置，两个 Worker 下一轮读取即生效。`,
+      };
+    }
+    if (request.action === 'backup-config-now') {
+      const file = backupConfigFile(activeConfigPath, activeBackupDir);
+      return {
+        ok: true,
+        action: 'backup-config-now',
+        backups: listConfigBackups(activeBackupDir),
+        note: file ? '已为当前配置创建一份快照。' : '当前没有可备份的配置文件。',
       };
     }
     if (request.action === 'learn-manual') {

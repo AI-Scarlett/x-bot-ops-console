@@ -696,6 +696,64 @@ test('readCruiseSweep reports pending progress or an empty state', async () => {
   } finally { f.cleanup(); }
 });
 
+test('every save snapshots the previous config and can be rolled back', async () => {
+  const f = fixture();
+  try {
+    const configPath = join(f.dir, 'config.json');
+    const backupDir = join(f.dir, 'config-history');
+    const service = createService({
+      paths: f.paths,
+      configPath,
+      backupDir,
+      queuePath: join(f.dir, 'post_queue.json'),
+      learningsPath: join(f.dir, 'learnings.json'),
+      platform: 'darwin',
+    });
+
+    const initial = await service.action({ action: 'state' });
+    const first = clone(initial.config);
+    first.commentSettings = { ...first.commentSettings, customPrompt: '第一版评论提示词' };
+    await service.action({ action: 'save-config', config: first, expectedConfigHash: initial.configHash });
+
+    const afterFirst = await service.action({ action: 'state' });
+    assert.equal(afterFirst.config.commentSettings.customPrompt, '第一版评论提示词');
+    // The very first save has nothing on disk yet, so there is no snapshot to take.
+    assert.equal(afterFirst.configBackups.length, 0);
+
+    // A second save snapshots the first version and changes the prompt.
+    const second = clone(afterFirst.config);
+    second.commentSettings = { ...second.commentSettings, customPrompt: '第二版评论提示词' };
+    await service.action({ action: 'save-config', config: second, expectedConfigHash: afterFirst.configHash });
+
+    const afterSecond = await service.action({ action: 'state' });
+    assert.equal(afterSecond.config.commentSettings.customPrompt, '第二版评论提示词');
+    assert.equal(afterSecond.configBackups.length, 1, 'the previous version must be snapshotted');
+
+    // Roll back to the newest snapshot, which still holds the first version.
+    const restored = await service.action({ action: 'restore-config-backup', name: afterSecond.configBackups[0].name });
+    assert.equal(restored.config.commentSettings.customPrompt, '第一版评论提示词');
+    assert.ok(restored.configHash);
+
+    // Restoring also snapshots the pre-restore state, so the act itself is reversible.
+    const afterRestore = await service.action({ action: 'state' });
+    assert.ok(afterRestore.configBackups.length >= 2, 'restore must snapshot what it replaced');
+  } finally { f.cleanup(); }
+});
+
+test('restore rejects a tampered backup name', async () => {
+  const f = fixture();
+  try {
+    const service = createService({
+      paths: f.paths,
+      configPath: join(f.dir, 'config.json'),
+      backupDir: join(f.dir, 'config-history'),
+      platform: 'darwin',
+    });
+    await assert.rejects(service.action({ action: 'restore-config-backup', name: '../../etc/passwd' }), /备份文件名无效/);
+    await assert.rejects(service.action({ action: 'restore-config-backup', name: 'config-nope.json' }), /找不到该备份文件/);
+  } finally { f.cleanup(); }
+});
+
 test('save rebases onto disk so untouched prompts are never wiped', async () => {
   const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
 
