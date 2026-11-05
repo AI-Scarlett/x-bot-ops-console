@@ -1216,10 +1216,13 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       for (let i = 0; i < count; i++) {
         const topic = pool[Math.floor(Math.random() * pool.length)];
         const theme = pickTopicTheme(postCfg.topicMix);
+        // When a weighted theme is active it owns the content direction; a random
+        // topic hint would fight it, so the hint is dropped in that case.
         const themeBlock = theme
           ? `\n\n【本条主题方向：${theme.label}】（约占 ${theme.weight}%）${theme.prompt ? ` ${theme.prompt}` : ''}`
           : '';
-        const prompt = basePrompt + themeBlock + learningBlock + `\n（当前话题灵感参考：${topic}）`;
+        const topicHint = theme ? `\n（请紧扣「${theme.label}」这个主题方向，不要跑题）` : `\n（当前话题灵感参考：${topic}）`;
+        const prompt = basePrompt + themeBlock + learningBlock + topicHint;
         try {
           const draftText = await generateTweetViaLmh(prompt, { model, port });
           if (draftText) {
