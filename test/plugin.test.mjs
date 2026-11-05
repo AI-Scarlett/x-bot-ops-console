@@ -585,6 +585,47 @@ test('learning settings validate thresholds and reject out of range values', asy
   assert.throws(() => validateConfig(bad), /榜单地址/);
 });
 
+test('learning analysis window accepts a band and rejects inverted ranges', async () => {
+  const config = clone(DEFAULT_CONFIG);
+  assert.equal(config.learningSettings.minAgeHours, 12);
+  assert.equal(config.learningSettings.historyHours, 36);
+
+  config.learningSettings.minAgeHours = 12;
+  config.learningSettings.historyHours = 36;
+  const ok = validateConfig(config);
+  assert.equal(ok.learningSettings.minAgeHours, 12);
+  assert.equal(ok.learningSettings.historyHours, 36);
+
+  // 12h-ago .. 36h-ago is valid; 48 .. 24 would silently analyse nothing.
+  const inverted = clone(DEFAULT_CONFIG);
+  inverted.learningSettings.minAgeHours = 48;
+  inverted.learningSettings.historyHours = 24;
+  assert.throws(() => validateConfig(inverted), /必须小于或等于上限/);
+
+  const zero = clone(DEFAULT_CONFIG);
+  zero.learningSettings.minAgeHours = 0;
+  assert.throws(() => validateConfig(zero), /分析时间下限/);
+});
+
+test('learning module has its own model selection independent of the post model', async () => {
+  const config = clone(DEFAULT_CONFIG);
+  config.postSettings.model = 'gpt-6-luna';
+  config.learningSettings.model = 'gemini-3.8-flash-high';
+  const ok = validateConfig(config);
+  assert.equal(ok.learningSettings.model, 'gemini-3.8-flash-high');
+  assert.equal(ok.postSettings.model, 'gpt-6-luna');
+  // Empty means "follow the post model", so it must stay an accepted value.
+  const empty = clone(config);
+  empty.learningSettings.model = '';
+  assert.equal(validateConfig(empty).learningSettings.model, '');
+
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.match(source, /发帖学习专用大模型/);
+  assert.match(source, /config\?\.learningSettings\?\.model/);
+  assert.match(source, /只分析「至少」多少小时前/);
+  assert.match(source, /只分析「最多」多少小时前/);
+});
+
 test('learning prompt block carries topics but never overrides the writing style', async () => {
   const { buildLearningPromptBlock, DEFAULT_CONFIG: defaults } = await import('../index.js');
   assert.equal(buildLearningPromptBlock({ styleGuide: '', winningTopics: [], bannedTopics: [], patterns: [] }), '');

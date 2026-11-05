@@ -86,6 +86,7 @@ export const FIELD_SIDE = Object.freeze({
   'learningSettings.enabled': 'post',
   'learningSettings.autoLearn': 'post',
   'learningSettings.checkIntervalMinutes': 'post',
+  'learningSettings.minAgeHours': 'post',
   'learningSettings.historyHours': 'post',
   'learningSettings.minImpressions': 'post',
   'learningSettings.minComments': 'post',
@@ -539,7 +540,8 @@ const DEFAULT_CONFIG = Object.freeze({
     enabled: true,
     autoLearn: true,
     checkIntervalMinutes: 360,
-    historyHours: 168,
+    minAgeHours: 12,
+    historyHours: 36,
     minImpressions: 1000,
     minComments: 3,
     minLikes: 10,
@@ -764,7 +766,11 @@ function validateConfig(input) {
       ls[key] = value;
     };
     intIn('checkIntervalMinutes', 5, 10080, '学习检查间隔（分钟）');
-    intIn('historyHours', 1, 2160, '历史时间窗（小时）');
+    intIn('minAgeHours', 1, 2160, '分析时间下限（小时）');
+    intIn('historyHours', 1, 2160, '分析时间上限（小时）');
+    const lowerAge = ls.minAgeHours === undefined ? 12 : Number(ls.minAgeHours);
+    const upperAge = ls.historyHours === undefined ? 36 : Number(ls.historyHours);
+    if (lowerAge > upperAge) throw new TypeError('分析时间下限（距今更近）必须小于或等于上限（距今更久）');
     intIn('minImpressions', 0, 100000000, '曝光量门槛');
     intIn('minComments', 0, 1000000, '评论数门槛');
     intIn('minLikes', 0, 1000000, '点赞数门槛');

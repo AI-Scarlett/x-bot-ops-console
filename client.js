@@ -404,7 +404,7 @@ window.__ModuleLoader__.load({
               t('title')),
             h('p', { style: { margin: '4px 0 0', fontSize: 13, color: C.muted } }, t('subtitle'))),
           h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.3.1'),
+            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.3.2'),
             h('button', {
               type: 'button',
               disabled: busy || updating,
@@ -1057,6 +1057,12 @@ window.__ModuleLoader__.load({
             h('label', { style: { display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginTop: 10 } },
               h('input', { type: 'checkbox', checked: config?.learningSettings?.enabled !== false, onChange: e => updateConfig(c => ({ ...c, learningSettings: { ...(c.learningSettings || {}), enabled: e.target.checked } })) }),
               '启用发帖学习模块', h(SideBadge, { side: 'post' })),
+            h(ModelPicker, {
+              value: config?.learningSettings?.model || '',
+              onChange: val => updateConfig(c => ({ ...c, learningSettings: { ...(c.learningSettings || {}), model: val } })),
+              side: 'post',
+              label: '🧠 发帖学习专用大模型（留空则跟随发帖模型）：'
+            }),
             h('label', { style: { display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginTop: 6 } },
               h('input', { type: 'checkbox', checked: config?.learningSettings?.autoLearn !== false, onChange: e => updateConfig(c => ({ ...c, learningSettings: { ...(c.learningSettings || {}), autoLearn: e.target.checked } })) }),
               '⏱ 按间隔自动学习（关闭后只能手动触发）', h(SideBadge, { side: 'post' })),
@@ -1069,7 +1075,7 @@ window.__ModuleLoader__.load({
           h('section', { style: cardStyle },
             h('h2', { style: { margin: 0, fontSize: 15 } }, '① 我的历史发帖表现'),
             h('p', { style: { margin: '6px 0 10px', fontSize: 12, color: C.faint, lineHeight: 1.6 } },
-              'Worker 会读你主页最近推文的曝光/点赞/评论。为公平起见，只判定发布超过 6 小时、曝光已稳定的帖子。达到任一门槛的进入学习；同一话题反复不达标会被拉黑，之后不再写。'),
+              'Worker 只分析落在【下限 ~ 上限】小时区间内的推文，避开刚发出、曝光还在累积的新帖。达到任一门槛的进入学习；同一话题反复不达标会被拉黑，之后不再写。'),
             h('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' } },
               h('label', { style: { ...labelStyle, flex: '1 1 150px' } },
                 '检查间隔（分钟）：', h(SideBadge, { side: 'post' }),
@@ -1077,9 +1083,15 @@ window.__ModuleLoader__.load({
                   const val = e.target.value === '' ? '' : Number(e.target.value);
                   updateConfig(c => ({ ...c, learningSettings: { ...(c.learningSettings || {}), checkIntervalMinutes: val } }));
                 } })),
-              h('label', { style: { ...labelStyle, flex: '1 1 150px' } },
-                '历史时间窗（小时）：', h(SideBadge, { side: 'post' }),
-                h('input', { type: 'number', min: 1, max: 2160, style: inputStyle, value: config?.learningSettings?.historyHours ?? 168, onChange: e => {
+              h('label', { style: { ...labelStyle, flex: '1 1 130px' } },
+                '只分析「至少」多少小时前：', h(SideBadge, { side: 'post' }),
+                h('input', { type: 'number', min: 1, max: 2160, style: inputStyle, value: config?.learningSettings?.minAgeHours ?? 12, onChange: e => {
+                  const val = e.target.value === '' ? '' : Number(e.target.value);
+                  updateConfig(c => ({ ...c, learningSettings: { ...(c.learningSettings || {}), minAgeHours: val } }));
+                } })),
+              h('label', { style: { ...labelStyle, flex: '1 1 130px' } },
+                '只分析「最多」多少小时前：', h(SideBadge, { side: 'post' }),
+                h('input', { type: 'number', min: 1, max: 2160, style: inputStyle, value: config?.learningSettings?.historyHours ?? 36, onChange: e => {
                   const val = e.target.value === '' ? '' : Number(e.target.value);
                   updateConfig(c => ({ ...c, learningSettings: { ...(c.learningSettings || {}), historyHours: val } }));
                 } })),
