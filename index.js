@@ -80,6 +80,8 @@ export const FIELD_SIDE = Object.freeze({
   'postSettings.queueAutoRefill': 'post',
   'postSettings.queueMaxSize': 'post',
   'postSettings.styleSchedule': 'post',
+  'postSettings.learningInfluence': 'post',
+  'postSettings.topicMix': 'post',
   'postSettings.topics': 'post',
   'postSettings.model': 'post',
   'postSettings.customPrompt': 'post',
@@ -412,9 +414,22 @@ export function mutateLearnings(mutator, learningsPath = LEARNINGS_PATH) {
   }, `${learningsPath}.lock`, '发帖学习记录');
 }
 
+// Pick a content theme by weight, so the mix config drives what gets written about.
+export function pickTopicTheme(mix, random = Math.random) {
+  const usable = (Array.isArray(mix) ? mix : []).filter(item => isRecord(item) && Number(item.weight) > 0);
+  if (!usable.length) return null;
+  const total = usable.reduce((sum, item) => sum + Number(item.weight), 0);
+  let roll = random() * total;
+  for (const item of usable) {
+    roll -= Number(item.weight);
+    if (roll < 0) return item;
+  }
+  return usable[usable.length - 1];
+}
+
 // Collapse the stored learnings into a prompt fragment the generator can use.
 // The caller keeps its own writing style; only topics and structure are borrowed.
-export function buildLearningPromptBlock(learnings, { maxChars = 1600 } = {}) {
+export function buildLearningPromptBlock(learnings, { maxChars = 1600, influence = 100 } = {}) {
   const parts = [];
   if (learnings.styleGuide) parts.push(`【高表现套路总结】\n${learnings.styleGuide}`);
   const hooks = learnings.patterns.flatMap(p => p.hooks).filter(Boolean).slice(0, 10);
@@ -424,8 +439,12 @@ export function buildLearningPromptBlock(learnings, { maxChars = 1600 } = {}) {
   if (learnings.winningTopics.length) parts.push(`【已验证有效的话题方向】${learnings.winningTopics.join('、')}`);
   if (learnings.bannedTopics.length) parts.push(`【必须避开的话题（历史表现差）】${learnings.bannedTopics.join('、')}`);
   if (!parts.length) return '';
+  // influence scales how much of the learned guidance reaches the model.
+  const strength = Math.max(0, Math.min(100, Number(influence)));
+  if (strength === 0) return '';
+  const budget = Math.max(80, Math.round(maxChars * (strength / 100)));
   let block = parts.join('\n\n');
-  if (block.length > maxChars) block = `${block.slice(0, maxChars)}…`;
+  if (block.length > budget) block = `${block.slice(0, budget)}…`;
   return `\n\n（以下是根据历史爆款总结的参考套路，只借鉴选题方向与结构节奏；行文风格仍必须严格遵循上面的文风要求，不要照抄原句。）\n${block}`;
 }
 
@@ -650,6 +669,10 @@ const DEFAULT_CONFIG = Object.freeze({
     queueLowThreshold: 3,
     queueAutoRefill: true,
     queueMaxSize: 100,
+    // How strongly learned rules are injected (0 = prompt only, 100 = full).
+    learningInfluence: 100,
+    // Weighted content themes. Weights must add up to 100. Empty = disabled.
+    topicMix: [],
     // Post style windows, in Beijing time. The first window containing the hour wins.
     styleSchedule: [
       { id: 'slot-0', label: '楚辞', startHour: 0, endHour: 1, prompt: '用楚辞体（骚体）写：多用「兮」字句、香草美人意象、上下求索的磅礴气势，句式长短错落。' },
@@ -872,6 +895,28 @@ function validateConfig(input) {
       copy.postSettings.queueMaxSize = maxSize;
     }
     if (copy.postSettings.queueAutoRefill !== undefined && typeof copy.postSettings.queueAutoRefill !== 'boolean') throw new TypeError('自动补仓开关无效');
+    if (copy.postSettings.learningInfluence !== undefined) {
+      const influence = Number(copy.postSettings.learningInfluence);
+      if (!Number.isInteger(influence) || influence < 0 || influence > 100) throw new TypeError('学习规则强度需为 0~100 的整数');
+      copy.postSettings.learningInfluence = influence;
+    }
+    if (copy.postSettings.topicMix !== undefined) {
+      const mix = copy.postSettings.topicMix;
+      if (!Array.isArray(mix) || mix.length > 12) throw new TypeError('主题配比最多 12 条');
+      const seenIds = new Set();
+      for (const item of mix) {
+        if (!isRecord(item)) throw new TypeError('主题配比条目无效');
+        if (typeof item.id !== 'string' || !item.id || seenIds.has(item.id)) throw new TypeError('主题配比编号缺失或重复');
+        seenIds.add(item.id);
+        if (typeof item.label !== 'string' || !item.label.trim() || item.label.length > 40) throw new TypeError('主题名称需为 1~40 字');
+        const weight = Number(item.weight);
+        if (!Number.isInteger(weight) || weight < 0 || weight > 100) throw new TypeError('主题比例需为 0~100 的整数');
+        item.weight = weight;
+        if (item.prompt !== undefined && (typeof item.prompt !== 'string' || item.prompt.length > 2000)) throw new TypeError('主题提示词需为不超过 2000 字的文本');
+      }
+      const total = mix.reduce((sum, item) => sum + item.weight, 0);
+      if (mix.length && total !== 100) throw new TypeError(`主题比例合计必须等于 100%（当前 ${total}%）`);
+    }
     if (copy.postSettings.styleSchedule !== undefined) {
       const slots = copy.postSettings.styleSchedule;
       if (!Array.isArray(slots) || slots.length > 12) throw new TypeError('分时段文风最多 12 条');
@@ -1154,7 +1199,10 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       const basePrompt = oneOffPrompt || postCfg.customPrompt || '你在推特(X)上用周天子姬霸的人设发一条原创推文。文风为幽默、古奥的文言文或诗词歌赋，自称周天子、姬霸或夫子，不要露骨，禁止提现代网络低俗梗，字数在30到90字之间。';
       // Learned patterns steer topic choice and structure; the writing style above stays authoritative.
       const learnings = readLearnings(activeLearningsPath);
-      const learningBlock = learningCfg.injectIntoPost === false ? '' : buildLearningPromptBlock(learnings);
+      const influence = Number(postCfg.learningInfluence ?? 100);
+      const learningBlock = (learningCfg.injectIntoPost === false || influence === 0)
+        ? ''
+        : buildLearningPromptBlock(learnings, { influence });
       const banned = new Set(learnings.bannedTopics.map(topic => topic.toLowerCase()));
       const configuredTopics = postCfg.topics && postCfg.topics.length ? postCfg.topics : ['文言雅趣', '日常随笔', '周朝掌故'];
       const preferred = learnings.winningTopics.filter(topic => !banned.has(topic.toLowerCase()));
@@ -1167,7 +1215,11 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       const failures = [];
       for (let i = 0; i < count; i++) {
         const topic = pool[Math.floor(Math.random() * pool.length)];
-        const prompt = basePrompt + learningBlock + `\n（当前话题灵感参考：${topic}）`;
+        const theme = pickTopicTheme(postCfg.topicMix);
+        const themeBlock = theme
+          ? `\n\n【本条主题方向：${theme.label}】（约占 ${theme.weight}%）${theme.prompt ? ` ${theme.prompt}` : ''}`
+          : '';
+        const prompt = basePrompt + themeBlock + learningBlock + `\n（当前话题灵感参考：${topic}）`;
         try {
           const draftText = await generateTweetViaLmh(prompt, { model, port });
           if (draftText) {

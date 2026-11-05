@@ -453,7 +453,7 @@ window.__ModuleLoader__.load({
               t('title')),
             h('p', { style: { margin: '4px 0 0', fontSize: 13, color: C.muted } }, t('subtitle'))),
           h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.7.0'),
+            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.8.0'),
             h('button', {
               type: 'button',
               disabled: busy || updating,
@@ -1123,6 +1123,93 @@ window.__ModuleLoader__.load({
                 updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), topics: parsed } }));
               },
             })),
+
+          // 生成配比：学习规则强度 + 主题配比
+          h('section', { style: cardStyle },
+            h('h2', { style: { margin: 0, fontSize: 15 } }, '🎚️ 生成配比（提示词 / 学习规则 / 主题）'),
+            h('p', { style: { margin: '6px 0 10px', fontSize: 12, color: C.faint, lineHeight: 1.6 } },
+              '每条文由三层组成：① 上面的发帖提示词与时段文风（骨架，始终生效）② 学习规则（按下方强度注入）③ 主题方向（按权重随机抽取）。'),
+
+            h('label', { style: { ...labelStyle, marginTop: 4 } }, '学习规则强度（0=完全不用学习成果，100=全量注入）：', h(SideBadge, { side: 'post' })),
+            h('div', { style: { display: 'flex', gap: 12, alignItems: 'center' } },
+              h('input', {
+                type: 'range', min: 0, max: 100, step: 5,
+                style: { flex: 1 },
+                value: config?.postSettings?.learningInfluence ?? 100,
+                onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), learningInfluence: Number(e.target.value) } })),
+              }),
+              h('strong', { style: { minWidth: 48, textAlign: 'right', fontSize: 14 } }, `${config?.postSettings?.learningInfluence ?? 100}%`)),
+            h('small', { style: { color: C.faint, fontSize: 12 } },
+              `当前学习注入：${(config?.postSettings?.learningInfluence ?? 100) === 0 ? '已关闭' : `约 ${Math.round(1600 * (config?.postSettings?.learningInfluence ?? 100) / 100)} 字`}；避写话题始终生效，不受强度影响。`),
+
+            h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginTop: 18 } },
+              h('div', null,
+                h('div', { style: { fontSize: 13, fontWeight: '600' } }, '主题配比（合计需为 100%）'),
+                h('small', { style: { color: C.faint, fontSize: 12 } }, '例如：文言文 50% · 撩女人 30% · 谈生活 20%。比例越高出现越频繁。')),
+              (() => {
+                const mix = config?.postSettings?.topicMix || [];
+                const total = mix.reduce((sum, item) => sum + (Number(item.weight) || 0), 0);
+                return h('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
+                  h('span', { style: { fontSize: 12, fontWeight: '600', color: total === 100 ? C.success : C.error } }, `合计 ${total}%`),
+                  h('button', {
+                    type: 'button',
+                    disabled: busy,
+                    style: { ...buttonStyle(false), fontSize: 12, padding: '4px 10px' },
+                    onClick: () => updateConfig(c => {
+                      const current = [...(c.postSettings?.topicMix || [])];
+                      if (current.length >= 12) return c;
+                      current.push({ id: `theme-${Date.now()}`, label: '新主题', weight: 0, prompt: '' });
+                      return { ...c, postSettings: { ...(c.postSettings || {}), topicMix: current } };
+                    }),
+                  }, '➕ 新增主题'));
+              })()),
+            (() => {
+              const mix = config?.postSettings?.topicMix || [];
+              const patch = (id, patchValue) => updateConfig(c => ({
+                ...c,
+                postSettings: {
+                  ...(c.postSettings || {}),
+                  topicMix: (c.postSettings?.topicMix || []).map(item => (item.id === id ? { ...item, ...patchValue } : item)),
+                },
+              }));
+              if (!mix.length) {
+                return h('div', { style: { marginTop: 10, padding: '12px', background: C.layerTwo, borderRadius: 8, fontSize: 12, color: C.faint } },
+                  '未启用主题配比：所有帖子共用同一套提示词。点「➕ 新增主题」开始按比例分配。');
+              }
+              return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 } },
+                ...mix.map(item => h('div', {
+                  key: item.id,
+                  style: { padding: '10px 12px', borderRadius: 8, background: C.layerTwo, border: `1px solid ${C.border}` }
+                },
+                  h('div', { style: { display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' } },
+                    h('input', {
+                      style: { ...inputStyle, flex: '1 1 140px', margin: 0 },
+                      placeholder: '主题名称，如 文言文 / 撩女人 / 谈生活',
+                      value: item.label,
+                      onChange: e => patch(item.id, { label: e.target.value }),
+                    }),
+                    h('div', { style: { display: 'flex', gap: 6, alignItems: 'center' } },
+                      h('input', {
+                        type: 'number', min: 0, max: 100, style: { ...inputStyle, width: 80, margin: 0 },
+                        value: item.weight,
+                        onChange: e => patch(item.id, { weight: e.target.value === '' ? 0 : Number(e.target.value) }),
+                      }),
+                      h('span', { style: { fontSize: 12, color: C.muted } }, '%')),
+                    h('button', {
+                      type: 'button', disabled: busy,
+                      style: { ...buttonStyle(false), padding: '2px 8px', fontSize: 11, color: C.error, borderColor: C.error },
+                      onClick: () => updateConfig(c => ({
+                        ...c,
+                        postSettings: { ...(c.postSettings || {}), topicMix: (c.postSettings?.topicMix || []).filter(x => x.id !== item.id) },
+                      })),
+                    }, '✕ 删除')),
+                  h('textarea', {
+                    style: { ...inputStyle, minHeight: 48, marginTop: 8, fontSize: 12 },
+                    placeholder: '这个主题的写法和侧重点，例如：围绕搞钱与追求异性展开，风趣不低俗…',
+                    value: item.prompt || '',
+                    onChange: e => patch(item.id, { prompt: e.target.value }),
+                  }))));
+            })()),
 
           // 分时段文风调度
           h('section', { style: cardStyle },

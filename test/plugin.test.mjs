@@ -808,6 +808,57 @@ test('config history keeps only the most recent snapshots', async () => {
   } finally { f.cleanup(); }
 });
 
+test('learning influence and topic mix validate and weight picks correctly', async () => {
+  const { pickTopicTheme, buildLearningPromptBlock } = await import('../index.js');
+  const config = clone(DEFAULT_CONFIG);
+  assert.equal(config.postSettings.learningInfluence, 100);
+  assert.deepEqual(config.postSettings.topicMix, []);
+
+  const mix = [
+    { id: 'a', label: '文言文', weight: 50, prompt: '古奥' },
+    { id: 'b', label: '撩女人', weight: 30, prompt: '风趣' },
+    { id: 'c', label: '谈生活', weight: 20, prompt: '生活' },
+  ];
+  const ok = clone(DEFAULT_CONFIG);
+  ok.postSettings.topicMix = mix;
+  ok.postSettings.learningInfluence = 40;
+  assert.equal(validateConfig(ok).postSettings.learningInfluence, 40);
+
+  const wrongTotal = clone(DEFAULT_CONFIG);
+  wrongTotal.postSettings.topicMix = [{ id: 'a', label: 'X', weight: 70, prompt: '' }];
+  assert.throws(() => validateConfig(wrongTotal), /合计必须等于 100%/);
+
+  const badWeight = clone(DEFAULT_CONFIG);
+  badWeight.postSettings.topicMix = [{ id: 'a', label: 'X', weight: 150, prompt: '' }];
+  assert.throws(() => validateConfig(badWeight), /主题比例需为 0~100/);
+
+  const badInfluence = clone(DEFAULT_CONFIG);
+  badInfluence.postSettings.learningInfluence = 101;
+  assert.throws(() => validateConfig(badInfluence), /学习规则强度需为 0~100/);
+
+  // Weighted pick honours the configured ratio.
+  const counts = { 文言文: 0, 撩女人: 0, 谈生活: 0 };
+  for (let i = 0; i < 4000; i += 1) counts[pickTopicTheme(mix).label] += 1;
+  assert.ok(Math.abs(counts['文言文'] / 4000 - 0.5) < 0.04, `文言文 ratio ${counts['文言文'] / 4000}`);
+  assert.ok(Math.abs(counts['撩女人'] / 4000 - 0.3) < 0.04, `撩女人 ratio ${counts['撩女人'] / 4000}`);
+  assert.ok(Math.abs(counts['谈生活'] / 4000 - 0.2) < 0.04, `谈生活 ratio ${counts['谈生活'] / 4000}`);
+  assert.equal(pickTopicTheme([]), null);
+
+  // Influence 0 removes the learned block entirely; 100 keeps it whole.
+  const learnings = { styleGuide: '反差开局', winningTopics: ['打工账本'], bannedTopics: [], patterns: [{ title: 'T', structure: 'S', hooks: ['H'] }] };
+  assert.equal(buildLearningPromptBlock(learnings, { influence: 0 }), '');
+  const full = buildLearningPromptBlock(learnings, { influence: 100 });
+  const half = buildLearningPromptBlock(learnings, { influence: 50 });
+  assert.ok(full.length > 0);
+  assert.ok(half.length <= full.length);
+  assert.match(full, /反差开局/);
+
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.match(source, /生成配比（提示词 \/ 学习规则 \/ 主题）/);
+  assert.match(source, /学习规则强度/);
+  assert.match(source, /主题配比（合计需为 100%）/);
+});
+
 test('save rebases onto disk so untouched prompts are never wiped', async () => {
   const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
 
