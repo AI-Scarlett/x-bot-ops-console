@@ -420,3 +420,28 @@ test('exposes DSH pnpm and profile discovery helpers', async () => {
   const profiles = resolveDshProfiles();
   assert.ok(Array.isArray(profiles));
 });
+
+test('handles post queue operations (enqueue, urgent, remove, clear)', async () => {
+  const f = fixture();
+  try {
+    const service = createService({ paths: f.paths, configPath: join(f.dir, 'config.json'), platform: 'darwin' });
+    const res1 = await service.action({ action: 'enqueue-post', text: '第一条普通测试推文', urgent: false });
+    assert.equal(res1.ok, true);
+    assert.equal(res1.queue.length, 1);
+    assert.equal(res1.item.urgent, false);
+
+    const res2 = await service.action({ action: 'enqueue-post', text: '加急插队推文', urgent: true });
+    assert.equal(res2.ok, true);
+    assert.equal(res2.queue.length, 2);
+    assert.equal(res2.queue[0].text, '加急插队推文');
+    assert.equal(res2.queue[0].urgent, true);
+
+    const res3 = await service.action({ action: 'remove-queued-post', id: res2.queue[0].id });
+    assert.equal(res3.ok, true);
+    assert.equal(res3.queue.length, 1);
+
+    const res4 = await service.action({ action: 'clear-post-queue' });
+    assert.equal(res4.ok, true);
+    assert.equal(res4.queue.length, 0);
+  } finally { f.cleanup(); }
+});

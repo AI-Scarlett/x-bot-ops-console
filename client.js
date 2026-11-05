@@ -202,6 +202,8 @@ window.__ModuleLoader__.load({
       const [activeTab, setActiveTab] = React.useState('general');
       const [pause, setPause] = React.useState({ comment: 30, reply: 30, post: 30, profile: 30 });
       const [confirmModal, setConfirmModal] = React.useState(null);
+      const [manualPostText, setManualPostText] = React.useState('');
+      const [generatingDrafts, setGeneratingDrafts] = React.useState(false);
       const saveLock = React.useRef(false);
       const latestSaveHash = React.useRef(null);
 
@@ -381,7 +383,7 @@ window.__ModuleLoader__.load({
               t('title')),
             h('p', { style: { margin: '4px 0 0', fontSize: 13, color: C.muted } }, t('subtitle'))),
           h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.2.2'),
+            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.2.4'),
             h('button', {
               type: 'button',
               disabled: busy || updating,
@@ -655,27 +657,219 @@ window.__ModuleLoader__.load({
                   h('input', { type: 'number', min, max, style: inputStyle, value: config?.timing?.[key] ?? 0, onChange: e => setTiming(key, Number(e.target.value)) }))))))
         : null,
 
-        // TAB 5: 📝 自动发帖独立配置
+        // TAB 5: 📝 自动发帖独立配置与队列管理
         activeTab === 'post' ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
           statusCard('post', '📝 ' + t('post') + '（任务状态与控制）'),
+
+          // 待发队列与手动插队
+          h('section', { style: cardStyle },
+            h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 10 } },
+              h('h2', { style: { margin: 0, fontSize: 16 } }, '📋 待发推文队列看板（按序或加急发布）'),
+              h('div', { style: { display: 'flex', gap: 8 } },
+                h('button', {
+                  type: 'button',
+                  disabled: busy || generatingDrafts,
+                  style: { ...buttonStyle(false), fontSize: 12, padding: '4px 10px', background: 'rgba(99, 102, 241, 0.15)', borderColor: '#6366f1', color: '#818cf8' },
+                  onClick: async () => {
+                    setGeneratingDrafts(true);
+                    setError('');
+                    setNotice('正在请求大模型生成 3 条原创推文草稿并入队...');
+                    try {
+                      const res = await act('generate-draft-posts', undefined, { count: 3 });
+                      if (res && res.generated) {
+                        setNotice(`🎉 成功生成 ${res.generated.length} 条推文草稿并加入队列！`);
+                      }
+                    } catch (err) {
+                      setError(`生成草稿失败：${err.message || String(err)}`);
+                    } finally {
+                      setGeneratingDrafts(false);
+                    }
+                  }
+                }, generatingDrafts ? '⏳ 正在生成...' : '🤖 AI 批量生成 3 条草稿入队'),
+                state?.postQueue && state.postQueue.length > 0 ? h('button', {
+                  type: 'button',
+                  disabled: busy,
+                  style: { ...buttonStyle(false), fontSize: 12, padding: '4px 10px', color: C.error, borderColor: C.error },
+                  onClick: () => {
+                    setConfirmModal({
+                      title: '清空待发队列',
+                      prompt: '确认清空当前所有未发送的推文吗？',
+                      confirmText: '确认清空',
+                      onConfirm: () => void act('clear-post-queue'),
+                    });
+                  }
+                }, '🗑️ 清空队列') : null
+              )
+            ),
+
+            // 手动编辑与插队区域
+            h('div', { style: { background: C.layerTwo, padding: '12px 14px', borderRadius: 10, border: `1px solid ${C.border}`, marginBottom: 14 } },
+              h('label', { style: { fontSize: 13, fontWeight: '600', display: 'block', marginBottom: 6 } }, '✍️ 手动撰写新推文（支持立即插队或排队）：'),
+              h('textarea', {
+                style: { ...inputStyle, minHeight: 70, resize: 'vertical' },
+                placeholder: '输入你想发的推文内容（可自拟文案，字数建议 20~140 字）...',
+                value: manualPostText,
+                onChange: e => setManualPostText(e.target.value),
+              }),
+              h('div', { style: { display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 8 } },
+                h('button', {
+                  type: 'button',
+                  disabled: busy || !manualPostText.trim(),
+                  style: { ...buttonStyle(false), padding: '6px 14px', fontSize: 13 },
+                  onClick: async () => {
+                    const text = manualPostText.trim();
+                    if (!text) return;
+                    setBusy(true);
+                    try {
+                      await act('enqueue-post', undefined, { text, urgent: false, source: 'manual' });
+                      setManualPostText('');
+                      setNotice('推文已追加到队列末尾，将按轮次顺序发送。');
+                    } catch (err) {
+                      setError(err.message || String(err));
+                    } finally {
+                      setBusy(false);
+                    }
+                  }
+                }, '➕ 加入待发队列末尾'),
+                h('button', {
+                  type: 'button',
+                  disabled: busy || !manualPostText.trim(),
+                  style: {
+                    ...buttonStyle(true),
+                    padding: '6px 16px',
+                    fontSize: 13,
+                    background: '#f59e0b',
+                    borderColor: '#d97706',
+                    color: '#000',
+                    fontWeight: 'bold',
+                  },
+                  onClick: async () => {
+                    const text = manualPostText.trim();
+                    if (!text) return;
+                    setBusy(true);
+                    try {
+                      await act('enqueue-post', undefined, { text, urgent: true, source: 'manual' });
+                      setManualPostText('');
+                      setNotice('⚡ 已设置为【加急插队】！Post Worker 会在当前发帖周期优先发出本条！');
+                    } catch (err) {
+                      setError(err.message || String(err));
+                    } finally {
+                      setBusy(false);
+                    }
+                  }
+                }, '⚡ 立即插队置顶发送')
+              )
+            ),
+
+            // 队列列表展示
+            h('div', null,
+              h('div', { style: { fontSize: 13, fontWeight: '600', color: C.muted, marginBottom: 8, display: 'flex', justifyContent: 'space-between' } },
+                h('span', null, `当前待发队列 (${state?.postQueue?.length || 0} 条)`),
+                h('span', { style: { fontSize: 12, color: C.faint } }, '队列为空时，Worker 会在发帖周期到达时按文风提示词自动现场生成')
+              ),
+              state?.postQueue && state.postQueue.length > 0 ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+                ...state.postQueue.map((item, idx) => h('div', {
+                  key: item.id || idx,
+                  style: {
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10,
+                    padding: '10px 12px', background: C.raised, borderRadius: 8,
+                    borderLeft: `4px solid ${item.urgent ? '#f59e0b' : '#38bdf8'}`,
+                    borderTop: `1px solid ${C.border}`, borderRight: `1px solid ${C.border}`, borderBottom: `1px solid ${C.border}`,
+                  }
+                },
+                  h('div', { style: { flex: 1, minWidth: 0 } },
+                    h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 } },
+                      h('span', { style: { fontSize: 12, fontWeight: 'bold', color: item.urgent ? '#f59e0b' : '#38bdf8' } }, `#${idx + 1}`),
+                      item.urgent ? h('span', { style: { padding: '1px 6px', borderRadius: 4, background: '#f59e0b', color: '#000', fontSize: 10, fontWeight: 'bold' } }, '⚡ 加急插队') : null,
+                      h('span', { style: { fontSize: 11, color: C.faint } }, item.source === 'manual' ? '手动录入' : (item.source === 'ai_draft' ? 'AI 预生成' : '动态生成')),
+                      item.createdAt ? h('span', { style: { fontSize: 11, color: C.faint } }, new Date(item.createdAt).toLocaleTimeString()) : null
+                    ),
+                    h('p', { style: { margin: 0, fontSize: 13, color: C.text, lineHeight: 1.5, whiteSpace: 'pre-wrap' } }, item.text)
+                  ),
+                  h('div', { style: { display: 'flex', gap: 6, flexShrink: 0 } },
+                    !item.urgent ? h('button', {
+                      type: 'button',
+                      title: '设为立即插队置顶',
+                      style: { ...buttonStyle(false), padding: '2px 8px', fontSize: 11, color: '#f59e0b', borderColor: '#f59e0b' },
+                      onClick: async () => {
+                        await act('remove-queued-post', undefined, { id: item.id });
+                        await act('enqueue-post', undefined, { text: item.text, urgent: true, source: item.source });
+                        setNotice('已将该推文设为加急插队置顶！');
+                      }
+                    }, '⚡ 置顶') : null,
+                    h('button', {
+                      type: 'button',
+                      title: '从队列中移除',
+                      style: { ...buttonStyle(false), padding: '2px 8px', fontSize: 11, color: C.error, borderColor: C.error },
+                      onClick: () => void act('remove-queued-post', undefined, { id: item.id })
+                    }, '✕ 移除')
+                  )
+                ))
+              ) : h('div', { style: { padding: '20px', textAlign: 'center', background: C.layerTwo, borderRadius: 8, color: C.faint, fontSize: 13 } },
+                '暂无排队推文。你可以在上方手动录入，或点击右上角「🤖 AI 批量生成 3 条草稿入队」提前备齐。'
+              )
+            )
+          ),
+
+          // 发帖策略、模型与参数设置
           h('section', { style: cardStyle },
             h('h2', { style: { margin: 0, fontSize: 15 } }, '⚙️ 自动发帖策略、模型与提示词'),
             h('label', { style: { display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginTop: 8 } },
               h('input', { type: 'checkbox', checked: config?.postSettings?.enabled !== false, onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), enabled: e.target.checked } })) }),
               '启用自动发帖 Worker', h(SideBadge, { side: 'post' })),
-            h(ModelPicker, {
-              value: config?.postSettings?.model || '',
-              onChange: val => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), model: val } })),
-              side: 'post',
-              label: '📝 自动发帖专用大模型：'
-            }),
-            h('label', { style: { ...labelStyle, marginTop: 10 } }, '发帖间隔（分钟）：', h(SideBadge, { side: 'post' })),
-            h('input', { type: 'number', min: 10, max: 1440, style: inputStyle, value: config?.postSettings?.intervalMinutes ?? 180, onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), intervalMinutes: Number(e.target.value) } })) }),
+            h(ModelPicker, {\n              value: config?.postSettings?.model || '',\n              onChange: val => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), model: val } })),\n              side: 'post',\n              label: '📝 自动发帖专用大模型：'\n            }),
+            h('div', { style: { display: 'flex', gap: 16, marginTop: 10, flexWrap: 'wrap' } },
+              h('label', { style: { ...labelStyle, flex: '1 1 200px' } },
+                '发帖间隔（秒数）：', h(SideBadge, { side: 'post' }),
+                h('input', {
+                  type: 'number',
+                  min: 30,
+                  max: 86400,
+                  style: inputStyle,
+                  placeholder: '例如 180 秒（3分钟）',
+                  value: config?.postSettings?.intervalSeconds ?? ((config?.postSettings?.intervalMinutes ?? 3) * 60),
+                  onChange: e => {
+                    const sec = Number(e.target.value);
+                    updateConfig(c => ({
+                      ...c,
+                      postSettings: {
+                        ...(c.postSettings || {}),
+                        intervalSeconds: sec,
+                        intervalMinutes: Math.max(1, Math.round(sec / 60)),
+                      }
+                    }));
+                  }
+                })
+              ),
+              h('label', { style: { ...labelStyle, flex: '1 1 200px' } },
+                '折合分钟参考：',
+                h('div', { style: { ...inputStyle, background: C.raised, color: C.muted, display: 'flex', alignItems: 'center' } },
+                  `约 ${Math.round((config?.postSettings?.intervalSeconds ?? 180) / 60 * 10) / 10} 分钟`
+                )
+              )
+            ),
             h('label', { style: { ...labelStyle, marginTop: 10 } }, '原创发帖文案提示词（自定义 Prompt）：', h(SideBadge, { side: 'post' })),
             h('textarea', { style: { ...inputStyle, minHeight: 90 }, value: config?.postSettings?.customPrompt || '', onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), customPrompt: e.target.value } })) }),
             h('label', { style: { ...labelStyle, marginTop: 10 } }, '随机发帖话题灵感池（逗号分隔）：', h(SideBadge, { side: 'post' })),
-            h('input', { style: inputStyle, value: (config?.postSettings?.topics || []).join(', '), onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), topics: e.target.value.split(/[,，\s]+/).filter(Boolean) } })) })))
-        : null,
+            h('input', { style: inputStyle, value: (config?.postSettings?.topics || []).join(', '), onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), topics: e.target.value.split(/[,，\\s]+/).filter(Boolean) } })) })),
+
+          // 历史已发送记录
+          state?.postHistory && state.postHistory.length > 0 ? h('section', { style: cardStyle },
+            h('h2', { style: { margin: '0 0 10px', fontSize: 15 } }, `📜 最近已发送推文记录 (${state.postHistory.length} 条)`),
+            h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+              ...state.postHistory.slice().reverse().slice(0, 10).map((hItem, idx) => h('div', {
+                key: idx,
+                style: { padding: '8px 12px', background: C.layerTwo, borderRadius: 6, border: `1px solid ${C.border}`, fontSize: 12 }
+              },
+                h('div', { style: { color: C.faint, marginBottom: 2, display: 'flex', gap: 10 } },
+                  h('span', null, `🕒 ${hItem.time || '刚刚'}`),
+                  hItem.source ? h('span', { style: { color: '#38bdf8' } }, `[${hItem.source}]`) : null
+                ),
+                h('div', { style: { color: C.text, lineHeight: 1.4 } }, hItem.text)
+              ))
+            )
+          ) : null
+        ) : null,
 
         // TAB 6: 🧭 主页巡航与定向互动独立配置
         activeTab === 'profile' ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 14 } },

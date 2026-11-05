@@ -7,6 +7,7 @@ const execFileAsync = promisify(execFile);
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { createConnection } from 'node:net';
+import http from 'node:http';
 
 export const CONFIG_NAMESPACE = 'x-bot-ops-console';
 export const PACKAGE_ID = 'dsh-x-bot-ops-console';
@@ -26,6 +27,8 @@ export const DEFAULT_TARGETS = Object.freeze({
 });
 export const CONFIG_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/config.json');
 export const TARGETS_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/console-targets.json');
+export const POST_QUEUE_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/post_queue.json');
+export const POST_HISTORY_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/post_history.json');
 
 const TARGET_FIELDS = ['dir', 'worker', 'watchdog', 'watchdogPid', 'stop', 'pid', 'log', 'heartbeat', 'rate'];
 
@@ -61,6 +64,7 @@ export const FIELD_SIDE = Object.freeze({
   'replySettings.customPrompt': 'reply',
   'postSettings.enabled': 'post',
   'postSettings.intervalMinutes': 'post',
+  'postSettings.intervalSeconds': 'post',
   'postSettings.topics': 'post',
   'postSettings.model': 'post',
   'postSettings.customPrompt': 'post',
@@ -152,6 +156,94 @@ export async function executePluginUpdate({ repoSpec = 'github:AI-Scarlett/x-bot
   };
 }
 
+export function readPostQueue(queuePath = POST_QUEUE_PATH) {
+  try {
+    if (existsSync(queuePath)) {
+      const data = JSON.parse(readFileSync(queuePath, 'utf8'));
+      if (isRecord(data) && Array.isArray(data.queue)) {
+        return {
+          queue: data.queue,
+          history: Array.isArray(data.history) ? data.history : [],
+        };
+      }
+    }
+  } catch {}
+  return { queue: [], history: [] };
+}
+
+export function writePostQueue(data, queuePath = POST_QUEUE_PATH) {
+  const dir = dirname(queuePath);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  const payload = {
+    queue: Array.isArray(data.queue) ? data.queue.slice(0, 50) : [],
+    history: Array.isArray(data.history) ? data.history.slice(0, 100) : [],
+    updatedAt: new Date().toISOString(),
+  };
+  const tempPath = `${queuePath}.tmp.${Date.now()}`;
+  writeFileSync(tempPath, JSON.stringify(payload, null, 2), { mode: 0o600 });
+  renameSync(tempPath, queuePath);
+  return payload;
+}
+
+export async function generateTweetViaLmh(prompt, { model = 'gpt-6-luna', port = 3040 } = {}) {
+  const configPath = join(APP_HOME, 'Library/Application Support/LocalModelHub/data/config.json');
+  let apiKey = 'local-key';
+  let targetPort = port;
+  try {
+    if (existsSync(configPath)) {
+      const cfg = JSON.parse(readFileSync(configPath, 'utf8'));
+      if (cfg.port) targetPort = cfg.port;
+      const key = cfg.clientKeys?.['business-default'] || cfg.clientKeys?.local;
+      if (key) apiKey = key;
+    }
+  } catch {}
+
+  const postData = JSON.stringify({
+    model: model || 'gpt-6-luna',
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.75,
+  });
+
+  return new Promise((resolve, reject) => {
+    const { request } = http;
+    const req = request({
+      hostname: '127.0.0.1',
+      port: targetPort,
+      path: '/v1/chat/completions',
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(postData),
+        'authorization': `Bearer ${apiKey}`,
+      },
+      timeout: 30000,
+    }, res => {
+      let data = '';
+      res.on('data', chunk => { data += chunk; });
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data);
+          const reply = parsed?.choices?.[0]?.message?.content?.trim();
+          if (reply) {
+            resolve(reply.replace(/^["'“”‘’]+|["'“”‘’]+$/g, ''));
+          } else {
+            reject(new Error(parsed?.error?.message || '大模型未返回推文正文'));
+          }
+        } catch (e) {
+          reject(new Error(`解析大模型响应失败: ${e.message}`));
+        }
+      });
+    });
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error('调用本地大模型超时 (30s)'));
+    });
+    req.on('error', err => reject(err));
+    req.write(postData);
+    req.end();
+  });
+}
+
 export function readDshModels() {
   const models = new Set();
   const paths = [
@@ -209,6 +301,7 @@ const DEFAULT_CONFIG = Object.freeze({
   postSettings: {
     enabled: true,
     intervalMinutes: 180,
+    intervalSeconds: 180,
     topics: ['文言雅趣', '周朝掌故', '易经随笔', '日常感悟'],
     model: '',
     customPrompt: '你在推特(X)上用周天子姬霸的人设发一条原创推文。文风为幽默、古奥的文言文或诗词歌赋，自称周天子、姬霸或夫子，不要露骨，禁止提现代网络低俗梗，字数在30到90字之间。',
@@ -387,7 +480,12 @@ function validateConfig(input) {
     if (!isRecord(copy.replySettings) || (copy.replySettings.model !== undefined && typeof copy.replySettings.model !== 'string') || (copy.replySettings.customPrompt !== undefined && typeof copy.replySettings.customPrompt !== 'string')) throw new TypeError('回复个性化设置无效');
   }
   if (copy.postSettings !== undefined) {
-    if (!isRecord(copy.postSettings) || typeof copy.postSettings.enabled !== 'boolean' || !Number.isInteger(copy.postSettings.intervalMinutes) || copy.postSettings.intervalMinutes < 10 || copy.postSettings.intervalMinutes > 1440 || (copy.postSettings.customPrompt !== undefined && typeof copy.postSettings.customPrompt !== 'string') || (copy.postSettings.model !== undefined && typeof copy.postSettings.model !== 'string') || (copy.postSettings.topics !== undefined && !Array.isArray(copy.postSettings.topics))) throw new TypeError('发帖设置无效');
+    if (!isRecord(copy.postSettings) || typeof copy.postSettings.enabled !== 'boolean') throw new TypeError('发帖设置无效');
+    if (copy.postSettings.intervalMinutes !== undefined && (!Number.isInteger(copy.postSettings.intervalMinutes) || copy.postSettings.intervalMinutes < 1 || copy.postSettings.intervalMinutes > 1440)) throw new TypeError('发帖分钟间隔设置无效');
+    if (copy.postSettings.intervalSeconds !== undefined && (!Number.isInteger(copy.postSettings.intervalSeconds) || copy.postSettings.intervalSeconds < 30 || copy.postSettings.intervalSeconds > 86400)) throw new TypeError('发帖秒级间隔设置无效');
+    if (copy.postSettings.customPrompt !== undefined && typeof copy.postSettings.customPrompt !== 'string') throw new TypeError('发帖提示词无效');
+    if (copy.postSettings.model !== undefined && typeof copy.postSettings.model !== 'string') throw new TypeError('发帖模型设置无效');
+    if (copy.postSettings.topics !== undefined && !Array.isArray(copy.postSettings.topics)) throw new TypeError('发帖灵感池设置无效');
   }
   if (copy.cruiseSettings !== undefined) {
     if (!isRecord(copy.cruiseSettings) || typeof copy.cruiseSettings.enabled !== 'boolean' || !Number.isInteger(copy.cruiseSettings.dailyTargetCount) || copy.cruiseSettings.dailyTargetCount < 1 || copy.cruiseSettings.dailyTargetCount > 500 || (copy.cruiseSettings.model !== undefined && typeof copy.cruiseSettings.model !== 'string') || (copy.cruiseSettings.customPrompt !== undefined && typeof copy.cruiseSettings.customPrompt !== 'string')) throw new TypeError('巡航设置无效');
@@ -482,10 +580,20 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
     const shared = readSharedConfig();
     const configHash = hashCurrentConfig();
     const dshModels = readDshModels();
+    const postQueue = readPostQueue();
+    let postHistory = [];
+    try {
+      if (existsSync(POST_HISTORY_PATH)) {
+        const hist = JSON.parse(readFileSync(POST_HISTORY_PATH, 'utf8'));
+        if (hist && Array.isArray(hist.posts)) postHistory = hist.posts;
+      }
+    } catch {}
     return {
       ok: true, config: shared.config, configSource: shared.source, configPath: activeConfigPath, configHash,
       runtimeConfigApplied: shared.source === 'shared', runtimeCapabilities, fieldSide: FIELD_SIDE,
       dshModels,
+      postQueue: postQueue.queue,
+      postHistory: postHistory.slice(-20),
       workerAcceptance: workerAcceptance(shared.config), items, platform, checkedAt: new Date(clock()).toISOString(),
     };
   };
@@ -507,6 +615,97 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         ok: true,
         action: 'update-plugin',
         ...updateResult,
+      };
+    }
+    if (request.action === 'enqueue-post') {
+      const text = String(request.text || '').trim();
+      if (!text) throw new TypeError('推文内容不能为空');
+      if (text.length > 500) throw new TypeError('推文长度不能超过 500 字');
+      const urgent = request.urgent === true;
+      const current = readPostQueue();
+      const newItem = {
+        id: `post_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        text,
+        source: request.source || 'manual',
+        urgent,
+        createdAt: new Date().toISOString(),
+      };
+      if (urgent) {
+        current.queue.unshift(newItem);
+      } else {
+        current.queue.push(newItem);
+      }
+      writePostQueue(current);
+      return {
+        ok: true,
+        action: 'enqueue-post',
+        item: newItem,
+        queue: current.queue,
+        note: urgent ? '已成功将推文设置为【立即插队发送】！发帖 Worker 会在当前周期优先发出。' : '推文已加入待发队列！',
+      };
+    }
+    if (request.action === 'remove-queued-post') {
+      const id = String(request.id || '');
+      if (!id) throw new TypeError('缺少待删除推文 ID');
+      const current = readPostQueue();
+      current.queue = current.queue.filter(item => item.id !== id);
+      writePostQueue(current);
+      return {
+        ok: true,
+        action: 'remove-queued-post',
+        queue: current.queue,
+        note: '已从待发队列中移除。',
+      };
+    }
+    if (request.action === 'clear-post-queue') {
+      const current = readPostQueue();
+      current.queue = [];
+      writePostQueue(current);
+      return {
+        ok: true,
+        action: 'clear-post-queue',
+        queue: [],
+        note: '待发队列已清空。',
+      };
+    }
+    if (request.action === 'generate-draft-posts') {
+      const count = Math.max(1, Math.min(5, Number(request.count) || 3));
+      const sharedCfg = getConfig();
+      const postCfg = sharedCfg.postSettings || {};
+      const customPrompt = postCfg.customPrompt;
+      const topics = postCfg.topics && postCfg.topics.length ? postCfg.topics : ['文言雅趣', '日常随笔', '周朝掌故'];
+      const model = postCfg.model || sharedCfg.model?.name || 'gpt-6-luna';
+      const port = sharedCfg.model?.endpointPort || 3040;
+      const generated = [];
+      for (let i = 0; i < count; i++) {
+        const topic = topics[Math.floor(Math.random() * topics.length)];
+        const prompt = (customPrompt || `你在推特(X)上用周天子姬霸的人设发一条原创推文。文风为幽默、古奥的文言文或诗词歌赋，自称周天子、姬霸或夫子，不要露骨，禁止提现代网络低俗梗，字数在30到90字之间。`) + `\n（当前话题灵感参考：${topic}）`;
+        try {
+          const draftText = await generateTweetViaLmh(prompt, { model, port });
+          if (draftText) {
+            generated.push({
+              id: `post_ai_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 6)}`,
+              text: draftText,
+              topic,
+              source: 'ai_draft',
+              urgent: false,
+              createdAt: new Date().toISOString(),
+            });
+          }
+        } catch (err) {
+          console.error('Draft generation error:', err.message);
+        }
+      }
+      if (generated.length === 0) throw new Error('未能成功生成推文草稿，请检查 LocalModelHub 服务状态');
+      const current = readPostQueue();
+      current.queue.push(...generated);
+      writePostQueue(current);
+      return {
+        ok: true,
+        action: 'generate-draft-posts',
+        generated,
+        queue: current.queue,
+        note: `已成功由大模型生成并追加 ${generated.length} 条推文草稿入队！`,
       };
     }
     if (!['pause', 'resume', 'start', 'stop', 'restart'].includes(request.action)) throw new TypeError('未知操作类型');
