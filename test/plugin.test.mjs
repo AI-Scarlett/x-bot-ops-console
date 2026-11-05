@@ -696,6 +696,62 @@ test('readCruiseSweep reports pending progress or an empty state', async () => {
   } finally { f.cleanup(); }
 });
 
+test('reply anti-miss settings validate and stay worker-owned', async () => {
+  const config = clone(DEFAULT_CONFIG);
+  config.timing.replyMinSeconds = 12;
+  config.timing.replyMaxSeconds = 30;
+  config.timing.mentionWindowHours = 36;
+  config.rules.mentionPauseDuringQuiet = false;
+  config.rules.mentionPauseDuringFullStop = false;
+  const ok = validateConfig(config);
+  assert.equal(ok.timing.replyMinSeconds, 12);
+  assert.equal(ok.timing.replyMaxSeconds, 30);
+  assert.equal(ok.timing.mentionWindowHours, 36);
+  assert.equal(ok.rules.mentionPauseDuringQuiet, false);
+
+  // 0 means "inherit the shared publish gap".
+  const inherit = clone(DEFAULT_CONFIG);
+  assert.equal(inherit.timing.replyMinSeconds, 0);
+  assert.equal(validateConfig(inherit).timing.replyMinSeconds, 0);
+
+  const inverted = clone(DEFAULT_CONFIG);
+  inverted.timing.replyMinSeconds = 60;
+  inverted.timing.replyMaxSeconds = 20;
+  assert.throws(() => validateConfig(inverted), /回复最长间隔/);
+
+  const tooWide = clone(DEFAULT_CONFIG);
+  tooWide.timing.mentionWindowHours = 96;
+  assert.throws(() => validateConfig(tooWide), /mentionWindowHours/);
+
+  const { FIELD_SIDE } = await import('../index.js');
+  assert.equal(FIELD_SIDE['timing.replyMinSeconds'], 'reply');
+  assert.equal(FIELD_SIDE['rules.mentionPauseDuringQuiet'], 'reply');
+  assert.equal(FIELD_SIDE['rules.mentionPauseDuringFullStop'], 'reply');
+});
+
+test('reply diagnostics decode backlog age with BigInt snowflakes', async () => {
+  const { readReplyDiagnostics } = await import('../index.js');
+  const f = fixture();
+  try {
+    const nowS = Math.floor(Date.now() / 1000);
+    const makeId = hoursAgo => String((BigInt(Math.floor((nowS - hoursAgo * 3600) * 1000)) - 1288834974657n) << 22n);
+    writeFileSync(join(f.dir, 'mention_backlog.json'), JSON.stringify({
+      items: [{ id: makeId(2) }, { id: makeId(5) }],
+      seen: [],
+    }));
+    writeFileSync(join(f.dir, 'skip_cache.json'), JSON.stringify({
+      'a:1': { reason: 'too_many_rounds' },
+      'a:2': { reason: 'too_many_rounds' },
+      'a:3': { reason: 'already_replied' },
+    }));
+    const diag = readReplyDiagnostics(f.dir);
+    assert.equal(diag.backlog, 2);
+    assert.ok(diag.oldestHours >= 4.5 && diag.oldestHours <= 6, `unexpected age ${diag.oldestHours}`);
+    assert.equal(diag.skipTotal, 3);
+    assert.deepEqual(diag.skipReasons[0], { reason: 'too_many_rounds', count: 2 });
+  } finally { f.cleanup(); }
+});
+
 test('learning prompt block carries topics but never overrides the writing style', async () => {
   const { buildLearningPromptBlock, DEFAULT_CONFIG: defaults } = await import('../index.js');
   assert.equal(buildLearningPromptBlock({ styleGuide: '', winningTopics: [], bannedTopics: [], patterns: [] }), '');

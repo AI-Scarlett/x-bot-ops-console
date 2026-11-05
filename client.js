@@ -404,7 +404,7 @@ window.__ModuleLoader__.load({
               t('title')),
             h('p', { style: { margin: '4px 0 0', fontSize: 13, color: C.muted } }, t('subtitle'))),
           h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.4.1'),
+            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.5.0'),
             h('button', {
               type: 'button',
               disabled: busy || updating,
@@ -676,6 +676,66 @@ window.__ModuleLoader__.load({
         // TAB 4: ↩️ 提及回复独立配置
         activeTab === 'reply' ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
           statusCard('reply', '↩️ ' + t('reply') + '（任务状态与控制）'),
+
+          // 漏回复诊断 + 防漏配置
+          h('section', { style: cardStyle },
+            h('h2', { style: { margin: 0, fontSize: 15 } }, '🩺 漏回复诊断与防漏配置'),
+            (() => {
+              const diag = state?.replyDiagnostics;
+              const win = config?.timing?.mentionWindowHours ?? 12;
+              if (!diag) return h('div', { style: { fontSize: 12, color: C.faint, marginTop: 8 } }, '暂无诊断数据。');
+              const nearWindow = diag.oldestHours !== null && diag.oldestHours >= win * 0.75;
+              const reasonText = {
+                author_cooldown: '同一作者冷却未到',
+                too_many_rounds: '单串对话轮次已达上限',
+                thin_reply: '回复太短/太空被拦下',
+                food: '被判定为闲聊话题',
+                no_contextual_comment: '找不到可回应的点',
+                already_replied: '已经回复过',
+                stop_requested: '对方表示不想继续',
+                grok: 'Grok 相关已跳过',
+                configured_skip_handle: '在免回复名单',
+                insufficient_text_media: '纯图片/无文字',
+              };
+              return h('div', null,
+                h('div', { style: { display: 'flex', gap: 18, flexWrap: 'wrap', marginTop: 8, fontSize: 13 } },
+                  h('div', null, h('span', { style: { color: C.muted } }, '当前积压：'),
+                    h('strong', { style: { color: diag.backlog > 30 ? C.error : C.success } }, `${diag.backlog} 条`)),
+                  h('div', null, h('span', { style: { color: C.muted } }, '最老一条约：'),
+                    h('strong', { style: { color: nearWindow ? C.error : C.text } },
+                      diag.oldestHours === null ? '—' : `${diag.oldestHours} 小时前`)),
+                  h('div', null, h('span', { style: { color: C.muted } }, '回复窗口：'),
+                    h('strong', { style: { color: C.text } }, `${win} 小时`))),
+                nearWindow ? h('div', { style: { marginTop: 8, padding: '8px 10px', borderRadius: 8, background: C.raised, borderLeft: `3px solid ${C.error}`, fontSize: 12, color: C.text, lineHeight: 1.6 } },
+                  `⚠️ 队列中最老的提及已接近 ${win} 小时窗口上限，超出后会被永久丢弃。建议调大「回复窗口」或加快回复节奏。`) : null,
+                diag.skipReasons.length ? h('div', { style: { marginTop: 10 } },
+                  h('div', { style: { fontSize: 12, color: C.muted, marginBottom: 6 } }, `历史跳过原因（累计 ${diag.skipTotal} 条）：`),
+                  h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
+                    ...diag.skipReasons.map(r => h('span', {
+                      key: r.reason,
+                      style: { fontSize: 11, padding: '3px 8px', borderRadius: 999, background: C.layerTwo, border: `1px solid ${C.border}`, color: C.text }
+                    }, `${reasonText[r.reason] || r.reason} · ${r.count}`)))) : null);
+            })(),
+            h('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 14 } },
+              h('label', { style: { ...labelStyle, flex: '1 1 150px' } },
+                '回复窗口（小时）：', h(SideBadge, { side: 'reply' }),
+                h('input', { type: 'number', min: 1, max: 72, style: inputStyle, value: config?.timing?.mentionWindowHours ?? 12, onChange: e => setTiming('mentionWindowHours', e.target.value === '' ? '' : Number(e.target.value)) })),
+              h('label', { style: { ...labelStyle, flex: '1 1 150px' } },
+                '回复最短间隔（秒，0=跟随发布间隔）：', h(SideBadge, { side: 'reply' }),
+                h('input', { type: 'number', min: 0, max: 3600, style: inputStyle, value: config?.timing?.replyMinSeconds ?? 0, onChange: e => setTiming('replyMinSeconds', e.target.value === '' ? '' : Number(e.target.value)) })),
+              h('label', { style: { ...labelStyle, flex: '1 1 150px' } },
+                '回复最长间隔（秒，0=跟随发布间隔）：', h(SideBadge, { side: 'reply' }),
+                h('input', { type: 'number', min: 0, max: 3600, style: inputStyle, value: config?.timing?.replyMaxSeconds ?? 0, onChange: e => setTiming('replyMaxSeconds', e.target.value === '' ? '' : Number(e.target.value)) }))),
+            h('div', { style: { display: 'flex', gap: 18, flexWrap: 'wrap', marginTop: 12 } },
+              h('label', { style: { display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 } },
+                h('input', { type: 'checkbox', checked: config?.rules?.mentionPauseDuringQuiet !== false, onChange: e => updateConfig(c => ({ ...c, rules: { ...(c.rules || {}), mentionPauseDuringQuiet: e.target.checked } })) }),
+                '静默时段（00:00-07:00）暂停回复普通用户', h(SideBadge, { side: 'reply' })),
+              h('label', { style: { display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 } },
+                h('input', { type: 'checkbox', checked: config?.rules?.mentionPauseDuringFullStop !== false, onChange: e => updateConfig(c => ({ ...c, rules: { ...(c.rules || {}), mentionPauseDuringFullStop: e.target.checked } })) }),
+                '全停时段（01:00-06:00）完全停止回复', h(SideBadge, { side: 'reply' }))),
+            h('p', { style: { margin: '8px 0 0', fontSize: 12, color: C.faint, lineHeight: 1.6 } },
+              '关掉这两项后，夜间也会继续消化提及，是减少漏回复最有效的一招；若担心账号活跃痕迹不自然，可只关掉「静默时段」保留全停。')),
+
           h('section', { style: cardStyle },
             h('h2', { style: { margin: 0, fontSize: 15 } }, '🤖 提及回复模型选择与全局提示词'),
             h(ModelPicker, {

@@ -45,6 +45,8 @@ export const FIELD_SIDE = Object.freeze({
   'timing.authorCooldownSeconds': 'comment',
   'timing.publishMinSeconds': 'both',
   'timing.publishMaxSeconds': 'both',
+  'timing.replyMinSeconds': 'reply',
+  'timing.replyMaxSeconds': 'reply',
   'timing.quietHoursStart': 'both',
   'timing.quietHoursEnd': 'both',
   'timing.fullStopStart': 'both',
@@ -62,6 +64,8 @@ export const FIELD_SIDE = Object.freeze({
   'specialPersons.skipReplyHandles': 'reply',
   'specialReplies': 'none',
   'rules.skipFinanceComments': 'comment',
+  'rules.mentionPauseDuringQuiet': 'reply',
+  'rules.mentionPauseDuringFullStop': 'reply',
   'commentSettings.model': 'comment',
   'commentSettings.customPrompt': 'comment',
   'replySettings.model': 'reply',
@@ -225,6 +229,54 @@ function withQueueLock(fn, queuePath = POST_QUEUE_PATH) {
 
 // Progress of the "walk the whole priority list" pass, read from the cruise
 // worker's own history file so the UI can show what is left.
+// Why mentions go unanswered: the queue depth and the recorded drop reasons.
+// Read from the reply worker's own state directory so the UI can explain it.
+export function readReplyDiagnostics(stateDir) {
+  const empty = { backlog: 0, oldestHours: null, skipReasons: [], skipTotal: 0 };
+  if (!stateDir) return empty;
+  const backlogPath = join(stateDir, 'mention_backlog.json');
+  const skipPath = join(stateDir, 'skip_cache.json');
+  const out = { ...empty };
+  try {
+    if (existsSync(backlogPath)) {
+      const data = JSON.parse(readFileSync(backlogPath, 'utf8'));
+      const items = Array.isArray(data?.items) ? data.items : [];
+      out.backlog = items.length;
+      const now = Date.now();
+      const ages = items
+        .map(item => {
+          try {
+            const raw = String(item.id || '');
+            // X status ids are 18-19 digit snowflakes; anything else is not a real post.
+            if (!/^\d{15,20}$/.test(raw)) return null;
+            // BigInt is required: a 19-digit snowflake overflows JS's 32-bit >>.
+            const created = (Number(BigInt(raw) >> 22n) + 1288834974657) / 1000;
+            const age = (now / 1000 - created) / 3600;
+            return age >= 0 && age < 240 ? age : null;
+          } catch { return null; }
+        })
+        .filter(age => Number.isFinite(age));
+      if (ages.length) out.oldestHours = Math.round(Math.max(...ages) * 10) / 10;
+    }
+  } catch { /* keep defaults */ }
+  try {
+    if (existsSync(skipPath)) {
+      const data = JSON.parse(readFileSync(skipPath, 'utf8'));
+      const counts = new Map();
+      for (const value of Object.values(data || {})) {
+        const reason = isRecord(value) && typeof value.reason === 'string' ? value.reason : 'other';
+        counts.set(reason, (counts.get(reason) || 0) + 1);
+      }
+      out.skipTotal = [...counts.values()].reduce((sum, n) => sum + n, 0);
+      out.skipReasons = [...counts.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 8)
+        .map(([reason, count]) => ({ reason, count }));
+    }
+  } catch { /* keep defaults */ }
+  return out;
+}
+
 export function readCruiseSweep(historyPath = CRUISE_HISTORY_PATH) {
   try {
     if (!existsSync(historyPath)) return { pending: 0, total: 0, done: 0, lastFinishedAt: null, startedAt: null };
@@ -525,7 +577,7 @@ const DEFAULT_CONFIG = Object.freeze({
     model: '',
     customPrompt: '',
   },
-  timing: { commentWindowHours: 6, mentionWindowHours: 12, quietHoursStart: 0, quietHoursEnd: 7, fullStopStart: 1, fullStopEnd: 6, publishMinSeconds: 30, publishMaxSeconds: 100, authorCooldownSeconds: 1800, postingWorkMinutes: 20, postingRestMinutes: 5, rateLimitMinutes: 5, rateLimitLongMinutes: 15 },
+  timing: { commentWindowHours: 6, mentionWindowHours: 12, quietHoursStart: 0, quietHoursEnd: 7, fullStopStart: 1, fullStopEnd: 6, publishMinSeconds: 30, publishMaxSeconds: 100, replyMinSeconds: 0, replyMaxSeconds: 0, authorCooldownSeconds: 1800, postingWorkMinutes: 20, postingRestMinutes: 5, rateLimitMinutes: 5, rateLimitLongMinutes: 15 },
   tiers: [
     { id: 'apex', label: '最高优先级', handles: ['4ggug'], rounds: 30, replyStyle: '' },
     { id: 'tier1', label: '优先级 1', handles: ['bottlecap8699', 'nguynbanph', 'mrchen1998', 'maiga23698'], rounds: 20, replyStyle: '' },
@@ -540,7 +592,7 @@ const DEFAULT_CONFIG = Object.freeze({
     skipReplyHandles: ['grok'],
   },
   specialReplies: { asksAi: '若被问及是否为 AI，请如实回答。', asksToStop: '若对方要求停止，请勿继续回复该讨论串。', care: '礼貌回应并围绕话题。', affection: '尊重回应，不诱导私下联系。', namedAddress: '以中性方式回应称呼。', daddy: '拒绝不合适的亲属角色扮演。', imperialTitle: '不宣称现实中的权力或身份。', vernacular: '仅在明确请求时翻译。' },
-  rules: { skipFinanceComments: true, skipGrokMentions: false, doNotReplyAfterStopRequest: true, keepSensitiveKeyOutOfUi: true },
+  rules: { skipFinanceComments: true, skipGrokMentions: false, doNotReplyAfterStopRequest: true, keepSensitiveKeyOutOfUi: true, mentionPauseDuringQuiet: true, mentionPauseDuringFullStop: true },
   postSettings: {
     enabled: true,
     intervalMinutes: 180,
@@ -582,8 +634,8 @@ const DEFAULT_CONFIG = Object.freeze({
 });
 
 const TIMING_BOUNDS = Object.freeze({
-  commentWindowHours: [1, 48], mentionWindowHours: [1, 48], quietHoursStart: [0, 23], quietHoursEnd: [0, 24],
-  fullStopStart: [0, 23], fullStopEnd: [0, 24], publishMinSeconds: [5, 3600], publishMaxSeconds: [5, 3600],
+  commentWindowHours: [1, 48], mentionWindowHours: [1, 72], quietHoursStart: [0, 23], quietHoursEnd: [0, 24],
+  fullStopStart: [0, 23], fullStopEnd: [0, 24], publishMinSeconds: [5, 3600], publishMaxSeconds: [5, 3600], replyMinSeconds: [0, 3600], replyMaxSeconds: [0, 3600],
   authorCooldownSeconds: [60, 604800], postingWorkMinutes: [1, 120], postingRestMinutes: [0, 60],
   rateLimitMinutes: [1, 60], rateLimitLongMinutes: [1, 120],
 });
@@ -686,7 +738,7 @@ export function workerAcceptance(config) {
   if (!isRecord(timing)) { add('comment', 'timing 必须是对象'); add('reply', 'timing 必须是对象'); }
   else {
     const commentKeys = ['rateLimitMinutes', 'rateLimitLongMinutes', 'postingWorkMinutes', 'postingRestMinutes', 'commentWindowHours', 'publishMinSeconds', 'publishMaxSeconds', 'authorCooldownSeconds', 'quietHoursStart', 'quietHoursEnd', 'fullStopStart', 'fullStopEnd'];
-    const replyKeys = ['rateLimitMinutes', 'rateLimitLongMinutes', 'postingWorkMinutes', 'postingRestMinutes', 'mentionWindowHours', 'publishMinSeconds', 'publishMaxSeconds', 'quietHoursStart', 'quietHoursEnd', 'fullStopStart', 'fullStopEnd'];
+    const replyKeys = ['rateLimitMinutes', 'rateLimitLongMinutes', 'postingWorkMinutes', 'postingRestMinutes', 'mentionWindowHours', 'publishMinSeconds', 'publishMaxSeconds', 'replyMinSeconds', 'replyMaxSeconds', 'quietHoursStart', 'quietHoursEnd', 'fullStopStart', 'fullStopEnd'];
     for (const [side, keys] of [['comment', commentKeys], ['reply', replyKeys]]) {
       for (const key of keys) if (typeof timing[key] !== 'number' || !Number.isInteger(timing[key])) add(side, `timing.${key} 必须是整数`);
     }
@@ -824,6 +876,7 @@ function validateConfig(input) {
   }
   for (const [key, [min, max]] of Object.entries(TIMING_BOUNDS)) if (!Number.isInteger(copy.timing[key]) || copy.timing[key] < min || copy.timing[key] > max) throw new TypeError(`时段字段 ${key} 的设置无效`);
   if (copy.timing.publishMaxSeconds < copy.timing.publishMinSeconds) throw new TypeError('最长发布间隔必须大于或等于最短发布间隔');
+  if (copy.timing.replyMaxSeconds > 0 && copy.timing.replyMinSeconds > 0 && copy.timing.replyMaxSeconds < copy.timing.replyMinSeconds) throw new TypeError('回复最长间隔必须大于或等于回复最短间隔');
   for (const [key, value] of Object.entries(copy.specialReplies)) if (typeof key !== 'string' || typeof value !== 'string' || value.length > 2000) throw new TypeError('特殊回复设置无效');
   if (!isRecord(copy.specialPersons.apex) || !isRecord(copy.specialPersons.yijing) || !Array.isArray(copy.specialPersons.skipReplyHandles)) throw new TypeError('关键人物规则结构无效');
   for (const key of ['apex', 'yijing']) {
@@ -905,6 +958,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         controlsEnabled: (!worker.running || worker.owned) && (!watchdog.running || watchdog.owned) && existsSync(t.worker) && existsSync(t.watchdog),
         heartbeatAgeSeconds: heartbeat && Number.isFinite(Number(heartbeat.timestamp)) ? Math.max(0, Math.floor(clock() / 1000 - Number(heartbeat.timestamp))) : null,
         heartbeatStatus: heartbeat && typeof heartbeat.status === 'string' ? heartbeat.status : null,
+        stateDir: dirname(t.heartbeat),
         pausedUntil: rate && Number.isFinite(Number(rate.until)) ? Number(rate.until) : null,
         pauseReason: rate && ['rate_limit', 'manual'].includes(rate.reason) ? rate.reason : (rate ? 'other' : null),
         cdpPort: t.port, cdpAvailable: await portListening(t.port), logTail, watchdogLogTail,
@@ -930,6 +984,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       postHistory: postHistory.slice(-20),
       learnings: readLearnings(activeLearningsPath),
       cruiseSweep: readCruiseSweep(),
+      replyDiagnostics: readReplyDiagnostics(items.reply ? items.reply.stateDir : null),
       learnTriggerPending: existsSync(LEARN_TRIGGER_PATH),
       workerAcceptance: workerAcceptance(shared.config), items, platform, checkedAt: new Date(clock()).toISOString(),
     };
