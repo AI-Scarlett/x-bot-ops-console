@@ -626,6 +626,51 @@ test('learning module has its own model selection independent of the post model'
   assert.match(source, /只分析「最多」多少小时前/);
 });
 
+test('cruise priority sweep interval is bounded and explained in the UI', async () => {
+  const config = clone(DEFAULT_CONFIG);
+  assert.equal(config.cruiseSettings.tierSweepHours, 6);
+  const ok = validateConfig(config);
+  assert.equal(ok.cruiseSettings.tierSweepHours, 6);
+
+  const zero = clone(DEFAULT_CONFIG);
+  zero.cruiseSettings.tierSweepHours = 0;
+  assert.equal(validateConfig(zero).cruiseSettings.tierSweepHours, 0);
+
+  const bad = clone(DEFAULT_CONFIG);
+  bad.cruiseSettings.tierSweepHours = 900;
+  assert.throws(() => validateConfig(bad), /重点名单轮巡间隔/);
+
+  const { FIELD_SIDE } = await import('../index.js');
+  assert.equal(FIELD_SIDE['cruiseSettings.tierSweepHours'], 'profile');
+
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.match(source, /重点名单整轮巡/);
+  assert.match(source, /每隔多少小时轮巡一次全部重点名单/);
+});
+
+test('readCruiseSweep reports pending progress or an empty state', async () => {
+  const { readCruiseSweep } = await import('../index.js');
+  const f = fixture();
+  try {
+    const path = join(f.dir, 'profile_cruise_history.json');
+    assert.deepEqual(
+      { pending: readCruiseSweep(path).pending, total: readCruiseSweep(path).total },
+      { pending: 0, total: 0 },
+    );
+
+    writeFileSync(path, JSON.stringify({
+      sweep: { pending: ['a', 'b'], total: 5, done: 3, startedAt: 1700000000, lastFinishedAt: 0 },
+    }));
+    const running = readCruiseSweep(path);
+    assert.equal(running.pending, 2);
+    assert.equal(running.total, 5);
+    assert.equal(running.done, 3);
+    assert.equal(running.nextHandle, 'a');
+    assert.equal(running.lastFinishedAt, null);
+    assert.ok(running.startedAt);
+  } finally { f.cleanup(); }
+});
+
 test('learning prompt block carries topics but never overrides the writing style', async () => {
   const { buildLearningPromptBlock, DEFAULT_CONFIG: defaults } = await import('../index.js');
   assert.equal(buildLearningPromptBlock({ styleGuide: '', winningTopics: [], bannedTopics: [], patterns: [] }), '');

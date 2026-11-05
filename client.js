@@ -404,7 +404,7 @@ window.__ModuleLoader__.load({
               t('title')),
             h('p', { style: { margin: '4px 0 0', fontSize: 13, color: C.muted } }, t('subtitle'))),
           h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.3.2'),
+            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.4.0'),
             h('button', {
               type: 'button',
               disabled: busy || updating,
@@ -1342,7 +1342,39 @@ window.__ModuleLoader__.load({
               h('label', { style: { display: 'flex', gap: 6, alignItems: 'center', fontSize: 13 } },
                 h('input', { type: 'checkbox', checked: config?.cruiseSettings?.crawlFollowing !== false, onChange: e => updateConfig(c => ({ ...c, cruiseSettings: { ...(c.cruiseSettings || {}), crawlFollowing: e.target.checked } })) }), '巡航关注列表'),
               h('label', { style: { display: 'flex', gap: 6, alignItems: 'center', fontSize: 13 } },
-                h('input', { type: 'checkbox', checked: config?.cruiseSettings?.crawlFollowers !== false, onChange: e => updateConfig(c => ({ ...c, cruiseSettings: { ...(c.cruiseSettings || {}), crawlFollowers: e.target.checked } })) }), '巡航粉丝列表'))))
+                h('input', { type: 'checkbox', checked: config?.cruiseSettings?.crawlFollowers !== false, onChange: e => updateConfig(c => ({ ...c, cruiseSettings: { ...(c.cruiseSettings || {}), crawlFollowers: e.target.checked } })) }), '巡航粉丝列表'))),
+
+          // 重点名单整轮巡
+          h('section', { style: cardStyle },
+            h('h2', { style: { margin: 0, fontSize: 15 } }, '🔁 重点名单整轮巡（按小时把全部名单走一遍）'),
+            h('p', { style: { margin: '6px 0 10px', fontSize: 12, color: C.faint, lineHeight: 1.6 } },
+              '到达设定间隔后，巡航 Worker 会按「Apex → Tier 1 → … → 其他」的顺序，把「👥 重点名单」里的所有用户名逐个拜访一遍；中途不会因为随机爬取而丢掉进度，走完才重新计时。设 0 表示关闭，仅保留随机巡航。'),
+            h('label', { style: { ...labelStyle, marginTop: 4 } }, '每隔多少小时轮巡一次全部重点名单（0=关闭）：', h(SideBadge, { side: 'profile' })),
+            h('input', {
+              type: 'number', min: 0, max: 720, style: inputStyle,
+              value: config?.cruiseSettings?.tierSweepHours ?? 6,
+              onChange: e => {
+                const val = e.target.value === '' ? '' : Number(e.target.value);
+                updateConfig(c => ({ ...c, cruiseSettings: { ...(c.cruiseSettings || {}), tierSweepHours: val } }));
+              }
+            }),
+            (() => {
+              const sweep = state?.cruiseSweep;
+              const every = config?.cruiseSettings?.tierSweepHours ?? 6;
+              if (!sweep) return h('div', { style: { marginTop: 10, fontSize: 12, color: C.faint } }, '暂无轮巡记录。');
+              if (sweep.pending > 0) {
+                return h('div', { style: { marginTop: 10, fontSize: 12, color: C.text, lineHeight: 1.7 } },
+                  h('div', { style: { color: C.accent, fontWeight: '600' } },
+                    `🔄 本轮巡览进行中：已完成 ${sweep.done}/${sweep.total}，剩余 ${sweep.pending}`),
+                  sweep.nextHandle ? h('div', { style: { color: C.faint } }, `下一个：@${sweep.nextHandle}`) : null);
+              }
+              if (every === 0) return h('div', { style: { marginTop: 10, fontSize: 12, color: C.faint } }, '当前已关闭整轮巡，仅按随机策略巡航。');
+              return h('div', { style: { marginTop: 10, fontSize: 12, color: C.muted, lineHeight: 1.7 } },
+                sweep.lastFinishedAt
+                  ? h('div', null, `✅ 上一轮完成于 ${new Date(sweep.lastFinishedAt).toLocaleString()}（共 ${sweep.total} 个名单）`)
+                  : h('div', { style: { color: C.faint } }, '尚未执行过整轮巡，保存后 Worker 下一轮就会开始。'),
+                h('div', { style: { color: C.faint } }, `下次轮巡：约 ${every} 小时后`));
+            })()))
         : null,
 
         // 统一保存按钮栏

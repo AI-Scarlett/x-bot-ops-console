@@ -32,6 +32,7 @@ export const POST_HISTORY_PATH = join(APP_HOME, 'Library/Application Support/XBo
 export const LEARNINGS_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/learnings.json');
 export const POST_METRICS_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/post_metrics.json');
 export const LEARN_TRIGGER_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/learn_now.trigger');
+export const CRUISE_HISTORY_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/profile_cruise_history.json');
 
 const TARGET_FIELDS = ['dir', 'worker', 'watchdog', 'watchdogPid', 'stop', 'pid', 'log', 'heartbeat', 'rate'];
 
@@ -80,6 +81,7 @@ export const FIELD_SIDE = Object.freeze({
   'cruiseSettings.crawlFollowing': 'profile',
   'cruiseSettings.crawlFollowers': 'profile',
   'cruiseSettings.interactionCooldownHours': 'profile',
+  'cruiseSettings.tierSweepHours': 'profile',
   'cruiseSettings.autoVisitInvited': 'profile',
   'cruiseSettings.model': 'profile',
   'cruiseSettings.customPrompt': 'profile',
@@ -218,6 +220,30 @@ function withFileLock(fn, lockPath, label = '共享状态') {
 
 function withQueueLock(fn, queuePath = POST_QUEUE_PATH) {
   return withFileLock(fn, `${queuePath}.lock`, '发帖队列');
+}
+
+// Progress of the "walk the whole priority list" pass, read from the cruise
+// worker's own history file so the UI can show what is left.
+export function readCruiseSweep(historyPath = CRUISE_HISTORY_PATH) {
+  try {
+    if (!existsSync(historyPath)) return { pending: 0, total: 0, done: 0, lastFinishedAt: null, startedAt: null };
+    const data = JSON.parse(readFileSync(historyPath, 'utf8'));
+    const sweep = isRecord(data?.sweep) ? data.sweep : {};
+    const pending = Array.isArray(sweep.pending) ? sweep.pending.length : 0;
+    const toIso = value => (Number.isFinite(Number(value)) && Number(value) > 0)
+      ? new Date(Number(value) * 1000).toISOString()
+      : null;
+    return {
+      pending,
+      total: Number.isFinite(Number(sweep.total)) ? Number(sweep.total) : 0,
+      done: Number.isFinite(Number(sweep.done)) ? Number(sweep.done) : 0,
+      startedAt: toIso(sweep.startedAt),
+      lastFinishedAt: toIso(sweep.lastFinishedAt),
+      nextHandle: pending > 0 ? String(sweep.pending[0] || '') : '',
+    };
+  } catch {
+    return { pending: 0, total: 0, done: 0, lastFinishedAt: null, startedAt: null };
+  }
 }
 
 export function readLearnings(learningsPath = LEARNINGS_PATH) {
@@ -532,6 +558,7 @@ const DEFAULT_CONFIG = Object.freeze({
     crawlFollowing: true,
     crawlFollowers: true,
     interactionCooldownHours: 48,
+    tierSweepHours: 6,
     autoVisitInvited: true,
     model: '',
     customPrompt: '你在推特(X)上用周天子姬霸的人设回复好友主页的最新推文。\n要求：用文言文或微言大义轻幽默回应对方的话题，亲切称呼对方，不要任何问句，不要现代粗俗脏话，字数在12到30字之间。直接输出纯文本。',
@@ -750,6 +777,11 @@ function validateConfig(input) {
       if (!Number.isInteger(cd) || cd < 1 || cd > 720) throw new TypeError('巡航冷却时长需为 1~720 小时之间的整数');
       copy.cruiseSettings.interactionCooldownHours = cd;
     }
+    if (copy.cruiseSettings.tierSweepHours !== undefined) {
+      const sweep = Number(copy.cruiseSettings.tierSweepHours);
+      if (!Number.isInteger(sweep) || sweep < 0 || sweep > 720) throw new TypeError('重点名单轮巡间隔需为 0~720 小时之间的整数（0 表示关闭）');
+      copy.cruiseSettings.tierSweepHours = sweep;
+    }
     if (copy.cruiseSettings.crawlFollowing !== undefined && typeof copy.cruiseSettings.crawlFollowing !== 'boolean') throw new TypeError('巡航关注列表开关无效');
     if (copy.cruiseSettings.crawlFollowers !== undefined && typeof copy.cruiseSettings.crawlFollowers !== 'boolean') throw new TypeError('巡航粉丝列表开关无效');
     if (copy.cruiseSettings.autoVisitInvited !== undefined && typeof copy.cruiseSettings.autoVisitInvited !== 'boolean') throw new TypeError('自动优先消费回踩邀请开关无效');
@@ -890,6 +922,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       postQueue: postQueue.queue,
       postHistory: postHistory.slice(-20),
       learnings: readLearnings(activeLearningsPath),
+      cruiseSweep: readCruiseSweep(),
       learnTriggerPending: existsSync(LEARN_TRIGGER_PATH),
       workerAcceptance: workerAcceptance(shared.config), items, platform, checkedAt: new Date(clock()).toISOString(),
     };
