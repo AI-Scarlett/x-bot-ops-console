@@ -488,7 +488,23 @@ function validateConfig(input) {
     if (copy.postSettings.topics !== undefined && !Array.isArray(copy.postSettings.topics)) throw new TypeError('发帖灵感池设置无效');
   }
   if (copy.cruiseSettings !== undefined) {
-    if (!isRecord(copy.cruiseSettings) || typeof copy.cruiseSettings.enabled !== 'boolean' || !Number.isInteger(copy.cruiseSettings.dailyTargetCount) || copy.cruiseSettings.dailyTargetCount < 1 || copy.cruiseSettings.dailyTargetCount > 500 || (copy.cruiseSettings.model !== undefined && typeof copy.cruiseSettings.model !== 'string') || (copy.cruiseSettings.customPrompt !== undefined && typeof copy.cruiseSettings.customPrompt !== 'string')) throw new TypeError('巡航设置无效');
+    if (!isRecord(copy.cruiseSettings)) throw new TypeError('巡航设置无效');
+    if (copy.cruiseSettings.enabled !== undefined && typeof copy.cruiseSettings.enabled !== 'boolean') throw new TypeError('巡航启用开关无效');
+    if (copy.cruiseSettings.dailyTargetCount !== undefined) {
+      const daily = Number(copy.cruiseSettings.dailyTargetCount);
+      if (!Number.isInteger(daily) || daily < 1 || daily > 500) throw new TypeError('每日巡航上限次数需为 1~500 之间的整数');
+      copy.cruiseSettings.dailyTargetCount = daily;
+    }
+    if (copy.cruiseSettings.interactionCooldownHours !== undefined) {
+      const cd = Number(copy.cruiseSettings.interactionCooldownHours);
+      if (!Number.isInteger(cd) || cd < 1 || cd > 720) throw new TypeError('巡航冷却时长需为 1~720 小时之间的整数');
+      copy.cruiseSettings.interactionCooldownHours = cd;
+    }
+    if (copy.cruiseSettings.crawlFollowing !== undefined && typeof copy.cruiseSettings.crawlFollowing !== 'boolean') throw new TypeError('巡航关注列表开关无效');
+    if (copy.cruiseSettings.crawlFollowers !== undefined && typeof copy.cruiseSettings.crawlFollowers !== 'boolean') throw new TypeError('巡航粉丝列表开关无效');
+    if (copy.cruiseSettings.autoVisitInvited !== undefined && typeof copy.cruiseSettings.autoVisitInvited !== 'boolean') throw new TypeError('自动优先消费回踩邀请开关无效');
+    if (copy.cruiseSettings.model !== undefined && typeof copy.cruiseSettings.model !== 'string') throw new TypeError('巡航模型设置无效');
+    if (copy.cruiseSettings.customPrompt !== undefined && typeof copy.cruiseSettings.customPrompt !== 'string') throw new TypeError('巡航提示词无效');
   }
   for (const [key, [min, max]] of Object.entries(TIMING_BOUNDS)) if (!Number.isInteger(copy.timing[key]) || copy.timing[key] < min || copy.timing[key] > max) throw new TypeError(`时段字段 ${key} 的设置无效`);
   if (copy.timing.publishMaxSeconds < copy.timing.publishMinSeconds) throw new TypeError('最长发布间隔必须大于或等于最短发布间隔');

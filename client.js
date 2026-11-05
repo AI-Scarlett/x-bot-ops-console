@@ -896,9 +896,15 @@ window.__ModuleLoader__.load({
             h('label', { style: { ...labelStyle, marginTop: 10 } }, '主页巡航互动提示词（自定义 Prompt）：', h(SideBadge, { side: 'profile' })),
             h('textarea', { style: { ...inputStyle, minHeight: 90 }, value: config?.cruiseSettings?.customPrompt || '', onChange: e => updateConfig(c => ({ ...c, cruiseSettings: { ...(c.cruiseSettings || {}), customPrompt: e.target.value } })) }),
             h('label', { style: { ...labelStyle, marginTop: 10 } }, '每日巡航互动上限次数：', h(SideBadge, { side: 'profile' })),
-            h('input', { type: 'number', min: 1, max: 200, style: inputStyle, value: config?.cruiseSettings?.dailyTargetCount ?? 50, onChange: e => updateConfig(c => ({ ...c, cruiseSettings: { ...(c.cruiseSettings || {}), dailyTargetCount: Number(e.target.value) } })) }),
+            h('input', { type: 'number', min: 1, max: 200, style: inputStyle, value: config?.cruiseSettings?.dailyTargetCount ?? 50, onChange: e => {
+              const val = e.target.value === '' ? '' : Number(e.target.value);
+              updateConfig(c => ({ ...c, cruiseSettings: { ...(c.cruiseSettings || {}), dailyTargetCount: val } }));
+            } }),
             h('label', { style: { ...labelStyle, marginTop: 10 } }, '同一主页重复互动冷却时长（小时）：', h(SideBadge, { side: 'profile' })),
-            h('input', { type: 'number', min: 1, max: 720, style: inputStyle, value: config?.cruiseSettings?.interactionCooldownHours ?? 48, onChange: e => updateConfig(c => ({ ...c, cruiseSettings: { ...(c.cruiseSettings || {}), interactionCooldownHours: Number(e.target.value) } })) }),
+            h('input', { type: 'number', min: 1, max: 720, style: inputStyle, value: config?.cruiseSettings?.interactionCooldownHours ?? 48, onChange: e => {
+              const val = e.target.value === '' ? '' : Number(e.target.value);
+              updateConfig(c => ({ ...c, cruiseSettings: { ...(c.cruiseSettings || {}), interactionCooldownHours: val } }));
+            } }),
             h('div', { style: { display: 'flex', gap: 16, marginTop: 10 } },
               h('label', { style: { display: 'flex', gap: 6, alignItems: 'center', fontSize: 13 } },
                 h('input', { type: 'checkbox', checked: config?.cruiseSettings?.crawlFollowing !== false, onChange: e => updateConfig(c => ({ ...c, cruiseSettings: { ...(c.cruiseSettings || {}), crawlFollowing: e.target.checked } })) }), '巡航关注列表'),
