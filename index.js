@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, openSync, closeSync, mkdirSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
+import { readFileSync, existsSync, openSync, closeSync, mkdirSync, writeFileSync, renameSync, unlinkSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -65,6 +65,10 @@ export const FIELD_SIDE = Object.freeze({
   'postSettings.enabled': 'post',
   'postSettings.intervalMinutes': 'post',
   'postSettings.intervalSeconds': 'post',
+  'postSettings.queueBatchSize': 'post',
+  'postSettings.queueLowThreshold': 'post',
+  'postSettings.queueAutoRefill': 'post',
+  'postSettings.queueMaxSize': 'post',
   'postSettings.topics': 'post',
   'postSettings.model': 'post',
   'postSettings.customPrompt': 'post',
@@ -171,18 +175,61 @@ export function readPostQueue(queuePath = POST_QUEUE_PATH) {
   return { queue: [], history: [] };
 }
 
-export function writePostQueue(data, queuePath = POST_QUEUE_PATH) {
+// The plugin host and the Python post worker both mutate post_queue.json.
+// A short-lived lock file keeps the read-modify-write cycle atomic across both sides.
+function withQueueLock(fn, queuePath = POST_QUEUE_PATH) {
+  const lockPath = `${queuePath}.lock`;
+  const deadline = Date.now() + 5000;
+  let fd = null;
+  while (fd === null) {
+    try {
+      fd = openSync(lockPath, 'wx');
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      try {
+        const age = Date.now() - statSync(lockPath).mtimeMs;
+        if (age > 10000) { try { unlinkSync(lockPath); } catch { /* ignore stale lock cleanup */ } continue; }
+      } catch { /* lock vanished between checks */ }
+      if (Date.now() > deadline) throw new Error('发帖队列正被其它进程占用，请稍后重试');
+      sleepSync(60);
+    }
+  }
+  try {
+    writeFileSync(fd, String(process.pid));
+    return fn();
+  } finally {
+    try { closeSync(fd); } catch { /* ignore close failure */ }
+    try { unlinkSync(lockPath); } catch { /* ignore lock cleanup */ }
+  }
+}
+
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+export function writePostQueue(data, queuePath = POST_QUEUE_PATH, { maxSize = 100 } = {}) {
   const dir = dirname(queuePath);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const payload = {
-    queue: Array.isArray(data.queue) ? data.queue.slice(0, 50) : [],
-    history: Array.isArray(data.history) ? data.history.slice(0, 100) : [],
+    queue: Array.isArray(data.queue) ? data.queue.slice(0, maxSize) : [],
+    history: Array.isArray(data.history) ? data.history.slice(-100) : [],
     updatedAt: new Date().toISOString(),
   };
-  const tempPath = `${queuePath}.tmp.${Date.now()}`;
+  const tempPath = `${queuePath}.tmp.${process.pid}.${Date.now()}`;
   writeFileSync(tempPath, JSON.stringify(payload, null, 2), { mode: 0o600 });
   renameSync(tempPath, queuePath);
   return payload;
+}
+
+// Read-modify-write helper used by every queue mutation so concurrent
+// plugin actions and worker pops never lose each other's items.
+export function mutatePostQueue(mutator, queuePath = POST_QUEUE_PATH, { maxSize = 100 } = {}) {
+  return withQueueLock(() => {
+    const current = readPostQueue(queuePath);
+    const result = mutator(current);
+    const payload = writePostQueue(current, queuePath, { maxSize });
+    return { result, payload };
+  }, queuePath);
 }
 
 export async function generateTweetViaLmh(prompt, { model = 'gpt-6-luna', port = 3040 } = {}) {
@@ -302,6 +349,10 @@ const DEFAULT_CONFIG = Object.freeze({
     enabled: true,
     intervalMinutes: 180,
     intervalSeconds: 180,
+    queueBatchSize: 10,
+    queueLowThreshold: 3,
+    queueAutoRefill: true,
+    queueMaxSize: 100,
     topics: ['文言雅趣', '周朝掌故', '易经随笔', '日常感悟'],
     model: '',
     customPrompt: '你在推特(X)上用周天子姬霸的人设发一条原创推文。文风为幽默、古奥的文言文或诗词歌赋，自称周天子、姬霸或夫子，不要露骨，禁止提现代网络低俗梗，字数在30到90字之间。',
@@ -486,6 +537,22 @@ function validateConfig(input) {
     if (copy.postSettings.customPrompt !== undefined && typeof copy.postSettings.customPrompt !== 'string') throw new TypeError('发帖提示词无效');
     if (copy.postSettings.model !== undefined && typeof copy.postSettings.model !== 'string') throw new TypeError('发帖模型设置无效');
     if (copy.postSettings.topics !== undefined && !Array.isArray(copy.postSettings.topics)) throw new TypeError('发帖灵感池设置无效');
+    if (copy.postSettings.queueBatchSize !== undefined) {
+      const batch = Number(copy.postSettings.queueBatchSize);
+      if (!Number.isInteger(batch) || batch < 1 || batch > 50) throw new TypeError('每批生成条数需为 1~50 之间的整数');
+      copy.postSettings.queueBatchSize = batch;
+    }
+    if (copy.postSettings.queueLowThreshold !== undefined) {
+      const threshold = Number(copy.postSettings.queueLowThreshold);
+      if (!Number.isInteger(threshold) || threshold < 0 || threshold > 50) throw new TypeError('自动补仓阈值需为 0~50 之间的整数');
+      copy.postSettings.queueLowThreshold = threshold;
+    }
+    if (copy.postSettings.queueMaxSize !== undefined) {
+      const maxSize = Number(copy.postSettings.queueMaxSize);
+      if (!Number.isInteger(maxSize) || maxSize < 1 || maxSize > 200) throw new TypeError('队列容量上限需为 1~200 之间的整数');
+      copy.postSettings.queueMaxSize = maxSize;
+    }
+    if (copy.postSettings.queueAutoRefill !== undefined && typeof copy.postSettings.queueAutoRefill !== 'boolean') throw new TypeError('自动补仓开关无效');
   }
   if (copy.cruiseSettings !== undefined) {
     if (!isRecord(copy.cruiseSettings)) throw new TypeError('巡航设置无效');
@@ -522,8 +589,9 @@ function validateConfig(input) {
   return copy;
 }
 
-export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGETS, configPath = CONFIG_PATH, targetsPath = null, platform = process.platform, spawnProcess = spawn } = {}) {
+export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGETS, configPath = CONFIG_PATH, targetsPath = null, platform = process.platform, spawnProcess = spawn, queuePath = POST_QUEUE_PATH } = {}) {
   let activeConfigPath = configPath;
+  const activeQueuePath = queuePath;
   const currentTargets = () => (targetsPath ? resolveTargets(paths, targetsPath) : paths);
   const readSharedConfig = () => {
     let raw;
@@ -596,7 +664,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
     const shared = readSharedConfig();
     const configHash = hashCurrentConfig();
     const dshModels = readDshModels();
-    const postQueue = readPostQueue();
+    const postQueue = readPostQueue(activeQueuePath);
     let postHistory = [];
     try {
       if (existsSync(POST_HISTORY_PATH)) {
@@ -638,7 +706,8 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       if (!text) throw new TypeError('推文内容不能为空');
       if (text.length > 500) throw new TypeError('推文长度不能超过 500 字');
       const urgent = request.urgent === true;
-      const current = readPostQueue();
+      const sharedCfg = getConfig();
+      const maxSize = Number(sharedCfg.postSettings?.queueMaxSize) || 100;
       const newItem = {
         id: `post_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
         text,
@@ -646,37 +715,42 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         urgent,
         createdAt: new Date().toISOString(),
       };
-      if (urgent) {
-        current.queue.unshift(newItem);
-      } else {
-        current.queue.push(newItem);
-      }
-      writePostQueue(current);
+      const { payload } = mutatePostQueue((current) => {
+        if (urgent) current.queue.unshift(newItem);
+        else current.queue.push(newItem);
+      }, activeQueuePath, { maxSize });
       return {
         ok: true,
         action: 'enqueue-post',
         item: newItem,
-        queue: current.queue,
+        queue: payload.queue,
         note: urgent ? '已成功将推文设置为【立即插队发送】！发帖 Worker 会在当前周期优先发出。' : '推文已加入待发队列！',
       };
     }
     if (request.action === 'remove-queued-post') {
       const id = String(request.id || '');
       if (!id) throw new TypeError('缺少待删除推文 ID');
-      const current = readPostQueue();
-      current.queue = current.queue.filter(item => item.id !== id);
-      writePostQueue(current);
+      const sharedCfg = getConfig();
+      const maxSize = Number(sharedCfg.postSettings?.queueMaxSize) || 100;
+      let removed = 0;
+      const { payload } = mutatePostQueue((current) => {
+        const before = current.queue.length;
+        current.queue = current.queue.filter(item => item.id !== id);
+        removed = before - current.queue.length;
+      }, activeQueuePath, { maxSize });
       return {
         ok: true,
         action: 'remove-queued-post',
-        queue: current.queue,
-        note: '已从待发队列中移除。',
+        queue: payload.queue,
+        note: removed > 0 ? '已从待发队列中移除该条草稿。' : '未找到该条草稿，可能已被 Worker 发出或删除。',
       };
     }
     if (request.action === 'clear-post-queue') {
-      const current = readPostQueue();
-      current.queue = [];
-      writePostQueue(current);
+      const sharedCfg = getConfig();
+      const maxSize = Number(sharedCfg.postSettings?.queueMaxSize) || 100;
+      const { payload } = mutatePostQueue((current) => {
+        current.queue = [];
+      }, activeQueuePath, { maxSize });
       return {
         ok: true,
         action: 'clear-post-queue',
@@ -685,17 +759,23 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       };
     }
     if (request.action === 'generate-draft-posts') {
-      const count = Math.max(1, Math.min(5, Number(request.count) || 3));
       const sharedCfg = getConfig();
       const postCfg = sharedCfg.postSettings || {};
-      const customPrompt = postCfg.customPrompt;
+      const batchSize = Number(postCfg.queueBatchSize) || 10;
+      const requested = Number(request.count);
+      const count = Math.max(1, Math.min(50, Number.isFinite(requested) && requested > 0 ? Math.floor(requested) : batchSize));
+      // A one-off prompt overrides the global style prompt for this batch only.
+      const oneOffPrompt = typeof request.prompt === 'string' && request.prompt.trim() ? request.prompt.trim() : '';
+      const basePrompt = oneOffPrompt || postCfg.customPrompt || '你在推特(X)上用周天子姬霸的人设发一条原创推文。文风为幽默、古奥的文言文或诗词歌赋，自称周天子、姬霸或夫子，不要露骨，禁止提现代网络低俗梗，字数在30到90字之间。';
       const topics = postCfg.topics && postCfg.topics.length ? postCfg.topics : ['文言雅趣', '日常随笔', '周朝掌故'];
       const model = postCfg.model || sharedCfg.model?.name || 'gpt-6-luna';
       const port = sharedCfg.model?.endpointPort || 3040;
+      const maxSize = Number(postCfg.queueMaxSize) || 100;
       const generated = [];
+      const failures = [];
       for (let i = 0; i < count; i++) {
         const topic = topics[Math.floor(Math.random() * topics.length)];
-        const prompt = (customPrompt || `你在推特(X)上用周天子姬霸的人设发一条原创推文。文风为幽默、古奥的文言文或诗词歌赋，自称周天子、姬霸或夫子，不要露骨，禁止提现代网络低俗梗，字数在30到90字之间。`) + `\n（当前话题灵感参考：${topic}）`;
+        const prompt = basePrompt + `\n（当前话题灵感参考：${topic}）`;
         try {
           const draftText = await generateTweetViaLmh(prompt, { model, port });
           if (draftText) {
@@ -703,25 +783,27 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
               id: `post_ai_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 6)}`,
               text: draftText,
               topic,
-              source: 'ai_draft',
+              source: oneOffPrompt ? 'ai_draft_custom' : 'ai_draft',
               urgent: false,
               createdAt: new Date().toISOString(),
             });
           }
         } catch (err) {
+          failures.push(err.message);
           console.error('Draft generation error:', err.message);
         }
       }
-      if (generated.length === 0) throw new Error('未能成功生成推文草稿，请检查 LocalModelHub 服务状态');
-      const current = readPostQueue();
-      current.queue.push(...generated);
-      writePostQueue(current);
+      if (generated.length === 0) throw new Error(`未能成功生成推文草稿，请检查 LocalModelHub 服务状态${failures[0] ? `（${failures[0]}）` : ''}`);
+      const { payload } = mutatePostQueue((current) => {
+        current.queue.push(...generated);
+      }, activeQueuePath, { maxSize });
       return {
         ok: true,
         action: 'generate-draft-posts',
         generated,
-        queue: current.queue,
-        note: `已成功由大模型生成并追加 ${generated.length} 条推文草稿入队！`,
+        queue: payload.queue,
+        failed: failures.length,
+        note: `已成功由大模型生成并追加 ${generated.length} 条推文草稿入队！${failures.length ? `另有 ${failures.length} 条生成失败。` : ''}`,
       };
     }
     if (!['pause', 'resume', 'start', 'stop', 'restart'].includes(request.action)) throw new TypeError('未知操作类型');

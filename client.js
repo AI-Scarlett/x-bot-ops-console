@@ -204,6 +204,9 @@ window.__ModuleLoader__.load({
       const [confirmModal, setConfirmModal] = React.useState(null);
       const [manualPostText, setManualPostText] = React.useState('');
       const [generatingDrafts, setGeneratingDrafts] = React.useState(false);
+      const [showGenPanel, setShowGenPanel] = React.useState(false);
+      const [draftGenCount, setDraftGenCount] = React.useState(10);
+      const [draftGenPrompt, setDraftGenPrompt] = React.useState('');
       const saveLock = React.useRef(false);
       const latestSaveHash = React.useRef(null);
 
@@ -383,7 +386,7 @@ window.__ModuleLoader__.load({
               t('title')),
             h('p', { style: { margin: '4px 0 0', fontSize: 13, color: C.muted } }, t('subtitle'))),
           h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.2.6'),
+            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.2.7'),
             h('button', {
               type: 'button',
               disabled: busy || updating,
@@ -670,22 +673,8 @@ window.__ModuleLoader__.load({
                   type: 'button',
                   disabled: busy || generatingDrafts,
                   style: { ...buttonStyle(false), fontSize: 12, padding: '4px 10px', background: 'rgba(99, 102, 241, 0.15)', borderColor: '#6366f1', color: '#818cf8' },
-                  onClick: async () => {
-                    setGeneratingDrafts(true);
-                    setError('');
-                    setNotice('正在请求大模型生成 3 条原创推文草稿并入队...');
-                    try {
-                      const res = await act('generate-draft-posts', undefined, { count: 3 });
-                      if (res && res.generated) {
-                        setNotice(`🎉 成功生成 ${res.generated.length} 条推文草稿并加入队列！`);
-                      }
-                    } catch (err) {
-                      setError(`生成草稿失败：${err.message || String(err)}`);
-                    } finally {
-                      setGeneratingDrafts(false);
-                    }
-                  }
-                }, generatingDrafts ? '⏳ 正在生成...' : '🤖 AI 批量生成 3 条草稿入队'),
+                  onClick: () => setShowGenPanel(v => !v)
+                }, showGenPanel ? '✕ 收起生成面板' : '🤖 AI 批量生成草稿'),
                 state?.postQueue && state.postQueue.length > 0 ? h('button', {
                   type: 'button',
                   disabled: busy,
@@ -693,7 +682,7 @@ window.__ModuleLoader__.load({
                   onClick: () => {
                     setConfirmModal({
                       title: '清空待发队列',
-                      prompt: '确认清空当前所有未发送的推文吗？',
+                      prompt: `确认清空当前所有未发送的推文吗？\n\n队列中共有 ${state.postQueue.length} 条待发稿件，清空后 Worker 会在下一轮按补仓阈值重新生成。`,
                       confirmText: '确认清空',
                       onConfirm: () => void act('clear-post-queue'),
                     });
@@ -701,6 +690,58 @@ window.__ModuleLoader__.load({
                 }, '🗑️ 清空队列') : null
               )
             ),
+
+            // AI 草稿生成面板：数量 + 一次性独立提示词
+            showGenPanel ? h('div', { style: { background: C.layerTwo, padding: '12px 14px', borderRadius: 10, border: `1px solid ${C.border}`, marginBottom: 14 } },
+              h('label', { style: { fontSize: 13, fontWeight: '600', display: 'block', marginBottom: 6 } }, '🤖 AI 批量生成待发草稿：'),
+              h('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 10 } },
+                h('label', { style: { ...labelStyle, flex: '0 0 160px', margin: 0 } },
+                  '本次生成条数：',
+                  h('input', {
+                    type: 'number', min: 1, max: 50, style: inputStyle,
+                    value: draftGenCount,
+                    onChange: e => setDraftGenCount(e.target.value === '' ? 1 : Math.max(1, Math.min(50, Number(e.target.value)))),
+                  })
+                ),
+                h('div', { style: { flex: '1 1 320px', minWidth: 260 } },
+                  h('div', { style: { fontSize: 12, color: C.faint, marginBottom: 4 } }, '本次使用的提示词（留空则使用下方「自动发帖文案提示词」的全局设置）：'),
+                  h('textarea', {
+                    style: { ...inputStyle, minHeight: 70, resize: 'vertical' },
+                    placeholder: '例如：写一条关于「周朝美食」的幽默文言推文，30~90字...',
+                    value: draftGenPrompt,
+                    onChange: e => setDraftGenPrompt(e.target.value),
+                  })
+                )
+              ),
+              h('div', { style: { display: 'flex', gap: 10, justifyContent: 'flex-end', alignItems: 'center' } },
+                h('span', { style: { fontSize: 12, color: C.faint } }, `将生成 ${Math.max(1, Math.min(50, Number(draftGenCount) || 1))} 条并追加到队列末尾`),
+                h('button', {
+                  type: 'button',
+                  disabled: busy || generatingDrafts,
+                  style: { ...buttonStyle(true), padding: '6px 16px', fontSize: 13 },
+                  onClick: async () => {
+                    const count = Math.max(1, Math.min(50, Number(draftGenCount) || 1));
+                    setGeneratingDrafts(true);
+                    setError('');
+                    setNotice(`正在请求大模型生成 ${count} 条原创推文草稿，请稍候...`);
+                    try {
+                      const res = await act('generate-draft-posts', undefined, {
+                        count,
+                        prompt: draftGenPrompt.trim(),
+                      });
+                      if (res && res.generated) {
+                        setNotice(`🎉 成功生成 ${res.generated.length} 条推文草稿并加入队列！`);
+                        setDraftGenPrompt('');
+                      }
+                    } catch (err) {
+                      setError(`生成草稿失败：${err.message || String(err)}`);
+                    } finally {
+                      setGeneratingDrafts(false);
+                    }
+                  }
+                }, generatingDrafts ? '⏳ 正在生成...' : '🚀 生成并加入队列')
+              )
+            ) : null,
 
             // 手动编辑与插队区域
             h('div', { style: { background: C.layerTwo, padding: '12px 14px', borderRadius: 10, border: `1px solid ${C.border}`, marginBottom: 14 } },
@@ -763,9 +804,11 @@ window.__ModuleLoader__.load({
 
             // 队列列表展示
             h('div', null,
-              h('div', { style: { fontSize: 13, fontWeight: '600', color: C.muted, marginBottom: 8, display: 'flex', justifyContent: 'space-between' } },
+              h('div', { style: { fontSize: 13, fontWeight: '600', color: C.muted, marginBottom: 8, display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 6 } },
                 h('span', null, `当前待发队列 (${state?.postQueue?.length || 0} 条)`),
-                h('span', { style: { fontSize: 12, color: C.faint } }, '队列为空时，Worker 会在发帖周期到达时按文风提示词自动现场生成')
+                h('span', { style: { fontSize: 12, color: C.faint } },
+                  `补仓阈值 ${config?.postSettings?.queueLowThreshold ?? 3} 条 · 每批 ${config?.postSettings?.queueBatchSize ?? 10} 条 · ${config?.postSettings?.queueAutoRefill !== false ? '自动补仓已开启' : '自动补仓已关闭'}`
+                )
               ),
               state?.postQueue && state.postQueue.length > 0 ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
                 ...state.postQueue.map((item, idx) => h('div', {
@@ -778,10 +821,11 @@ window.__ModuleLoader__.load({
                   }
                 },
                   h('div', { style: { flex: 1, minWidth: 0 } },
-                    h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 } },
+                    h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' } },
                       h('span', { style: { fontSize: 12, fontWeight: 'bold', color: item.urgent ? '#f59e0b' : '#38bdf8' } }, `#${idx + 1}`),
                       item.urgent ? h('span', { style: { padding: '1px 6px', borderRadius: 4, background: '#f59e0b', color: '#000', fontSize: 10, fontWeight: 'bold' } }, '⚡ 加急插队') : null,
-                      h('span', { style: { fontSize: 11, color: C.faint } }, item.source === 'manual' ? '手动录入' : (item.source === 'ai_draft' ? 'AI 预生成' : '动态生成')),
+                      h('span', { style: { fontSize: 11, color: C.faint } }, item.source === 'manual' ? '手动录入' : (item.source === 'ai_draft_custom' ? 'AI 草稿（独立提示词）' : (item.source === 'ai_draft' ? 'AI 预生成' : '动态生成'))),
+                      item.topic ? h('span', { style: { fontSize: 11, color: C.faint } }, `话题：${item.topic}`) : null,
                       item.createdAt ? h('span', { style: { fontSize: 11, color: C.faint } }, new Date(item.createdAt).toLocaleTimeString()) : null
                     ),
                     h('p', { style: { margin: 0, fontSize: 13, color: C.text, lineHeight: 1.5, whiteSpace: 'pre-wrap' } }, item.text)
@@ -799,14 +843,14 @@ window.__ModuleLoader__.load({
                     }, '⚡ 置顶') : null,
                     h('button', {
                       type: 'button',
-                      title: '从队列中移除',
+                      title: '从队列中移除该条草稿',
                       style: { ...buttonStyle(false), padding: '2px 8px', fontSize: 11, color: C.error, borderColor: C.error },
                       onClick: () => void act('remove-queued-post', undefined, { id: item.id })
-                    }, '✕ 移除')
+                    }, '✕ 删除')
                   )
                 ))
               ) : h('div', { style: { padding: '20px', textAlign: 'center', background: C.layerTwo, borderRadius: 8, color: C.faint, fontSize: 13 } },
-                '暂无排队推文。你可以在上方手动录入，或点击右上角「🤖 AI 批量生成 3 条草稿入队」提前备齐。'
+                '暂无排队推文。你可以在上方手动录入，或点击右上角「🤖 AI 批量生成草稿」提前备齐。'
               )
             )
           ),
@@ -856,7 +900,68 @@ window.__ModuleLoader__.load({
             h('label', { style: { ...labelStyle, marginTop: 10 } }, '原创发帖文案提示词（自定义 Prompt）：', h(SideBadge, { side: 'post' })),
             h('textarea', { style: { ...inputStyle, minHeight: 90 }, value: config?.postSettings?.customPrompt || '', onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), customPrompt: e.target.value } })) }),
             h('label', { style: { ...labelStyle, marginTop: 10 } }, '随机发帖话题灵感池（逗号分隔）：', h(SideBadge, { side: 'post' })),
-            h('input', { style: inputStyle, value: (config?.postSettings?.topics || []).join(', '), onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), topics: e.target.value.split(/[,，\\s]+/).filter(Boolean) } })) })),
+            h('input', { style: inputStyle, value: (config?.postSettings?.topics || []).join(', '), onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), topics: e.target.value.split(/[,，\s]+/).filter(Boolean) } })) })),
+
+          // 队列补仓策略设置
+          h('section', { style: cardStyle },
+            h('h2', { style: { margin: 0, fontSize: 15 } }, '🧺 待发队列补仓策略（自动囤稿）'),
+            h('p', { style: { margin: '6px 0 10px', fontSize: 12, color: C.faint, lineHeight: 1.6 } },
+              'Worker 会在每轮发帖前检查队列：待发稿件少于「自动补仓阈值」时，立刻按「每批生成条数」调用大模型生成草稿补入队列，确保你随时能看到足够的待发稿子，并可手动删除不合适的。'),
+            h('label', { style: { display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginTop: 8 } },
+              h('input', {
+                type: 'checkbox',
+                checked: config?.postSettings?.queueAutoRefill !== false,
+                onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), queueAutoRefill: e.target.checked } })),
+              }),
+              '🔄 启用自动补仓（队列低于阈值时自动生成）', h(SideBadge, { side: 'post' })),
+            h('div', { style: { display: 'flex', gap: 16, marginTop: 10, flexWrap: 'wrap' } },
+              h('label', { style: { ...labelStyle, flex: '1 1 180px' } },
+                '每批生成条数：', h(SideBadge, { side: 'post' }),
+                h('input', {
+                  type: 'number',
+                  min: 1,
+                  max: 50,
+                  style: inputStyle,
+                  placeholder: '例如 10',
+                  value: config?.postSettings?.queueBatchSize ?? 10,
+                  onChange: e => {
+                    const val = e.target.value === '' ? '' : Number(e.target.value);
+                    updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), queueBatchSize: val } }));
+                  }
+                })
+              ),
+              h('label', { style: { ...labelStyle, flex: '1 1 180px' } },
+                '自动补仓阈值（低于此条数即补货）：', h(SideBadge, { side: 'post' }),
+                h('input', {
+                  type: 'number',
+                  min: 0,
+                  max: 50,
+                  style: inputStyle,
+                  placeholder: '例如 3',
+                  value: config?.postSettings?.queueLowThreshold ?? 3,
+                  onChange: e => {
+                    const val = e.target.value === '' ? '' : Number(e.target.value);
+                    updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), queueLowThreshold: val } }));
+                  }
+                })
+              ),
+              h('label', { style: { ...labelStyle, flex: '1 1 180px' } },
+                '队列容量上限：', h(SideBadge, { side: 'post' }),
+                h('input', {
+                  type: 'number',
+                  min: 1,
+                  max: 200,
+                  style: inputStyle,
+                  placeholder: '例如 100',
+                  value: config?.postSettings?.queueMaxSize ?? 100,
+                  onChange: e => {
+                    const val = e.target.value === '' ? '' : Number(e.target.value);
+                    updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), queueMaxSize: val } }));
+                  }
+                })
+              )
+            )
+          ),
 
           // 历史已发送记录
           state?.postHistory && state.postHistory.length > 0 ? h('section', { style: cardStyle },

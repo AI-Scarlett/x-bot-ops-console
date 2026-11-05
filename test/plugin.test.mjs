@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import { createServer } from 'node:net';
 import { authorize, createService, DEFAULT_CONFIG, DEFAULT_TARGETS, DESKTOP_ROUTE, WEB_ROUTE, installRoute, readPriorityHandles, resolveTargets, validateConfig, workerAcceptance, FIELD_SIDE } from '../index.js';
 
+const clone = value => JSON.parse(JSON.stringify(value));
+
 function fixture() {
   const dir = mkdtempSync(join(tmpdir(), 'x-bot-console-'));
   const paths = {
@@ -427,12 +429,19 @@ test('client source is valid JavaScript and includes post queue controls', async
   assert.doesNotThrow(() => new Function(body));
   assert.match(source, /待发推文队列看板/);
   assert.match(source, /立即插队置顶发送/);
+  assert.match(source, /AI 批量生成草稿/);
+  assert.match(source, /待发队列补仓策略/);
 });
 
 test('handles post queue operations (enqueue, urgent, remove, clear)', async () => {
   const f = fixture();
   try {
-    const service = createService({ paths: f.paths, configPath: join(f.dir, 'config.json'), platform: 'darwin' });
+    const service = createService({
+      paths: f.paths,
+      configPath: join(f.dir, 'config.json'),
+      queuePath: join(f.dir, 'post_queue.json'),
+      platform: 'darwin',
+    });
     const res1 = await service.action({ action: 'enqueue-post', text: '第一条普通测试推文', urgent: false });
     assert.equal(res1.ok, true);
     assert.equal(res1.queue.length, 1);
@@ -452,4 +461,64 @@ test('handles post queue operations (enqueue, urgent, remove, clear)', async () 
     assert.equal(res4.ok, true);
     assert.equal(res4.queue.length, 0);
   } finally { f.cleanup(); }
+});
+
+test('post queue survives concurrent enqueue and remove without losing drafts', async () => {
+  const f = fixture();
+  try {
+    const queuePath = join(f.dir, 'post_queue.json');
+    const service = createService({
+      paths: f.paths,
+      configPath: join(f.dir, 'config.json'),
+      queuePath,
+      platform: 'darwin',
+    });
+    const results = await Promise.all([
+      service.action({ action: 'enqueue-post', text: '并发稿件一', urgent: false }),
+      service.action({ action: 'enqueue-post', text: '并发稿件二', urgent: false }),
+      service.action({ action: 'enqueue-post', text: '并发稿件三', urgent: false }),
+    ]);
+    for (const result of results) assert.equal(result.ok, true);
+
+    const stored = JSON.parse(readFileSync(queuePath, 'utf8'));
+    assert.equal(stored.queue.length, 3);
+    const texts = stored.queue.map(item => item.text);
+    assert.ok(texts.includes('并发稿件一'));
+    assert.ok(texts.includes('并发稿件二'));
+    assert.ok(texts.includes('并发稿件三'));
+  } finally { f.cleanup(); }
+});
+
+test('post queue settings accept batch size, threshold and auto refill knobs', async () => {
+  const f = fixture();
+  try {
+    const config = clone(DEFAULT_CONFIG);
+    config.postSettings.queueBatchSize = 10;
+    config.postSettings.queueLowThreshold = 3;
+    config.postSettings.queueAutoRefill = true;
+    config.postSettings.queueMaxSize = 80;
+    const validated = validateConfig(config);
+    assert.equal(validated.postSettings.queueBatchSize, 10);
+    assert.equal(validated.postSettings.queueLowThreshold, 3);
+    assert.equal(validated.postSettings.queueAutoRefill, true);
+    assert.equal(validated.postSettings.queueMaxSize, 80);
+
+    const bad = clone(DEFAULT_CONFIG);
+    bad.postSettings.queueBatchSize = 0;
+    assert.throws(() => validateConfig(bad), /每批生成条数/);
+    bad.postSettings.queueBatchSize = 10;
+    bad.postSettings.queueLowThreshold = 99;
+    assert.throws(() => validateConfig(bad), /自动补仓阈值/);
+    bad.postSettings.queueLowThreshold = 3;
+    bad.postSettings.queueAutoRefill = 'yes';
+    assert.throws(() => validateConfig(bad), /自动补仓开关/);
+  } finally { f.cleanup(); }
+});
+
+test('queue settings are exposed to the post worker side', async () => {
+  const { FIELD_SIDE } = await import('../index.js');
+  assert.equal(FIELD_SIDE['postSettings.queueBatchSize'], 'post');
+  assert.equal(FIELD_SIDE['postSettings.queueLowThreshold'], 'post');
+  assert.equal(FIELD_SIDE['postSettings.queueAutoRefill'], 'post');
+  assert.equal(FIELD_SIDE['postSettings.queueMaxSize'], 'post');
 });
