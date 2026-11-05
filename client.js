@@ -215,9 +215,9 @@ window.__ModuleLoader__.load({
           setState(data);
           if (!draftDirty && !preserveDraft) {
             setConfig(data.config);
-            setConfigHash(data.configHash ?? null);
-            latestSaveHash.current = data.configHash ?? null;
           }
+          setConfigHash(data.configHash ?? null);
+          latestSaveHash.current = data.configHash ?? null;
           setError('');
         } catch (err) {
           setError(`${t('unavailable')} ${err.message || ''}`);
@@ -383,7 +383,7 @@ window.__ModuleLoader__.load({
               t('title')),
             h('p', { style: { margin: '4px 0 0', fontSize: 13, color: C.muted } }, t('subtitle'))),
           h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.2.5'),
+            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.2.6'),
             h('button', {
               type: 'button',
               disabled: busy || updating,
