@@ -275,6 +275,36 @@ window.__ModuleLoader__.load({
         h('span', { style: { color: C.muted, fontSize: 12 } }, label),
         h('strong', { style: { color: tone || C.text, fontSize: 13 } }, value));
 
+      const ModelPicker = ({ value, onChange, side = 'both', label = '推理大模型选择' }) => {
+        const dshList = Array.isArray(state?.dshModels) && state.dshModels.length > 0 ? state.dshModels : ['gpt-6-luna', 'gemini-3.8-flash-high', 'claude-opus-5-5-high', 'claude-sonnet-5-5-high', 'grok-4.7'];
+        return h('div', { style: { marginTop: 10 } },
+          h('label', { style: labelStyle }, label, h(SideBadge, { side })),
+          h('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
+            h('select', {
+              style: { ...inputStyle, flex: '1 1 50%', cursor: 'pointer' },
+              value: dshList.includes(value) ? value : (value ? '__custom__' : ''),
+              onChange: e => {
+                if (e.target.value === '__custom__') return;
+                onChange(e.target.value);
+              }
+            },
+              h('option', { value: '' }, '-- 默认（留空沿用全局/默认模型）--'),
+              ...dshList.map(m => h('option', { key: m, value: m }, `DSH 模型: ${m}`)),
+              h('option', { value: '__custom__' }, '✎ 手动输入其他模型名称...')
+            ),
+            h('input', {
+              style: { ...inputStyle, flex: '1 1 50%' },
+              value: value || '',
+              placeholder: '或直接输入模型名称，例如 gpt-6-luna',
+              onChange: e => onChange(e.target.value.trim())
+            })
+          ),
+          h('small', { style: { color: C.faint, fontSize: 11, display: 'block', marginTop: 4 } },
+            '已自动读取 DSH 当前环境配置的大模型列表，可直接下拉选择，或在右侧输入框自定义。'
+          )
+        );
+      };
+
       const statusCard = (key, label) => {
         const item = state?.items?.[key] || {};
         const pausePending = item.pausedUntil && item.pausedUntil > (state?.checkedAt ? new Date(state.checkedAt).getTime() / 1000 : Date.now() / 1000);
@@ -533,8 +563,21 @@ window.__ModuleLoader__.load({
         activeTab === 'comment' ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
           statusCard('comment', '💬 ' + t('comment') + '（任务状态与控制）'),
           h('section', { style: cardStyle },
-            h('h2', { style: { margin: 0, fontSize: 15 } }, '🎯 自动评论独立参数与本地模型池覆盖'),
-            h('label', { style: labelStyle }, t('modelPort'), h(SideBadge, { side: 'comment' })),
+            h('h2', { style: { margin: 0, fontSize: 15 } }, '🎯 自动评论模型、提示词与独立参数'),
+            h(ModelPicker, {
+              value: config?.commentSettings?.model || '',
+              onChange: val => updateConfig(c => ({ ...c, commentSettings: { ...(c.commentSettings || {}), model: val } })),
+              side: 'comment',
+              label: '💬 自动评论专用大模型：'
+            }),
+            h('label', { style: { ...labelStyle, marginTop: 12 } }, '💬 自动评论人设与文风提示词（Prompt）：', h(SideBadge, { side: 'comment' })),
+            h('textarea', {
+              style: { ...inputStyle, minHeight: 80 },
+              value: config?.commentSettings?.customPrompt || '',
+              placeholder: '例如：增加更多风趣幽默的比喻，自称寡人或周天子，语气微讽但友好，严禁现代网络低俗梗，直击推文要害...',
+              onChange: e => updateConfig(c => ({ ...c, commentSettings: { ...(c.commentSettings || {}), customPrompt: e.target.value } }))
+            }),
+            h('label', { style: { ...labelStyle, marginTop: 12 } }, t('modelPort'), h(SideBadge, { side: 'comment' })),
             h('input', { type: 'number', min: 1, max: 65535, style: inputStyle, value: config?.model?.endpointPort || '', placeholder: '留空表示使用默认端口（如 3040）', onChange: e => updateConfig(current => ({ ...current, model: { ...current.model, endpointPort: e.target.value === '' ? null : Number(e.target.value) } })) }),
             h('small', { style: { color: C.faint, fontSize: 12 } }, t('portHint')),
             h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 14 } },
@@ -548,10 +591,20 @@ window.__ModuleLoader__.load({
         activeTab === 'reply' ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
           statusCard('reply', '↩️ ' + t('reply') + '（任务状态与控制）'),
           h('section', { style: cardStyle },
-            h('h2', { style: { margin: 0, fontSize: 15 } }, '🤖 提及回复模型选择与参数'),
-            h('label', { style: labelStyle }, t('modelName'), h(SideBadge, { side: 'reply' })),
-            h('input', { style: inputStyle, value: config?.model?.name || '', placeholder: '例如 gpt-6-luna / claude-opus-5-5-high（留空沿用默认）', onChange: e => updateConfig(current => ({ ...current, model: { ...current.model, name: e.target.value } })) }),
-            h('small', { style: { color: C.faint, fontSize: 12 } }, t('modelNameHint')),
+            h('h2', { style: { margin: 0, fontSize: 15 } }, '🤖 提及回复模型选择与全局提示词'),
+            h(ModelPicker, {
+              value: config?.replySettings?.model || config?.model?.name || '',
+              onChange: val => updateConfig(c => ({ ...c, model: { ...c.model, name: val }, replySettings: { ...(c.replySettings || {}), model: val } })),
+              side: 'reply',
+              label: '↩️ 提及回复专用大模型：'
+            }),
+            h('label', { style: { ...labelStyle, marginTop: 12 } }, '↩️ 提及回复全局补充提示词（Prompt）：', h(SideBadge, { side: 'reply' })),
+            h('textarea', {
+              style: { ...inputStyle, minHeight: 80 },
+              value: config?.replySettings?.customPrompt || '',
+              placeholder: '所有提及回复均遵循的补充规则，例如：围绕对方最新发言展开，不要复述对方的话，多用诗词与文言意象...',
+              onChange: e => updateConfig(c => ({ ...c, replySettings: { ...(c.replySettings || {}), customPrompt: e.target.value } }))
+            }),
             h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 14 } },
               ...timingFields.filter(([, , , side]) => side === 'reply').map(([key, min, max, side, hint]) =>
                 h('label', { key, style: { ...labelStyle, flex: '1 1 45%', minWidth: 240, margin: 0 } },
@@ -563,10 +616,16 @@ window.__ModuleLoader__.load({
         activeTab === 'post' ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
           statusCard('post', '📝 ' + t('post') + '（任务状态与控制）'),
           h('section', { style: cardStyle },
-            h('h2', { style: { margin: 0, fontSize: 15 } }, '⚙️ 自动发帖策略与节奏'),
+            h('h2', { style: { margin: 0, fontSize: 15 } }, '⚙️ 自动发帖策略、模型与提示词'),
             h('label', { style: { display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginTop: 8 } },
               h('input', { type: 'checkbox', checked: config?.postSettings?.enabled !== false, onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), enabled: e.target.checked } })) }),
               '启用自动发帖 Worker', h(SideBadge, { side: 'post' })),
+            h(ModelPicker, {
+              value: config?.postSettings?.model || '',
+              onChange: val => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), model: val } })),
+              side: 'post',
+              label: '📝 自动发帖专用大模型：'
+            }),
             h('label', { style: { ...labelStyle, marginTop: 10 } }, '发帖间隔（分钟）：', h(SideBadge, { side: 'post' })),
             h('input', { type: 'number', min: 10, max: 1440, style: inputStyle, value: config?.postSettings?.intervalMinutes ?? 180, onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), intervalMinutes: Number(e.target.value) } })) }),
             h('label', { style: { ...labelStyle, marginTop: 10 } }, '原创发帖文案提示词（自定义 Prompt）：', h(SideBadge, { side: 'post' })),
@@ -579,13 +638,21 @@ window.__ModuleLoader__.load({
         activeTab === 'profile' ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
           statusCard('profile', '🧭 ' + t('profile') + '（任务状态与控制）'),
           h('section', { style: cardStyle },
-            h('h2', { style: { margin: 0, fontSize: 15 } }, '🧭 巡航策略与主页互动设置'),
+            h('h2', { style: { margin: 0, fontSize: 15 } }, '🧭 巡航策略、模型与互动提示词'),
             h('label', { style: { display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginTop: 8 } },
               h('input', { type: 'checkbox', checked: config?.cruiseSettings?.enabled !== false, onChange: e => updateConfig(c => ({ ...c, cruiseSettings: { ...(c.cruiseSettings || {}), enabled: e.target.checked } })) }),
               '启用主页巡航 Worker', h(SideBadge, { side: 'profile' })),
             h('label', { style: { display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginTop: 8 } },
               h('input', { type: 'checkbox', checked: config?.cruiseSettings?.autoVisitInvited !== false, onChange: e => updateConfig(c => ({ ...c, cruiseSettings: { ...(c.cruiseSettings || {}), autoVisitInvited: e.target.checked } })) }),
               '⚡ 自动优先消费提及对话中的“回踩/主页访问邀请”（闭环任务插队）', h(SideBadge, { side: 'profile' })),
+            h(ModelPicker, {
+              value: config?.cruiseSettings?.model || '',
+              onChange: val => updateConfig(c => ({ ...c, cruiseSettings: { ...(c.cruiseSettings || {}), model: val } })),
+              side: 'profile',
+              label: '🧭 主页巡航互动专用大模型：'
+            }),
+            h('label', { style: { ...labelStyle, marginTop: 10 } }, '主页巡航互动提示词（自定义 Prompt）：', h(SideBadge, { side: 'profile' })),
+            h('textarea', { style: { ...inputStyle, minHeight: 90 }, value: config?.cruiseSettings?.customPrompt || '', onChange: e => updateConfig(c => ({ ...c, cruiseSettings: { ...(c.cruiseSettings || {}), customPrompt: e.target.value } })) }),
             h('label', { style: { ...labelStyle, marginTop: 10 } }, '每日巡航互动上限次数：', h(SideBadge, { side: 'profile' })),
             h('input', { type: 'number', min: 1, max: 200, style: inputStyle, value: config?.cruiseSettings?.dailyTargetCount ?? 50, onChange: e => updateConfig(c => ({ ...c, cruiseSettings: { ...(c.cruiseSettings || {}), dailyTargetCount: Number(e.target.value) } })) }),
             h('label', { style: { ...labelStyle, marginTop: 10 } }, '同一主页重复互动冷却时长（小时）：', h(SideBadge, { side: 'profile' })),

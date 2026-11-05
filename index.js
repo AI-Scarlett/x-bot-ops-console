@@ -52,9 +52,14 @@ export const FIELD_SIDE = Object.freeze({
   'specialPersons.skipReplyHandles': 'reply',
   'specialReplies': 'none',
   'rules.skipFinanceComments': 'comment',
+  'commentSettings.model': 'comment',
+  'commentSettings.customPrompt': 'comment',
+  'replySettings.model': 'reply',
+  'replySettings.customPrompt': 'reply',
   'postSettings.enabled': 'post',
   'postSettings.intervalMinutes': 'post',
   'postSettings.topics': 'post',
+  'postSettings.model': 'post',
   'postSettings.customPrompt': 'post',
   'cruiseSettings.enabled': 'profile',
   'cruiseSettings.dailyTargetCount': 'profile',
@@ -62,13 +67,48 @@ export const FIELD_SIDE = Object.freeze({
   'cruiseSettings.crawlFollowers': 'profile',
   'cruiseSettings.interactionCooldownHours': 'profile',
   'cruiseSettings.autoVisitInvited': 'profile',
+  'cruiseSettings.model': 'profile',
+  'cruiseSettings.customPrompt': 'profile',
 });
+
+export function readDshModels() {
+  const models = new Set();
+  const paths = [
+    join(APP_HOME, '.dsh/profiles/desktop/cordis.patch.yml'),
+    join(APP_HOME, '.dsh/profiles/web/cordis.patch.yml'),
+  ];
+  for (const p of paths) {
+    if (!existsSync(p)) continue;
+    try {
+      const content = readFileSync(p, 'utf8');
+      const matches = content.matchAll(/^\s*-\s+id:\s*([^\s#]+)/gm);
+      for (const m of matches) {
+        const id = m[1].trim().replace(/^['"]|['"]$/g, '');
+        if (id && !['agent-default-model', 'ui-settings-account', 'ui-chat', 'ui-settings', 'llm-pi-ai', 'ui-theme', 'edge-tts'].includes(id)) {
+          models.add(id);
+        }
+      }
+    } catch {}
+  }
+  if (models.size === 0) {
+    return ['gpt-6-luna', 'gemini-3.8-flash-high', 'claude-opus-5-5-high', 'claude-sonnet-5-5-high', 'grok-4.7', 'gpt-5.6-luna'];
+  }
+  return [...models];
+}
 
 // Defaults equal to the values hard-coded in both Python workers, so a fresh save does not change runtime behaviour.
 const DEFAULT_CONFIG = Object.freeze({
   schemaVersion: 1,
   note: '两类 Python worker 每轮读取共享配置；未接入的字段会标记为未生效。',
   model: { name: '', endpointPort: null, keySource: 'LocalModelHub 凭据引用（密钥不会被读取或显示）' },
+  commentSettings: {
+    model: '',
+    customPrompt: '',
+  },
+  replySettings: {
+    model: '',
+    customPrompt: '',
+  },
   timing: { commentWindowHours: 6, mentionWindowHours: 12, quietHoursStart: 0, quietHoursEnd: 7, fullStopStart: 1, fullStopEnd: 6, publishMinSeconds: 30, publishMaxSeconds: 100, authorCooldownSeconds: 1800, postingWorkMinutes: 20, postingRestMinutes: 5, rateLimitMinutes: 5, rateLimitLongMinutes: 15 },
   tiers: [
     { id: 'apex', label: '最高优先级', handles: ['4ggug'], rounds: 30, replyStyle: '' },
@@ -99,6 +139,8 @@ const DEFAULT_CONFIG = Object.freeze({
     crawlFollowers: true,
     interactionCooldownHours: 48,
     autoVisitInvited: true,
+    model: '',
+    customPrompt: '你在推特(X)上用周天子姬霸的人设回复好友主页的最新推文。\n要求：用文言文或微言大义轻幽默回应对方的话题，亲切称呼对方，不要任何问句，不要现代粗俗脏话，字数在12到30字之间。直接输出纯文本。',
   },
 });
 
@@ -257,11 +299,17 @@ function validateConfig(input) {
   for (const id of TIER_IDS) if (!copy.tiers.some(t => t.id === id)) throw new TypeError(`缺少回复档位：${id}`);
   if (copy.tiers.some(t => !TIER_IDS.includes(t.id))) throw new TypeError('未知回复档位');
   if (!isRecord(copy.timing) || !isRecord(copy.specialReplies) || !isRecord(copy.rules) || !isRecord(copy.specialPersons)) throw new TypeError('时段或规则设置无效');
+  if (copy.commentSettings !== undefined) {
+    if (!isRecord(copy.commentSettings) || (copy.commentSettings.model !== undefined && typeof copy.commentSettings.model !== 'string') || (copy.commentSettings.customPrompt !== undefined && typeof copy.commentSettings.customPrompt !== 'string')) throw new TypeError('评论个性化设置无效');
+  }
+  if (copy.replySettings !== undefined) {
+    if (!isRecord(copy.replySettings) || (copy.replySettings.model !== undefined && typeof copy.replySettings.model !== 'string') || (copy.replySettings.customPrompt !== undefined && typeof copy.replySettings.customPrompt !== 'string')) throw new TypeError('回复个性化设置无效');
+  }
   if (copy.postSettings !== undefined) {
-    if (!isRecord(copy.postSettings) || typeof copy.postSettings.enabled !== 'boolean' || !Number.isInteger(copy.postSettings.intervalMinutes) || copy.postSettings.intervalMinutes < 10 || copy.postSettings.intervalMinutes > 1440 || (copy.postSettings.customPrompt !== undefined && typeof copy.postSettings.customPrompt !== 'string') || (copy.postSettings.topics !== undefined && !Array.isArray(copy.postSettings.topics))) throw new TypeError('发帖设置无效');
+    if (!isRecord(copy.postSettings) || typeof copy.postSettings.enabled !== 'boolean' || !Number.isInteger(copy.postSettings.intervalMinutes) || copy.postSettings.intervalMinutes < 10 || copy.postSettings.intervalMinutes > 1440 || (copy.postSettings.customPrompt !== undefined && typeof copy.postSettings.customPrompt !== 'string') || (copy.postSettings.model !== undefined && typeof copy.postSettings.model !== 'string') || (copy.postSettings.topics !== undefined && !Array.isArray(copy.postSettings.topics))) throw new TypeError('发帖设置无效');
   }
   if (copy.cruiseSettings !== undefined) {
-    if (!isRecord(copy.cruiseSettings) || typeof copy.cruiseSettings.enabled !== 'boolean' || !Number.isInteger(copy.cruiseSettings.dailyTargetCount) || copy.cruiseSettings.dailyTargetCount < 1 || copy.cruiseSettings.dailyTargetCount > 500) throw new TypeError('巡航设置无效');
+    if (!isRecord(copy.cruiseSettings) || typeof copy.cruiseSettings.enabled !== 'boolean' || !Number.isInteger(copy.cruiseSettings.dailyTargetCount) || copy.cruiseSettings.dailyTargetCount < 1 || copy.cruiseSettings.dailyTargetCount > 500 || (copy.cruiseSettings.model !== undefined && typeof copy.cruiseSettings.model !== 'string') || (copy.cruiseSettings.customPrompt !== undefined && typeof copy.cruiseSettings.customPrompt !== 'string')) throw new TypeError('巡航设置无效');
   }
   for (const [key, [min, max]] of Object.entries(TIMING_BOUNDS)) if (!Number.isInteger(copy.timing[key]) || copy.timing[key] < min || copy.timing[key] > max) throw new TypeError(`时段字段 ${key} 的设置无效`);
   if (copy.timing.publishMaxSeconds < copy.timing.publishMinSeconds) throw new TypeError('最长发布间隔必须大于或等于最短发布间隔');
@@ -352,9 +400,11 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
     }
     const shared = readSharedConfig();
     const configHash = hashCurrentConfig();
+    const dshModels = readDshModels();
     return {
       ok: true, config: shared.config, configSource: shared.source, configPath: activeConfigPath, configHash,
       runtimeConfigApplied: shared.source === 'shared', runtimeCapabilities, fieldSide: FIELD_SIDE,
+      dshModels,
       workerAcceptance: workerAcceptance(shared.config), items, platform, checkedAt: new Date(clock()).toISOString(),
     };
   };
