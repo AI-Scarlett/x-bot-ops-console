@@ -190,8 +190,7 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function Panel(props) {
-      const { getPluginNavigation } = props || {};
+    function Panel() {
       const [state, setState] = React.useState(null);
       const [error, setError] = React.useState('');
       const [notice, setNotice] = React.useState('');
@@ -418,16 +417,6 @@ window.__ModuleLoader__.load({
                 fontWeight: '600',
               }
             }, updating ? '⏳ 正在通过 DSH 更新...' : '🔄 自动更新'),
-            getPluginNavigation?.() ? h('button', {
-              type: 'button',
-              style: { ...buttonStyle(), fontSize: 11, padding: '4px 8px', color: C.muted },
-              title: '在 DSH 原生插件管理中查看此插件',
-              onClick: () => {
-                const nav = getPluginNavigation();
-                if (nav?.openBundle) nav.openBundle('dsh-x-bot-ops-console');
-                else if (nav?.openList) nav.openList();
-              }
-            }, '📦 原生管理') : null,
             h('button', { disabled: busy || updating, onClick: () => void refresh(), style: buttonStyle() }, t('refresh')),
             state?.checkedAt ? h('small', { style: { color: C.faint } }, `${t('checked')}：${new Date(state.checkedAt).toLocaleTimeString()}`) : null)),
 
@@ -760,8 +749,7 @@ window.__ModuleLoader__.load({
       apply(ctx) {
         ctx.effect(() => ctx.locale.register(NS, { zh }), 'x-bot-ops-console: locale');
         const tr = ctx.locale.bind(NS);
-        const getPluginNavigation = () => ctx.pluginNavigation || ctx.reflect?.get?.('pluginNavigation') || null;
-        const RootComponent = () => h(Root, { getPluginNavigation });
+        const RootComponent = () => h(Root);
         if (DESKTOP) {
           ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: 'dsh-x-bot-ops-console' }, RootComponent));
           ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({ name: 'sidebar.panellist', id: 'dsh-x-bot-ops-console', order: 35, label: () => tr('panel') }, XIcon));
