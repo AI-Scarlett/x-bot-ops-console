@@ -1,6 +1,9 @@
 import { readFileSync, existsSync, openSync, closeSync, mkdirSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { createConnection } from 'node:net';
@@ -70,6 +73,84 @@ export const FIELD_SIDE = Object.freeze({
   'cruiseSettings.model': 'profile',
   'cruiseSettings.customPrompt': 'profile',
 });
+
+export function resolveDshPnpm() {
+  const candidates = [
+    '/Applications/DeepSeek Harness.app/Contents/Resources/runtime/primary-runtime/dependencies/pnpm/bin/pnpm.cjs',
+    '/Applications/DeepSeek Harness.app/Contents/Resources/runtime/primary-runtime/dependencies/pnpm/dist/pnpm.mjs',
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+export function resolveDshProfiles() {
+  const base = join(homedir(), '.dsh', 'profiles');
+  const profiles = [];
+  const desktop = join(base, 'desktop');
+  if (existsSync(join(desktop, 'package.json'))) profiles.push({ name: 'desktop', dir: desktop });
+  const web = join(base, 'web');
+  if (existsSync(join(web, 'package.json'))) profiles.push({ name: 'web', dir: web });
+  return profiles;
+}
+
+export async function executePluginUpdate({ repoSpec = 'github:AI-Scarlett/x-bot-ops-console' } = {}) {
+  const pnpmPath = resolveDshPnpm();
+  const profiles = resolveDshProfiles();
+  if (profiles.length === 0) {
+    throw new Error('未检测到 DSH 本地 Profile 目录（~/.dsh/profiles/desktop 或 web）');
+  }
+  const nodeBin = process.execPath;
+  const results = [];
+  for (const profile of profiles) {
+    const args = pnpmPath
+      ? [pnpmPath, '--dir', profile.dir, 'add', repoSpec]
+      : ['--dir', profile.dir, 'add', repoSpec];
+    const execCommand = pnpmPath ? nodeBin : 'pnpm';
+    const output = await new Promise((resolve, reject) => {
+      execFile(execCommand, args, {
+        env: { ...process.env, DSH_HOME: join(homedir(), '.dsh') },
+        timeout: 90000,
+      }, (err, stdout, stderr) => {
+        if (err) {
+          reject(new Error(`[${profile.name}] DSH 插件更新失败: ${err.message}\n${stderr || stdout}`));
+        } else {
+          resolve({ stdout: stdout || '', stderr: stderr || '' });
+        }
+      });
+    });
+    let updatedVersion = null;
+    let commit = null;
+    try {
+      const pkgPath = join(profile.dir, 'node_modules', 'dsh-x-bot-ops-console', 'package.json');
+      if (existsSync(pkgPath)) {
+        const pkgData = JSON.parse(readFileSync(pkgPath, 'utf8'));
+        updatedVersion = pkgData.version;
+      }
+    } catch {}
+    try {
+      const lockPath = join(profile.dir, 'pnpm-lock.yaml');
+      if (existsSync(lockPath)) {
+        const lockContent = readFileSync(lockPath, 'utf8');
+        const match = lockContent.match(/x-bot-ops-console\/tar\.gz\/([0-9a-f]{7,40})/);
+        if (match) commit = match[1];
+      }
+    } catch {}
+    results.push({
+      profile: profile.name,
+      updatedVersion,
+      commit,
+      stdout: output.stdout.slice(-300),
+    });
+  }
+  return {
+    success: true,
+    results,
+    targetSpec: repoSpec,
+    note: '已通过 DSH 内置包管理器成功更新至 GitHub 最新版本！请在 DSH 中按 Cmd+R 刷新界面即可生效。',
+  };
+}
 
 export function readDshModels() {
   const models = new Set();
@@ -418,6 +499,14 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       return {
         config: saved, configHash: result.hash, runtimeConfigApplied: true, workerAcceptance: acceptance,
         note: '共享配置已写入，两个工作进程会在下轮读取。重点名单与人物特例句柄/提示词两侧生效；回复轮次、免回复名单由回复进程读取；skipFinanceComments 由评论进程读取。specialReplies 及其余规则仍为建议字段，不保证改变 Worker 分支逻辑。',
+      };
+    }
+    if (request.action === 'update-plugin') {
+      const updateResult = await executePluginUpdate();
+      return {
+        ok: true,
+        action: 'update-plugin',
+        ...updateResult,
       };
     }
     if (!['pause', 'resume', 'start', 'stop', 'restart'].includes(request.action)) throw new TypeError('未知操作类型');

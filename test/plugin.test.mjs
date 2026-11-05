@@ -412,3 +412,11 @@ test('rejects unsafe actions and non-mac process control', async () => {
     await assert.rejects(service.action({action:'pause',target:'bad',minutes:3}),/目标必须是评论或提及回复/);
   } finally { f.cleanup(); }
 });
+
+test('exposes DSH pnpm and profile discovery helpers', async () => {
+  const { resolveDshPnpm, resolveDshProfiles } = await import('../index.js');
+  const pnpmPath = resolveDshPnpm();
+  assert.ok(pnpmPath === null || typeof pnpmPath === 'string');
+  const profiles = resolveDshProfiles();
+  assert.ok(Array.isArray(profiles));
+});

@@ -190,11 +190,13 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function Panel() {
+    function Panel(props) {
+      const { getPluginNavigation } = props || {};
       const [state, setState] = React.useState(null);
       const [error, setError] = React.useState('');
       const [notice, setNotice] = React.useState('');
       const [busy, setBusy] = React.useState(false);
+      const [updating, setUpdating] = React.useState(false);
       const [config, setConfig] = React.useState(null);
       const [configHash, setConfigHash] = React.useState(null);
       const [draftDirty, setDraftDirty] = React.useState(false);
@@ -225,16 +227,19 @@ window.__ModuleLoader__.load({
       const act = async (action, target, extra = {}) => {
         if (action === 'save-config' && saveLock.current) return;
         if (action === 'save-config') saveLock.current = true;
-        setBusy(true); setError(''); setNotice('');
+        setBusy(true); setError('');
+        if (action !== 'update-plugin') setNotice('');
         try {
           const response = await fetch(ROUTE, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action, target, ...extra }) });
           const data = await response.json();
           if (!response.ok || data.ok !== true) throw new Error(data.error || `请求失败，状态码 ${response.status}`);
           const value = data.value || {};
           if (action === 'save-config') { setNotice(value.note || t('saved')); setConfig(value.config); setConfigHash(value.configHash ?? null); latestSaveHash.current = value.configHash ?? null; setDraftDirty(false); }
+          else if (action === 'update-plugin') { /* handled by caller */ }
           else if (value.launchRequested) setNotice(t('launchRequested'));
           else if (value.note) setNotice(value.note);
           await refresh();
+          return value;
         } catch (err) {
           const message = err.message || String(err);
           setError(`${t('error')}${message}`);
@@ -376,12 +381,61 @@ window.__ModuleLoader__.load({
                 h('path', { d: 'M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z' })),
               t('title')),
             h('p', { style: { margin: '4px 0 0', fontSize: 13, color: C.muted } }, t('subtitle'))),
-          h('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
-            h('button', { disabled: busy, onClick: () => void refresh(), style: buttonStyle() }, t('refresh')),
+          h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
+            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.2.2'),
+            h('button', {
+              type: 'button',
+              disabled: busy || updating,
+              onClick: () => {
+                setConfirmModal({
+                  title: '一键自动更新插件',
+                  prompt: '是否立即自动更新插件至最新版本？\n\n插件将通过 DSH 内置包管理器直接从 GitHub (AI-Scarlett/x-bot-ops-console) 拉取并安装最新代码。整个过程全自动，无需手动复制地址或重装。更新后刷新界面即可生效。',
+                  confirmText: '开始自动更新',
+                  onConfirm: async () => {
+                    setUpdating(true);
+                    setError('');
+                    setNotice('正在通过 DSH 内置包管理器连接 GitHub 下载并安装最新版本，请稍候约 10-15 秒...');
+                    try {
+                      const res = await act('update-plugin');
+                      if (res && res.success) {
+                        const ver = res.results?.[0]?.updatedVersion ? ` (v${res.results[0].updatedVersion})` : '';
+                        const commit = res.results?.[0]?.commit ? ` [${res.results[0].commit.slice(0, 7)}]` : '';
+                        setNotice(`🎉 插件已成功通过 DSH 更新${ver}${commit}！按快捷键 Cmd+R 刷新窗口即可生效。`);
+                      }
+                    } catch (err) {
+                      setError(`自动更新失败：${err.message || String(err)}。如遇网络波动，可手动在 DSH 插件管理中安装【github:AI-Scarlett/x-bot-ops-console】。`);
+                    } finally {
+                      setUpdating(false);
+                    }
+                  }
+                });
+              },
+              style: {
+                ...buttonStyle(false),
+                background: 'rgba(56, 189, 248, 0.12)',
+                borderColor: 'rgba(56, 189, 248, 0.4)',
+                color: '#38bdf8',
+                fontWeight: '600',
+              }
+            }, updating ? '⏳ 正在通过 DSH 更新...' : '🔄 自动更新'),
+            getPluginNavigation?.() ? h('button', {
+              type: 'button',
+              style: { ...buttonStyle(), fontSize: 11, padding: '4px 8px', color: C.muted },
+              title: '在 DSH 原生插件管理中查看此插件',
+              onClick: () => {
+                const nav = getPluginNavigation();
+                if (nav?.openBundle) nav.openBundle('dsh-x-bot-ops-console');
+                else if (nav?.openList) nav.openList();
+              }
+            }, '📦 原生管理') : null,
+            h('button', { disabled: busy || updating, onClick: () => void refresh(), style: buttonStyle() }, t('refresh')),
             state?.checkedAt ? h('small', { style: { color: C.faint } }, `${t('checked')}：${new Date(state.checkedAt).toLocaleTimeString()}`) : null)),
 
         error ? h('p', { role: 'alert', style: { margin: 0, padding: '10px 12px', borderRadius: 10, background: C.raised, color: C.error, fontSize: 13 } }, error) : null,
-        notice ? h('p', { role: 'status', style: { margin: 0, padding: '10px 12px', borderRadius: 10, background: C.raised, color: C.success, fontSize: 13 } }, notice) : null,
+        notice ? h('div', { role: 'status', style: { margin: 0, padding: '10px 14px', borderRadius: 10, background: C.raised, color: C.success, fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 } },
+          h('span', null, notice),
+          notice.includes('刷新') ? h('button', { type: 'button', style: { ...buttonStyle(true), padding: '4px 10px', fontSize: 12 }, onClick: () => window.location.reload() }, '立即刷新网页') : null
+        ) : null,
 
         // 显式胶囊式 Tab 导航栏（置顶吸顶 Sticky，始终固定在可视区域最上方，不被长列表或滚动挤压）
         h('div', {
@@ -683,19 +737,19 @@ window.__ModuleLoader__.load({
               maxWidth: 420, width: '90%', boxShadow: '0 8px 32px rgba(0,0,0,0.35)',
             }
           },
-            h('h3', { style: { margin: '0 0 10px', fontSize: 16 } }, '操作确认'),
-            h('p', { style: { margin: '0 0 20px', fontSize: 13, color: C.text, lineHeight: 1.5 } }, confirmModal.prompt),
+            h('h3', { style: { margin: '0 0 10px', fontSize: 16 } }, confirmModal.title || '操作确认'),
+            h('p', { style: { margin: '0 0 20px', fontSize: 13, color: C.text, lineHeight: 1.6, whiteSpace: 'pre-wrap' } }, confirmModal.prompt),
             h('div', { style: { display: 'flex', gap: 10, justifyContent: 'flex-end' } },
               h('button', { type: 'button', style: buttonStyle(), onClick: () => setConfirmModal(null) }, '取消'),
-              h('button', { type: 'button', style: buttonStyle(true), onClick: () => { const cb = confirmModal.onConfirm; setConfirmModal(null); cb(); } }, '确认执行')
+              h('button', { type: 'button', style: buttonStyle(true), onClick: () => { const cb = confirmModal.onConfirm; setConfirmModal(null); cb(); } }, confirmModal.confirmText || '确认执行')
             )
           )
         ) : null
       );
     }
 
-    function Root() {
-      return h(SafeBoundary, null, h(Panel));
+    function Root(props) {
+      return h(SafeBoundary, null, h(Panel, props));
     }
 
     const XIcon = ({ size = 20 }) => h('svg', { width: size, height: size, viewBox: '0 0 24 24', fill: 'currentColor', 'aria-hidden': true },
@@ -706,12 +760,14 @@ window.__ModuleLoader__.load({
       apply(ctx) {
         ctx.effect(() => ctx.locale.register(NS, { zh }), 'x-bot-ops-console: locale');
         const tr = ctx.locale.bind(NS);
+        const getPluginNavigation = () => ctx.pluginNavigation || ctx.reflect?.get?.('pluginNavigation') || null;
+        const RootComponent = () => h(Root, { getPluginNavigation });
         if (DESKTOP) {
-          ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: 'dsh-x-bot-ops-console' }, Root));
+          ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: 'dsh-x-bot-ops-console' }, RootComponent));
           ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({ name: 'sidebar.panellist', id: 'dsh-x-bot-ops-console', order: 35, label: () => tr('panel') }, XIcon));
         } else {
           ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({ name: 'sidebar.panellist', id: 'dsh-x-bot-ops-console', order: 35, locale: NS, label: () => tr('panel') }, XIcon));
-          ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: 'dsh-x-bot-ops-console', locale: NS }, Root));
+          ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: 'dsh-x-bot-ops-console', locale: NS }, RootComponent));
         }
       },
     };
