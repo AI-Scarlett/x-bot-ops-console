@@ -555,3 +555,126 @@ test('the topics parser keeps every comma separated entry', async () => {
   assert.deepEqual(config.postSettings.topics, ['文言雅趣', '周朝掌故', '易经随笔', '日常感悟']);
   assert.deepEqual(validateConfig(config).postSettings.topics, config.postSettings.topics);
 });
+
+test('learning settings validate thresholds and reject out of range values', async () => {
+  const config = clone(DEFAULT_CONFIG);
+  config.learningSettings = {
+    ...config.learningSettings,
+    checkIntervalMinutes: 720,
+    historyHours: 48,
+    minImpressions: 5000,
+    minComments: 5,
+    minLikes: 20,
+    maxSamples: 30,
+    autoLearn: false,
+    injectIntoPost: true,
+  };
+  const validated = validateConfig(config);
+  assert.equal(validated.learningSettings.checkIntervalMinutes, 720);
+  assert.equal(validated.learningSettings.minImpressions, 5000);
+  assert.equal(validated.learningSettings.autoLearn, false);
+
+  const bad = clone(DEFAULT_CONFIG);
+  bad.learningSettings.checkIntervalMinutes = 1;
+  assert.throws(() => validateConfig(bad), /学习检查间隔/);
+  bad.learningSettings.checkIntervalMinutes = 360;
+  bad.learningSettings.minImpressions = -5;
+  assert.throws(() => validateConfig(bad), /曝光量门槛/);
+  bad.learningSettings.minImpressions = 1000;
+  bad.learningSettings.benchmarkUrl = 'javascript:alert(1)';
+  assert.throws(() => validateConfig(bad), /榜单地址/);
+});
+
+test('learning prompt block carries topics but never overrides the writing style', async () => {
+  const { buildLearningPromptBlock, DEFAULT_CONFIG: defaults } = await import('../index.js');
+  assert.equal(buildLearningPromptBlock({ styleGuide: '', winningTopics: [], bannedTopics: [], patterns: [] }), '');
+
+  const block = buildLearningPromptBlock({
+    styleGuide: '反差开局再落地',
+    winningTopics: ['打工账本'],
+    bannedTopics: ['股市理财'],
+    patterns: [{ title: '反差', structure: '反问—举例—自嘲', hooks: ['谁还没破防过'] }],
+  });
+  assert.match(block, /反差开局再落地/);
+  assert.match(block, /打工账本/);
+  assert.match(block, /股市理财/);
+  assert.match(block, /谁还没破防过/);
+  // The style remains the caller's; the block only says to borrow structure.
+  assert.match(block, /行文风格仍必须严格遵循/);
+  assert.doesNotMatch(block, /请改用|改为白话|英文/);
+  assert.ok(defaults.postSettings.customPrompt.includes('文言文'));
+});
+
+test('learnings store normalizes, removes and clears entries', async () => {
+  const f = fixture();
+  try {
+    const learningsPath = join(f.dir, 'learnings.json');
+    const service = createService({
+      paths: f.paths,
+      configPath: join(f.dir, 'config.json'),
+      learningsPath,
+      platform: 'darwin',
+    });
+
+    const initial = await service.action({ action: 'state' });
+    assert.deepEqual(initial.learnings.patterns, []);
+    assert.deepEqual(initial.learnings.bannedTopics, []);
+
+    // Seed through the public actions that do not need a model call.
+    await service.action({ action: 'promote-topic', topic: '股市理财', target: 'banned' });
+    await service.action({ action: 'promote-topic', topic: '打工账本', target: 'winning' });
+    await service.action({ action: 'save-style-guide', styleGuide: '反差开局' });
+
+    const after = await service.action({ action: 'state' });
+    assert.deepEqual(after.learnings.bannedTopics, ['股市理财']);
+    assert.deepEqual(after.learnings.winningTopics, ['打工账本']);
+    assert.equal(after.learnings.styleGuide, '反差开局');
+
+    // Promoting a topic to the other side removes it from the first list.
+    await service.action({ action: 'promote-topic', topic: '打工账本', target: 'banned' });
+    const flipped = await service.action({ action: 'state' });
+    assert.ok(flipped.learnings.bannedTopics.includes('打工账本'));
+    assert.ok(!flipped.learnings.winningTopics.includes('打工账本'));
+
+    await service.action({ action: 'remove-learning', kind: 'banned', id: '打工账本' });
+    const removed = await service.action({ action: 'state' });
+    assert.ok(!removed.learnings.bannedTopics.includes('打工账本'));
+
+    const cleared = await service.action({ action: 'clear-learnings' });
+    assert.equal(cleared.learnings.styleGuide, '');
+    assert.deepEqual(cleared.learnings.patterns, []);
+    assert.deepEqual(cleared.learnings.bannedTopics, []);
+  } finally { f.cleanup(); }
+});
+
+test('learn-manual rejects empty input before calling the model', async () => {
+  const f = fixture();
+  try {
+    const service = createService({
+      paths: f.paths,
+      configPath: join(f.dir, 'config.json'),
+      learningsPath: join(f.dir, 'learnings.json'),
+      platform: 'darwin',
+    });
+    await assert.rejects(service.action({ action: 'learn-manual', text: '   ' }), /请先粘贴/);
+    await assert.rejects(service.action({ action: 'remove-learning', kind: 'nope', id: 'x' }), /未知的学习记录类型/);
+  } finally { f.cleanup(); }
+});
+
+test('extractJsonObject tolerates fenced and chatty model replies', async () => {
+  const { extractJsonObject } = await import('../index.js');
+  assert.deepEqual(extractJsonObject('```json\n{"a":1}\n```'), { a: 1 });
+  assert.deepEqual(extractJsonObject('好的，分析如下：{"styleGuide":"x","patterns":[]} 以上。'), { styleGuide: 'x', patterns: [] });
+  assert.equal(extractJsonObject('没有任何 JSON'), null);
+  assert.equal(extractJsonObject(''), null);
+});
+
+test('learning tab is present in the client bundle', async () => {
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.match(source, /发帖学习/);
+  assert.match(source, /① 我的历史发帖表现/);
+  assert.match(source, /② X 榜单高曝光帖拆解/);
+  assert.match(source, /③ 手动粘贴高曝光帖拆解/);
+  assert.match(source, /避写话题/);
+  assert.match(source, /立即学习一次/);
+});

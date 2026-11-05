@@ -29,6 +29,9 @@ export const CONFIG_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsCo
 export const TARGETS_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/console-targets.json');
 export const POST_QUEUE_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/post_queue.json');
 export const POST_HISTORY_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/post_history.json');
+export const LEARNINGS_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/learnings.json');
+export const POST_METRICS_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/post_metrics.json');
+export const LEARN_TRIGGER_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/learn_now.trigger');
 
 const TARGET_FIELDS = ['dir', 'worker', 'watchdog', 'watchdogPid', 'stop', 'pid', 'log', 'heartbeat', 'rate'];
 
@@ -80,6 +83,16 @@ export const FIELD_SIDE = Object.freeze({
   'cruiseSettings.autoVisitInvited': 'profile',
   'cruiseSettings.model': 'profile',
   'cruiseSettings.customPrompt': 'profile',
+  'learningSettings.enabled': 'post',
+  'learningSettings.autoLearn': 'post',
+  'learningSettings.checkIntervalMinutes': 'post',
+  'learningSettings.historyHours': 'post',
+  'learningSettings.minImpressions': 'post',
+  'learningSettings.minComments': 'post',
+  'learningSettings.minLikes': 'post',
+  'learningSettings.maxSamples': 'post',
+  'learningSettings.injectIntoPost': 'post',
+  'learningSettings.model': 'post',
 });
 
 export function resolveDshPnpm() {
@@ -175,10 +188,9 @@ export function readPostQueue(queuePath = POST_QUEUE_PATH) {
   return { queue: [], history: [] };
 }
 
-// The plugin host and the Python post worker both mutate post_queue.json.
-// A short-lived lock file keeps the read-modify-write cycle atomic across both sides.
-function withQueueLock(fn, queuePath = POST_QUEUE_PATH) {
-  const lockPath = `${queuePath}.lock`;
+// The plugin host and the Python workers both mutate shared JSON state.
+// A short-lived lock file keeps each read-modify-write cycle atomic across both sides.
+function withFileLock(fn, lockPath, label = '共享状态') {
   const deadline = Date.now() + 5000;
   let fd = null;
   while (fd === null) {
@@ -190,7 +202,7 @@ function withQueueLock(fn, queuePath = POST_QUEUE_PATH) {
         const age = Date.now() - statSync(lockPath).mtimeMs;
         if (age > 10000) { try { unlinkSync(lockPath); } catch { /* ignore stale lock cleanup */ } continue; }
       } catch { /* lock vanished between checks */ }
-      if (Date.now() > deadline) throw new Error('发帖队列正被其它进程占用，请稍后重试');
+      if (Date.now() > deadline) throw new Error(`${label}正被其它进程占用，请稍后重试`);
       sleepSync(60);
     }
   }
@@ -201,6 +213,162 @@ function withQueueLock(fn, queuePath = POST_QUEUE_PATH) {
     try { closeSync(fd); } catch { /* ignore close failure */ }
     try { unlinkSync(lockPath); } catch { /* ignore lock cleanup */ }
   }
+}
+
+function withQueueLock(fn, queuePath = POST_QUEUE_PATH) {
+  return withFileLock(fn, `${queuePath}.lock`, '发帖队列');
+}
+
+export function readLearnings(learningsPath = LEARNINGS_PATH) {
+  try {
+    if (existsSync(learningsPath)) {
+      const data = JSON.parse(readFileSync(learningsPath, 'utf8'));
+      if (isRecord(data)) return normalizeLearnings(data);
+    }
+  } catch {}
+  return normalizeLearnings({});
+}
+
+function normalizeLearnings(data) {
+  const cleanList = (value, limit) => (Array.isArray(value) ? value : [])
+    .map(item => String(item || '').trim())
+    .filter(Boolean)
+    .slice(0, limit);
+  const patterns = (Array.isArray(data.patterns) ? data.patterns : [])
+    .filter(isRecord)
+    .map((item, index) => ({
+      id: typeof item.id === 'string' && item.id ? item.id : `learn_${index}`,
+      title: String(item.title || '未命名套路').slice(0, 200),
+      structure: String(item.structure || '').slice(0, 2000),
+      hooks: cleanList(item.hooks, 12).map(hook => hook.slice(0, 300)),
+      sample: String(item.sample || '').slice(0, 1000),
+      source: ['history', 'benchmark', 'manual'].includes(item.source) ? item.source : 'manual',
+      createdAt: typeof item.createdAt === 'string' ? item.createdAt : null,
+    }))
+    .slice(0, 100);
+  const history = isRecord(data.history) ? data.history : {};
+  return {
+    version: 1,
+    styleGuide: String(data.styleGuide || '').slice(0, 4000),
+    winningTopics: cleanList(data.winningTopics, 40),
+    bannedTopics: cleanList(data.bannedTopics, 40),
+    patterns,
+    history: {
+      lastRunAt: typeof history.lastRunAt === 'string' ? history.lastRunAt : null,
+      considered: Number.isFinite(Number(history.considered)) ? Number(history.considered) : 0,
+      learned: Number.isFinite(Number(history.learned)) ? Number(history.learned) : 0,
+      note: typeof history.note === 'string' ? history.note.slice(0, 500) : '',
+      posts: (Array.isArray(history.posts) ? history.posts : []).filter(isRecord).slice(0, 100),
+    },
+    updatedAt: typeof data.updatedAt === 'string' ? data.updatedAt : null,
+  };
+}
+
+export function writeLearnings(data, learningsPath = LEARNINGS_PATH) {
+  const dir = dirname(learningsPath);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  const payload = { ...normalizeLearnings(data), updatedAt: new Date().toISOString() };
+  const tempPath = `${learningsPath}.tmp.${process.pid}.${Date.now()}`;
+  writeFileSync(tempPath, JSON.stringify(payload, null, 2), { mode: 0o600 });
+  renameSync(tempPath, learningsPath);
+  return payload;
+}
+
+export function mutateLearnings(mutator, learningsPath = LEARNINGS_PATH) {
+  return withFileLock(() => {
+    const current = readLearnings(learningsPath);
+    const result = mutator(current);
+    const payload = writeLearnings(current, learningsPath);
+    return { result, payload };
+  }, `${learningsPath}.lock`, '发帖学习记录');
+}
+
+// Collapse the stored learnings into a prompt fragment the generator can use.
+// The caller keeps its own writing style; only topics and structure are borrowed.
+export function buildLearningPromptBlock(learnings, { maxChars = 1600 } = {}) {
+  const parts = [];
+  if (learnings.styleGuide) parts.push(`【高表现套路总结】\n${learnings.styleGuide}`);
+  const hooks = learnings.patterns.flatMap(p => p.hooks).filter(Boolean).slice(0, 10);
+  if (hooks.length) parts.push(`【高互动钩子/开头方式】\n${hooks.map(h => `- ${h}`).join('\n')}`);
+  const structures = learnings.patterns.map(p => p.structure).filter(Boolean).slice(0, 6);
+  if (structures.length) parts.push(`【可借鉴的行文结构】\n${structures.map(s => `- ${s}`).join('\n')}`);
+  if (learnings.winningTopics.length) parts.push(`【已验证有效的话题方向】${learnings.winningTopics.join('、')}`);
+  if (learnings.bannedTopics.length) parts.push(`【必须避开的话题（历史表现差）】${learnings.bannedTopics.join('、')}`);
+  if (!parts.length) return '';
+  let block = parts.join('\n\n');
+  if (block.length > maxChars) block = `${block.slice(0, maxChars)}…`;
+  return `\n\n（以下是根据历史爆款总结的参考套路，只借鉴选题方向与结构节奏；行文风格仍必须严格遵循上面的文风要求，不要照抄原句。）\n${block}`;
+}
+
+// Pull the first JSON object out of a model reply that may be wrapped in prose
+// or fenced code blocks.
+export function extractJsonObject(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return null;
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = fenced ? fenced[1] : raw;
+  const start = candidate.indexOf('{');
+  const end = candidate.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) return null;
+  try {
+    return JSON.parse(candidate.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+}
+
+const LEARNING_ANALYST_PROMPT = `你是中文社交媒体的内容策略分析师。下面给出若干「高表现推文样本」。
+请拆解它们为什么能获得高曝光/高互动，并提炼成可以照着写的套路。
+
+只输出严格 JSON，不要任何解释文字，格式：
+{"styleGuide":"150字以内的整体套路总结（选题角度+情绪+节奏+收尾方式）","winningTopics":["值得继续写的话题方向1","方向2"],"patterns":[{"title":"套路名称","structure":"这条推文的结构拆解（开头—中段—收尾）","hooks":["可复用的开头钩子或句式"]}]}
+patterns 给 2~5 条。赢家话题要是「话题方向」而不是整句原文。`;
+
+// Ask the local model to turn raw high-performing samples into reusable patterns.
+export async function analyzeLearningSamples(samples, { model = 'gpt-6-luna', port = 3040, kind = 'manual', extra = '' } = {}) {
+  const usable = (Array.isArray(samples) ? samples : [])
+    .map(sample => (typeof sample === 'string' ? { text: sample } : sample) || {})
+    .filter(sample => String(sample.text || '').trim())
+    .slice(0, 40);
+  if (!usable.length) throw new TypeError('没有可分析的样本内容');
+
+  const rendered = usable.map((sample, index) => {
+    const metrics = [
+      sample.impressions !== undefined ? `曝光 ${sample.impressions}` : '',
+      sample.likes !== undefined ? `点赞 ${sample.likes}` : '',
+      sample.comments !== undefined ? `评论 ${sample.comments}` : '',
+    ].filter(Boolean).join(' / ');
+    return `${index + 1}. ${metrics ? `[${metrics}] ` : ''}${String(sample.text).trim().slice(0, 400)}`;
+  }).join('\n');
+
+  const prompt = `${LEARNING_ANALYST_PROMPT}\n\n样本来源：${kind}\n${extra ? `补充说明：${extra}\n` : ''}\n样本：\n${rendered}`;
+  const reply = await generateTweetViaLmh(prompt, { model, port });
+  const parsed = extractJsonObject(reply);
+  if (!parsed || !isRecord(parsed)) throw new Error('大模型未返回可解析的学习结果，请重试');
+
+  const patterns = (Array.isArray(parsed.patterns) ? parsed.patterns : [])
+    .filter(isRecord)
+    .map((item, index) => ({
+      id: `pattern_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 6)}`,
+      title: String(item.title || '未命名套路').slice(0, 200),
+      structure: String(item.structure || '').slice(0, 2000),
+      hooks: (Array.isArray(item.hooks) ? item.hooks : [])
+        .map(hook => String(hook || '').trim().slice(0, 300))
+        .filter(Boolean)
+        .slice(0, 12),
+      sample: String(usable[0]?.text || '').slice(0, 1000),
+      source: kind,
+      createdAt: new Date().toISOString(),
+    }));
+
+  return {
+    styleGuide: String(parsed.styleGuide || '').slice(0, 4000),
+    winningTopics: (Array.isArray(parsed.winningTopics) ? parsed.winningTopics : [])
+      .map(topic => String(topic || '').trim().slice(0, 80))
+      .filter(Boolean)
+      .slice(0, 20),
+    patterns,
+  };
 }
 
 function sleepSync(ms) {
@@ -366,6 +534,19 @@ const DEFAULT_CONFIG = Object.freeze({
     autoVisitInvited: true,
     model: '',
     customPrompt: '你在推特(X)上用周天子姬霸的人设回复好友主页的最新推文。\n要求：用文言文或微言大义轻幽默回应对方的话题，亲切称呼对方，不要任何问句，不要现代粗俗脏话，字数在12到30字之间。直接输出纯文本。',
+  },
+  learningSettings: {
+    enabled: true,
+    autoLearn: true,
+    checkIntervalMinutes: 360,
+    historyHours: 168,
+    minImpressions: 1000,
+    minComments: 3,
+    minLikes: 10,
+    maxSamples: 20,
+    injectIntoPost: true,
+    benchmarkUrl: 'https://xbangdan.com/posts/',
+    model: '',
   },
 });
 
@@ -573,6 +754,29 @@ function validateConfig(input) {
     if (copy.cruiseSettings.model !== undefined && typeof copy.cruiseSettings.model !== 'string') throw new TypeError('巡航模型设置无效');
     if (copy.cruiseSettings.customPrompt !== undefined && typeof copy.cruiseSettings.customPrompt !== 'string') throw new TypeError('巡航提示词无效');
   }
+  if (copy.learningSettings !== undefined) {
+    const ls = copy.learningSettings;
+    if (!isRecord(ls)) throw new TypeError('发帖学习设置无效');
+    const intIn = (key, min, max, label) => {
+      if (ls[key] === undefined) return;
+      const value = Number(ls[key]);
+      if (!Number.isInteger(value) || value < min || value > max) throw new TypeError(`${label}需为 ${min}~${max} 之间的整数`);
+      ls[key] = value;
+    };
+    intIn('checkIntervalMinutes', 5, 10080, '学习检查间隔（分钟）');
+    intIn('historyHours', 1, 2160, '历史时间窗（小时）');
+    intIn('minImpressions', 0, 100000000, '曝光量门槛');
+    intIn('minComments', 0, 1000000, '评论数门槛');
+    intIn('minLikes', 0, 1000000, '点赞数门槛');
+    intIn('maxSamples', 1, 100, '单次分析样本上限');
+    for (const key of ['enabled', 'autoLearn', 'injectIntoPost']) {
+      if (ls[key] !== undefined && typeof ls[key] !== 'boolean') throw new TypeError('发帖学习开关无效');
+    }
+    if (ls.model !== undefined && typeof ls.model !== 'string') throw new TypeError('学习模型设置无效');
+    if (ls.benchmarkUrl !== undefined) {
+      if (typeof ls.benchmarkUrl !== 'string' || ls.benchmarkUrl.length > 500 || (ls.benchmarkUrl && !/^https?:\/\//i.test(ls.benchmarkUrl))) throw new TypeError('榜单地址必须是 http(s) 链接');
+    }
+  }
   for (const [key, [min, max]] of Object.entries(TIMING_BOUNDS)) if (!Number.isInteger(copy.timing[key]) || copy.timing[key] < min || copy.timing[key] > max) throw new TypeError(`时段字段 ${key} 的设置无效`);
   if (copy.timing.publishMaxSeconds < copy.timing.publishMinSeconds) throw new TypeError('最长发布间隔必须大于或等于最短发布间隔');
   for (const [key, value] of Object.entries(copy.specialReplies)) if (typeof key !== 'string' || typeof value !== 'string' || value.length > 2000) throw new TypeError('特殊回复设置无效');
@@ -589,9 +793,10 @@ function validateConfig(input) {
   return copy;
 }
 
-export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGETS, configPath = CONFIG_PATH, targetsPath = null, platform = process.platform, spawnProcess = spawn, queuePath = POST_QUEUE_PATH } = {}) {
+export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGETS, configPath = CONFIG_PATH, targetsPath = null, platform = process.platform, spawnProcess = spawn, queuePath = POST_QUEUE_PATH, learningsPath = LEARNINGS_PATH } = {}) {
   let activeConfigPath = configPath;
   const activeQueuePath = queuePath;
+  const activeLearningsPath = learningsPath;
   const currentTargets = () => (targetsPath ? resolveTargets(paths, targetsPath) : paths);
   const readSharedConfig = () => {
     let raw;
@@ -678,6 +883,8 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       dshModels,
       postQueue: postQueue.queue,
       postHistory: postHistory.slice(-20),
+      learnings: readLearnings(activeLearningsPath),
+      learnTriggerPending: existsSync(LEARN_TRIGGER_PATH),
       workerAcceptance: workerAcceptance(shared.config), items, platform, checkedAt: new Date(clock()).toISOString(),
     };
   };
@@ -761,21 +968,29 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
     if (request.action === 'generate-draft-posts') {
       const sharedCfg = getConfig();
       const postCfg = sharedCfg.postSettings || {};
+      const learningCfg = sharedCfg.learningSettings || {};
       const batchSize = Number(postCfg.queueBatchSize) || 10;
       const requested = Number(request.count);
       const count = Math.max(1, Math.min(50, Number.isFinite(requested) && requested > 0 ? Math.floor(requested) : batchSize));
       // A one-off prompt overrides the global style prompt for this batch only.
       const oneOffPrompt = typeof request.prompt === 'string' && request.prompt.trim() ? request.prompt.trim() : '';
       const basePrompt = oneOffPrompt || postCfg.customPrompt || '你在推特(X)上用周天子姬霸的人设发一条原创推文。文风为幽默、古奥的文言文或诗词歌赋，自称周天子、姬霸或夫子，不要露骨，禁止提现代网络低俗梗，字数在30到90字之间。';
-      const topics = postCfg.topics && postCfg.topics.length ? postCfg.topics : ['文言雅趣', '日常随笔', '周朝掌故'];
+      // Learned patterns steer topic choice and structure; the writing style above stays authoritative.
+      const learnings = readLearnings(activeLearningsPath);
+      const learningBlock = learningCfg.injectIntoPost === false ? '' : buildLearningPromptBlock(learnings);
+      const banned = new Set(learnings.bannedTopics.map(topic => topic.toLowerCase()));
+      const configuredTopics = postCfg.topics && postCfg.topics.length ? postCfg.topics : ['文言雅趣', '日常随笔', '周朝掌故'];
+      const preferred = learnings.winningTopics.filter(topic => !banned.has(topic.toLowerCase()));
+      const topics = [...preferred, ...configuredTopics.filter(topic => !banned.has(String(topic).toLowerCase()))];
+      const pool = topics.length ? topics : ['文言雅趣'];
       const model = postCfg.model || sharedCfg.model?.name || 'gpt-6-luna';
       const port = sharedCfg.model?.endpointPort || 3040;
       const maxSize = Number(postCfg.queueMaxSize) || 100;
       const generated = [];
       const failures = [];
       for (let i = 0; i < count; i++) {
-        const topic = topics[Math.floor(Math.random() * topics.length)];
-        const prompt = basePrompt + `\n（当前话题灵感参考：${topic}）`;
+        const topic = pool[Math.floor(Math.random() * pool.length)];
+        const prompt = basePrompt + learningBlock + `\n（当前话题灵感参考：${topic}）`;
         try {
           const draftText = await generateTweetViaLmh(prompt, { model, port });
           if (draftText) {
@@ -805,6 +1020,103 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         failed: failures.length,
         note: `已成功由大模型生成并追加 ${generated.length} 条推文草稿入队！${failures.length ? `另有 ${failures.length} 条生成失败。` : ''}`,
       };
+    }
+    if (request.action === 'learn-manual') {
+      const raw = String(request.text || '').trim();
+      if (!raw) throw new TypeError('请先粘贴要高曝光推文内容');
+      if (raw.length > 20000) throw new TypeError('粘贴内容过长，请分批提交');
+      const sharedCfg = getConfig();
+      const learningCfg = sharedCfg.learningSettings || {};
+      const model = learningCfg.model || sharedCfg.postSettings?.model || sharedCfg.model?.name || 'gpt-6-luna';
+      const port = sharedCfg.model?.endpointPort || 3040;
+      // Accept either one blob or several posts separated by blank lines.
+      const samples = raw
+        .split(/\n\s*\n/)
+        .map(part => part.replace(/\s+$/g, '').trim())
+        .filter(Boolean)
+        .slice(0, 40)
+        .map(text => ({ text }));
+      const analysis = await analyzeLearningSamples(samples, { model, port, kind: 'manual' });
+      const { payload } = mutateLearnings((current) => {
+        current.patterns.unshift(...analysis.patterns);
+        if (analysis.styleGuide) current.styleGuide = analysis.styleGuide;
+        current.winningTopics = [...new Set([...analysis.winningTopics, ...current.winningTopics])].slice(0, 40);
+      }, activeLearningsPath);
+      return {
+        ok: true,
+        action: 'learn-manual',
+        learnings: payload,
+        learnedPatterns: analysis.patterns.length,
+        note: `已拆解 ${samples.length} 条高曝光样本，提炼出 ${analysis.patterns.length} 条可复用套路。`,
+      };
+    }
+    if (request.action === 'trigger-learn') {
+      const sharedCfg = getConfig();
+      const learningCfg = sharedCfg.learningSettings || {};
+      if (learningCfg.enabled === false) throw new Error('发帖学习已在设置中关闭，请先启用');
+      mkdirSync(dirname(LEARN_TRIGGER_PATH), { recursive: true });
+      writeFileSync(LEARN_TRIGGER_PATH, JSON.stringify({
+        requestedAt: new Date().toISOString(),
+        withBenchmark: request.withBenchmark !== false,
+      }), { mode: 0o600 });
+      return {
+        ok: true,
+        action: 'trigger-learn',
+        note: '已通知发帖 Worker 立即执行一次学习（历史发帖表现 + X 榜单拆解）。结果会写入本页，约 1~3 分钟后刷新可见。',
+      };
+    }
+    if (request.action === 'save-style-guide') {
+      const styleGuide = String(request.styleGuide || '').slice(0, 4000);
+      const { payload } = mutateLearnings((current) => {
+        current.styleGuide = styleGuide;
+      }, activeLearningsPath);
+      return {
+        ok: true,
+        action: 'save-style-guide',
+        learnings: payload,
+        note: styleGuide ? '套路总结已保存，下次生成草稿会参考它。' : '套路总结已清空。',
+      };
+    }
+    if (request.action === 'remove-learning') {
+      const kind = String(request.kind || '');
+      const id = String(request.id || '');
+      const { payload } = mutateLearnings((current) => {
+        if (kind === 'pattern') current.patterns = current.patterns.filter(item => item.id !== id);
+        else if (kind === 'banned') current.bannedTopics = current.bannedTopics.filter(item => item !== id);
+        else if (kind === 'winning') current.winningTopics = current.winningTopics.filter(item => item !== id);
+        else throw new TypeError('未知的学习记录类型');
+      }, activeLearningsPath);
+      return { ok: true, action: 'remove-learning', learnings: payload, note: '已删除该条学习记录。' };
+    }
+    if (request.action === 'promote-topic') {
+      const topic = String(request.topic || '').trim().slice(0, 80);
+      const target = String(request.target || 'winning');
+      if (!topic) throw new TypeError('缺少话题名称');
+      const { payload } = mutateLearnings((current) => {
+        if (target === 'banned') {
+          current.bannedTopics = [...new Set([topic, ...current.bannedTopics])].slice(0, 40);
+          current.winningTopics = current.winningTopics.filter(item => item !== topic);
+        } else {
+          current.winningTopics = [...new Set([topic, ...current.winningTopics])].slice(0, 40);
+          current.bannedTopics = current.bannedTopics.filter(item => item !== topic);
+        }
+      }, activeLearningsPath);
+      return {
+        ok: true,
+        action: 'promote-topic',
+        learnings: payload,
+        note: target === 'banned' ? `已将「${topic}」加入避写名单。` : `已将「${topic}」标记为优先话题。`,
+      };
+    }
+    if (request.action === 'clear-learnings') {
+      const { payload } = mutateLearnings((current) => {
+        current.styleGuide = '';
+        current.winningTopics = [];
+        current.bannedTopics = [];
+        current.patterns = [];
+        current.history = { lastRunAt: null, considered: 0, learned: 0, note: '', posts: [] };
+      }, activeLearningsPath);
+      return { ok: true, action: 'clear-learnings', learnings: payload, note: '学习成果已全部清空。' };
     }
     if (!['pause', 'resume', 'start', 'stop', 'restart'].includes(request.action)) throw new TypeError('未知操作类型');
     if (!['comment', 'reply', 'post', 'profile'].includes(request.target)) throw new TypeError('目标必须是评论或提及回复');

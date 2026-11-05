@@ -213,6 +213,9 @@ window.__ModuleLoader__.load({
       const [topicsText, setTopicsText] = React.useState('');
       const [skipHandlesText, setSkipHandlesText] = React.useState('');
       const [tierHandlesText, setTierHandlesText] = React.useState({});
+      const [learnPasteText, setLearnPasteText] = React.useState('');
+      const [learnBusy, setLearnBusy] = React.useState(false);
+      const [styleGuideDraft, setStyleGuideDraft] = React.useState('');
       const saveLock = React.useRef(false);
       const latestSaveHash = React.useRef(null);
 
@@ -401,7 +404,7 @@ window.__ModuleLoader__.load({
               t('title')),
             h('p', { style: { margin: '4px 0 0', fontSize: 13, color: C.muted } }, t('subtitle'))),
           h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.2.8'),
+            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.3.0'),
             h('button', {
               type: 'button',
               disabled: busy || updating,
@@ -460,6 +463,7 @@ window.__ModuleLoader__.load({
           h('button', { type: 'button', style: tabItemStyle('comment'), onClick: () => setActiveTab('comment') }, t('tabComment')),
           h('button', { type: 'button', style: tabItemStyle('reply'), onClick: () => setActiveTab('reply') }, t('tabReply')),
           h('button', { type: 'button', style: tabItemStyle('post'), onClick: () => setActiveTab('post') }, t('tabPost')),
+          h('button', { type: 'button', style: tabItemStyle('learning'), onClick: () => setActiveTab('learning') }, '🧠 发帖学习'),
           h('button', { type: 'button', style: tabItemStyle('profile'), onClick: () => setActiveTab('profile') }, t('tabProfile')),
           h('button', { type: 'button', style: tabItemStyle('tiers'), onClick: () => setActiveTab('tiers') }, t('tabTiers'))),
 
@@ -1023,6 +1027,274 @@ window.__ModuleLoader__.load({
               ))
             )
           ) : null
+        ) : null,
+
+        // TAB: 🧠 发帖学习
+        activeTab === 'learning' ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
+          h('section', { style: cardStyle },
+            h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 } },
+              h('div', null,
+                h('h2', { style: { margin: 0, fontSize: 16 } }, '🧠 发帖学习 · 让自动发帖照着高曝光套路写'),
+                h('p', { style: { margin: '4px 0 0', fontSize: 12, color: C.faint, lineHeight: 1.6 } },
+                  '学习只借鉴「选题方向 + 结构节奏 + 钩子」，最终产出仍然严格按「📝 自动发帖」里的文言文文风写，不会照抄原句。')),
+              h('button', {
+                type: 'button',
+                disabled: busy || learnBusy,
+                style: { ...buttonStyle(true), padding: '8px 18px', fontSize: 13 },
+                onClick: async () => {
+                  setLearnBusy(true);
+                  setError('');
+                  setNotice('已通知发帖 Worker 立即学习（历史表现 + X 榜单）。约 1~3 分钟后结果会出现在下方。');
+                  try {
+                    await act('trigger-learn', undefined, { withBenchmark: true });
+                  } catch (err) {
+                    setError(`触发学习失败：${err.message || String(err)}`);
+                  } finally {
+                    setLearnBusy(false);
+                  }
+                }
+              }, learnBusy ? '⏳ 学习中...' : '🚀 立即学习一次')),
+            h('label', { style: { display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginTop: 10 } },
+              h('input', { type: 'checkbox', checked: config?.learningSettings?.enabled !== false, onChange: e => updateConfig(c => ({ ...c, learningSettings: { ...(c.learningSettings || {}), enabled: e.target.checked } })) }),
+              '启用发帖学习模块', h(SideBadge, { side: 'post' })),
+            h('label', { style: { display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginTop: 6 } },
+              h('input', { type: 'checkbox', checked: config?.learningSettings?.autoLearn !== false, onChange: e => updateConfig(c => ({ ...c, learningSettings: { ...(c.learningSettings || {}), autoLearn: e.target.checked } })) }),
+              '⏱ 按间隔自动学习（关闭后只能手动触发）', h(SideBadge, { side: 'post' })),
+            h('label', { style: { display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginTop: 6 } },
+              h('input', { type: 'checkbox', checked: config?.learningSettings?.injectIntoPost !== false, onChange: e => updateConfig(c => ({ ...c, learningSettings: { ...(c.learningSettings || {}), injectIntoPost: e.target.checked } })) }),
+              '✨ 生成推文时参考学习成果（关闭则仍按原始提示词写）', h(SideBadge, { side: 'post' }))
+          ),
+
+          // 1. 历史发帖表现
+          h('section', { style: cardStyle },
+            h('h2', { style: { margin: 0, fontSize: 15 } }, '① 我的历史发帖表现'),
+            h('p', { style: { margin: '6px 0 10px', fontSize: 12, color: C.faint, lineHeight: 1.6 } },
+              'Worker 会读你主页最近推文的曝光/点赞/评论。达到任一门槛的帖子进入学习；同一话题反复不达标会被拉黑，之后不再写。'),
+            h('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' } },
+              h('label', { style: { ...labelStyle, flex: '1 1 150px' } },
+                '检查间隔（分钟）：', h(SideBadge, { side: 'post' }),
+                h('input', { type: 'number', min: 5, max: 10080, style: inputStyle, value: config?.learningSettings?.checkIntervalMinutes ?? 360, onChange: e => {
+                  const val = e.target.value === '' ? '' : Number(e.target.value);
+                  updateConfig(c => ({ ...c, learningSettings: { ...(c.learningSettings || {}), checkIntervalMinutes: val } }));
+                } })),
+              h('label', { style: { ...labelStyle, flex: '1 1 150px' } },
+                '历史时间窗（小时）：', h(SideBadge, { side: 'post' }),
+                h('input', { type: 'number', min: 1, max: 2160, style: inputStyle, value: config?.learningSettings?.historyHours ?? 168, onChange: e => {
+                  const val = e.target.value === '' ? '' : Number(e.target.value);
+                  updateConfig(c => ({ ...c, learningSettings: { ...(c.learningSettings || {}), historyHours: val } }));
+                } })),
+              h('label', { style: { ...labelStyle, flex: '1 1 150px' } },
+                '曝光量门槛：', h(SideBadge, { side: 'post' }),
+                h('input', { type: 'number', min: 0, style: inputStyle, value: config?.learningSettings?.minImpressions ?? 1000, onChange: e => {
+                  const val = e.target.value === '' ? '' : Number(e.target.value);
+                  updateConfig(c => ({ ...c, learningSettings: { ...(c.learningSettings || {}), minImpressions: val } }));
+                } })),
+              h('label', { style: { ...labelStyle, flex: '1 1 150px' } },
+                '评论数门槛：', h(SideBadge, { side: 'post' }),
+                h('input', { type: 'number', min: 0, style: inputStyle, value: config?.learningSettings?.minComments ?? 3, onChange: e => {
+                  const val = e.target.value === '' ? '' : Number(e.target.value);
+                  updateConfig(c => ({ ...c, learningSettings: { ...(c.learningSettings || {}), minComments: val } }));
+                } })),
+              h('label', { style: { ...labelStyle, flex: '1 1 150px' } },
+                '点赞数门槛：', h(SideBadge, { side: 'post' }),
+                h('input', { type: 'number', min: 0, style: inputStyle, value: config?.learningSettings?.minLikes ?? 10, onChange: e => {
+                  const val = e.target.value === '' ? '' : Number(e.target.value);
+                  updateConfig(c => ({ ...c, learningSettings: { ...(c.learningSettings || {}), minLikes: val } }));
+                } })),
+              h('label', { style: { ...labelStyle, flex: '1 1 150px' } },
+                '单次最多分析条数：', h(SideBadge, { side: 'post' }),
+                h('input', { type: 'number', min: 1, max: 100, style: inputStyle, value: config?.learningSettings?.maxSamples ?? 20, onChange: e => {
+                  const val = e.target.value === '' ? '' : Number(e.target.value);
+                  updateConfig(c => ({ ...c, learningSettings: { ...(c.learningSettings || {}), maxSamples: val } }));
+                } }))
+            ),
+            state?.learnings?.history?.lastRunAt ? h('div', { style: { marginTop: 12 } },
+              h('div', { style: { fontSize: 12, color: C.muted, marginBottom: 6 } },
+                `上次学习：${state.learnings.history.lastRunAt} · 分析 ${state.learnings.history.considered} 条 · 达标 ${state.learnings.history.learned} 条`,
+                state.learnings.history.note ? ` · ${state.learnings.history.note}` : ''),
+              state.learnings.history.posts?.length ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
+                ...state.learnings.history.posts.slice(0, 20).map((post, idx) => h('div', {
+                  key: post.id || idx,
+                  style: {
+                    display: 'flex', justifyContent: 'space-between', gap: 10, padding: '8px 10px',
+                    background: C.layerTwo, borderRadius: 6, borderLeft: `3px solid ${post.learned ? C.success : C.border}`,
+                    border: `1px solid ${C.border}`, fontSize: 12,
+                  }
+                },
+                  h('div', { style: { flex: 1, minWidth: 0 } },
+                    h('div', { style: { display: 'flex', gap: 8, marginBottom: 3, flexWrap: 'wrap' } },
+                      post.learned ? h('span', { style: { color: C.success, fontWeight: 'bold' } }, '✓ 已学习') : h('span', { style: { color: C.faint } }, '· 未达标'),
+                      h('span', { style: { color: C.faint } }, `曝光 ${post.views ?? '—'} / 赞 ${post.likes ?? '—'} / 评 ${post.comments ?? '—'}`),
+                      post.topic ? h('span', { style: { color: C.accent } }, `话题：${post.topic}`) : null),
+                    h('div', { style: { color: C.text, lineHeight: 1.4 } }, (post.text || '').slice(0, 120) + ((post.text || '').length > 120 ? '…' : ''))),
+                  post.topic ? h('button', {
+                    type: 'button',
+                    title: '以后不要再写这个话题',
+                    style: { ...buttonStyle(false), padding: '2px 8px', fontSize: 11, color: C.error, borderColor: C.error, alignSelf: 'flex-start' },
+                    onClick: () => void act('promote-topic', undefined, { topic: post.topic, target: 'banned' })
+                  }, '🚫 避写') : null
+                ))
+              ) : null
+            ) : h('div', { style: { marginTop: 10, padding: '12px', background: C.layerTwo, borderRadius: 8, fontSize: 12, color: C.faint } },
+              '还没有学习记录。点击右上角「🚀 立即学习一次」开始。')
+          ),
+
+          // 2. X 榜单拆解
+          h('section', { style: cardStyle },
+            h('h2', { style: { margin: 0, fontSize: 15 } }, '② X 榜单高曝光帖拆解（可选）'),
+            h('p', { style: { margin: '6px 0 10px', fontSize: 12, color: C.faint, lineHeight: 1.6 } },
+              'Worker 会用发帖用的 Chrome 打开榜单页，抓取高曝光推文交给大模型拆解套路。该站为动态渲染，必须在 Chrome 可用时执行。'),
+            h('label', { style: { ...labelStyle, marginTop: 4 } }, '榜单地址（默认 X 榜单推文榜）：'),
+            h('input', {
+              style: inputStyle,
+              value: config?.learningSettings?.benchmarkUrl || '',
+              placeholder: 'https://xbangdan.com/posts/',
+              onChange: e => updateConfig(c => ({ ...c, learningSettings: { ...(c.learningSettings || {}), benchmarkUrl: e.target.value } })),
+            }),
+            h('div', { style: { display: 'flex', gap: 10, marginTop: 10 } },
+              h('a', {
+                href: config?.learningSettings?.benchmarkUrl || 'https://xbangdan.com/posts/',
+                target: '_blank', rel: 'noreferrer',
+                style: { ...buttonStyle(false), padding: '6px 14px', fontSize: 12, textDecoration: 'none', display: 'inline-block' },
+              }, '🔗 在浏览器打开榜单'),
+              h('button', {
+                type: 'button',
+                disabled: busy || learnBusy,
+                style: { ...buttonStyle(false), padding: '6px 14px', fontSize: 12 },
+                onClick: async () => {
+                  setLearnBusy(true);
+                  try {
+                    await act('trigger-learn', undefined, { withBenchmark: true });
+                    setNotice('已触发学习，榜单拆解结果会在 1~3 分钟后写入「学习成果」。');
+                  } catch (err) {
+                    setError(err.message || String(err));
+                  } finally { setLearnBusy(false); }
+                }
+              }, '📊 抓取并拆解榜单'))
+          ),
+
+          // 3. 手动粘贴
+          h('section', { style: cardStyle },
+            h('h2', { style: { margin: 0, fontSize: 15 } }, '③ 手动粘贴高曝光帖拆解'),
+            h('p', { style: { margin: '6px 0 10px', fontSize: 12, color: C.faint, lineHeight: 1.6 } },
+              '把你看到的高曝光推文粘进来（多条之间空一行）。大模型会拆出结构、钩子和选题方向，并沉淀到「学习成果」。'),
+            h('textarea', {
+              style: { ...inputStyle, minHeight: 120, resize: 'vertical' },
+              placeholder: '粘贴推文原文，多条之间空一行…',
+              value: learnPasteText,
+              onChange: e => setLearnPasteText(e.target.value),
+            }),
+            h('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 8 } },
+              h('button', {
+                type: 'button',
+                disabled: busy || learnBusy || !learnPasteText.trim(),
+                style: { ...buttonStyle(true), padding: '6px 18px', fontSize: 13 },
+                onClick: async () => {
+                  setLearnBusy(true);
+                  setError('');
+                  try {
+                    const res = await act('learn-manual', undefined, { text: learnPasteText });
+                    setLearnPasteText('');
+                    setNotice(res?.note || '拆解完成，已沉淀到学习成果。');
+                  } catch (err) {
+                    setError(`拆解失败：${err.message || String(err)}`);
+                  } finally { setLearnBusy(false); }
+                }
+              }, learnBusy ? '⏳ 拆解中...' : '🔍 拆解学习'))
+          ),
+
+          // 4. 学习成果
+          h('section', { style: cardStyle },
+            h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 } },
+              h('h2', { style: { margin: 0, fontSize: 15 } }, '📚 学习成果'),
+              h('button', {
+                type: 'button',
+                disabled: busy,
+                style: { ...buttonStyle(false), fontSize: 12, padding: '4px 10px', color: C.error, borderColor: C.error },
+                onClick: () => setConfirmModal({
+                  title: '清空学习成果',
+                  prompt: '确认清空全部学习成果吗？\n\n套路总结、赢家话题、避写话题和已提炼的结构都会被删除，且不可恢复。',
+                  confirmText: '确认清空',
+                  onConfirm: () => void act('clear-learnings'),
+                })
+              }, '🗑️ 清空学习成果')),
+
+            h('label', { style: { ...labelStyle, marginTop: 12 } }, '套路总结（会拼进生成提示词，可手动编辑）：'),
+            h('textarea', {
+              style: { ...inputStyle, minHeight: 90 },
+              placeholder: '大模型从样本中总结的选题角度 / 情绪 / 节奏 / 收尾方式…',
+              value: styleGuideDraft !== '' ? styleGuideDraft : (state?.learnings?.styleGuide || ''),
+              onChange: e => setStyleGuideDraft(e.target.value),
+            }),
+            h('div', { style: { display: 'flex', justifyContent: 'flex-end', marginTop: 6 } },
+              h('button', {
+                type: 'button',
+                disabled: busy,
+                style: { ...buttonStyle(false), fontSize: 12, padding: '4px 12px' },
+                onClick: async () => {
+                  try {
+                    await act('save-style-guide', undefined, { styleGuide: styleGuideDraft });
+                    setStyleGuideDraft('');
+                    setNotice('套路总结已保存。');
+                  } catch (err) { setError(err.message || String(err)); }
+                }
+              }, '💾 保存套路总结')),
+
+            h('div', { style: { marginTop: 12 } },
+              h('div', { style: { fontSize: 13, fontWeight: '600', marginBottom: 6 } }, `✅ 优先话题（${(state?.learnings?.winningTopics || []).length}）`),
+              (state?.learnings?.winningTopics || []).length
+                ? h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
+                    ...(state.learnings.winningTopics).map(topic => h('span', {
+                      key: topic,
+                      style: { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 8px', borderRadius: 999, background: C.layerTwo, border: `1px solid ${C.border}`, fontSize: 12 }
+                    }, topic,
+                      h('button', {
+                        type: 'button', title: '改为避写',
+                        style: { border: 'none', background: 'none', color: C.error, cursor: 'pointer', fontSize: 12, padding: 0 },
+                        onClick: () => void act('promote-topic', undefined, { topic, target: 'banned' })
+                      }, '🚫'))))
+                : h('small', { style: { color: C.faint } }, '暂无。学习达标后会出现在这里。')),
+
+            h('div', { style: { marginTop: 12 } },
+              h('div', { style: { fontSize: 13, fontWeight: '600', marginBottom: 6 } }, `🚫 避写话题（${(state?.learnings?.bannedTopics || []).length}）`),
+              (state?.learnings?.bannedTopics || []).length
+                ? h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
+                    ...(state.learnings.bannedTopics).map(topic => h('span', {
+                      key: topic,
+                      style: { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 8px', borderRadius: 999, background: C.raised, border: `1px solid ${C.error}`, fontSize: 12, color: C.error }
+                    }, topic,
+                      h('button', {
+                        type: 'button', title: '解除避写',
+                        style: { border: 'none', background: 'none', color: C.muted, cursor: 'pointer', fontSize: 12, padding: 0 },
+                        onClick: () => void act('remove-learning', undefined, { kind: 'banned', id: topic })
+                      }, '✕'))))
+                : h('small', { style: { color: C.faint } }, '暂无。历史表现差的话题会自动加入。')),
+
+            h('div', { style: { marginTop: 12 } },
+              h('div', { style: { fontSize: 13, fontWeight: '600', marginBottom: 6 } }, `🧩 已提炼套路（${(state?.learnings?.patterns || []).length}）`),
+              (state?.learnings?.patterns || []).length
+                ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+                    ...(state.learnings.patterns).map(pattern => h('div', {
+                      key: pattern.id,
+                      style: { padding: '10px 12px', background: C.layerTwo, borderRadius: 8, border: `1px solid ${C.border}` }
+                    },
+                      h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' } },
+                        h('div', { style: { flex: 1, minWidth: 0 } },
+                          h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4, flexWrap: 'wrap' } },
+                            h('strong', { style: { fontSize: 13 } }, pattern.title),
+                            h('span', { style: { fontSize: 11, color: C.faint, padding: '1px 6px', borderRadius: 4, background: C.raised } },
+                              pattern.source === 'history' ? '历史帖子' : (pattern.source === 'benchmark' ? 'X 榜单' : '手动粘贴'))),
+                          pattern.structure ? h('p', { style: { margin: '0 0 4px', fontSize: 12, color: C.text, lineHeight: 1.5 } }, pattern.structure) : null,
+                          pattern.hooks?.length ? h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
+                            ...pattern.hooks.map((hook, i) => h('span', { key: i, style: { fontSize: 11, padding: '2px 8px', borderRadius: 999, background: C.raised, color: C.muted } }, hook))) : null),
+                        h('button', {
+                          type: 'button', title: '删除这条套路',
+                          style: { ...buttonStyle(false), padding: '2px 8px', fontSize: 11, color: C.error, borderColor: C.error },
+                          onClick: () => void act('remove-learning', undefined, { kind: 'pattern', id: pattern.id })
+                        }, '✕')))
+                    ))
+                : h('small', { style: { color: C.faint } }, '暂无。三种学习方式任一完成都会产生套路。'))
+          )
         ) : null,
 
         // TAB 6: 🧭 主页巡航与定向互动独立配置
