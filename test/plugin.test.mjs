@@ -421,6 +421,14 @@ test('exposes DSH pnpm and profile discovery helpers', async () => {
   assert.ok(Array.isArray(profiles));
 });
 
+test('client source is valid JavaScript and includes post queue controls', async () => {
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  const body = source.replace(/^window\.__ModuleLoader__\.load\(\{/, 'const __plugin = {').replace(/\}\);\s*$/, '};');
+  assert.doesNotThrow(() => new Function(body));
+  assert.match(source, /待发推文队列看板/);
+  assert.match(source, /立即插队置顶发送/);
+});
+
 test('handles post queue operations (enqueue, urgent, remove, clear)', async () => {
   const f = fixture();
   try {

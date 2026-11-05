@@ -817,7 +817,12 @@ window.__ModuleLoader__.load({
             h('label', { style: { display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginTop: 8 } },
               h('input', { type: 'checkbox', checked: config?.postSettings?.enabled !== false, onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), enabled: e.target.checked } })) }),
               '启用自动发帖 Worker', h(SideBadge, { side: 'post' })),
-            h(ModelPicker, {\n              value: config?.postSettings?.model || '',\n              onChange: val => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), model: val } })),\n              side: 'post',\n              label: '📝 自动发帖专用大模型：'\n            }),
+            h(ModelPicker, {
+              value: config?.postSettings?.model || '',
+              onChange: val => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), model: val } })),
+              side: 'post',
+              label: '📝 自动发帖专用大模型：'
+            }),
             h('div', { style: { display: 'flex', gap: 16, marginTop: 10, flexWrap: 'wrap' } },
               h('label', { style: { ...labelStyle, flex: '1 1 200px' } },
                 '发帖间隔（秒数）：', h(SideBadge, { side: 'post' }),
