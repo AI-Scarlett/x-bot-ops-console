@@ -190,6 +190,53 @@ window.__ModuleLoader__.load({
       }
     }
 
+    // Saving used to post the whole in-memory config, so any field the user had
+    // not touched could be overwritten by a stale snapshot (prompts were lost that
+    // way). These helpers let a save start from the freshest disk config and apply
+    // only the paths the operator actually changed.
+    const isPlainObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+    function diffConfigPaths(base, next, prefix = [], out = []) {
+      if (isPlainObject(base) && isPlainObject(next)) {
+        const keys = new Set([...Object.keys(base), ...Object.keys(next)]);
+        for (const key of keys) diffConfigPaths(base[key], next[key], [...prefix, key], out);
+        return out;
+      }
+      if (JSON.stringify(base) !== JSON.stringify(next)) out.push(prefix);
+      return out;
+    }
+
+    function readConfigPath(source, path) {
+      let node = source;
+      for (const key of path) {
+        if (node === null || node === undefined) return undefined;
+        node = node[key];
+      }
+      return node;
+    }
+
+    function writeConfigPath(target, path, value) {
+      let node = target;
+      for (let i = 0; i < path.length - 1; i += 1) {
+        const key = path[i];
+        if (!isPlainObject(node[key])) node[key] = {};
+        node = node[key];
+      }
+      node[path[path.length - 1]] = value;
+    }
+
+    // Overlay only the changed paths onto the freshest config from disk.
+    function composeSaveConfig(current, baseline, fresh) {
+      if (!baseline || !fresh) return current;
+      let paths;
+      try { paths = diffConfigPaths(baseline, current); } catch { return current; }
+      if (!paths.length) return fresh;
+      if (paths.some(path => path.length === 0)) return current;
+      const merged = JSON.parse(JSON.stringify(fresh));
+      for (const path of paths) writeConfigPath(merged, path, readConfigPath(current, path));
+      return merged;
+    }
+
     function Panel() {
       const [state, setState] = React.useState(null);
       const [error, setError] = React.useState('');
@@ -218,6 +265,7 @@ window.__ModuleLoader__.load({
       const [styleGuideDraft, setStyleGuideDraft] = React.useState('');
       const saveLock = React.useRef(false);
       const latestSaveHash = React.useRef(null);
+      const serverSnapshot = React.useRef(null);
 
       const refresh = React.useCallback(async ({ preserveDraft = false } = {}) => {
         try {
@@ -225,6 +273,7 @@ window.__ModuleLoader__.load({
           const data = await response.json();
           if (!response.ok || data.ok === false) throw new Error(data.error || `请求失败，状态码 ${response.status}`);
           setState(data);
+          serverSnapshot.current = data.config;
           if (!draftDirty && !preserveDraft) {
             setConfig(data.config);
             // Seed the free-text drafts from the server so the inputs show the
@@ -404,7 +453,7 @@ window.__ModuleLoader__.load({
               t('title')),
             h('p', { style: { margin: '4px 0 0', fontSize: 13, color: C.muted } }, t('subtitle'))),
           h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.5.0'),
+            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.5.1'),
             h('button', {
               type: 'button',
               disabled: busy || updating,
@@ -663,6 +712,9 @@ window.__ModuleLoader__.load({
               placeholder: '例如：增加更多风趣幽默的比喻，自称寡人或周天子，语气微讽但友好，严禁现代网络低俗梗，直击推文要害...',
               onChange: e => updateConfig(c => ({ ...c, commentSettings: { ...(c.commentSettings || {}), customPrompt: e.target.value } }))
             }),
+            (config?.commentSettings?.customPrompt || '').trim()
+              ? h('small', { style: { color: C.success, fontSize: 12 } }, `✓ 已设置（${config.commentSettings.customPrompt.length} 字），生效于自动评论 Worker`)
+              : h('small', { style: { color: C.error, fontSize: 12 } }, '⚠️ 当前为空：自动评论将只使用 Worker 内置文风，不会应用任何自定义补充要求。'),
             h('label', { style: { ...labelStyle, marginTop: 12 } }, t('modelPort'), h(SideBadge, { side: 'comment' })),
             h('input', { type: 'number', min: 1, max: 65535, style: inputStyle, value: config?.model?.endpointPort || '', placeholder: '留空表示使用默认端口（如 3040）', onChange: e => updateConfig(current => ({ ...current, model: { ...current.model, endpointPort: e.target.value === '' ? null : Number(e.target.value) } })) }),
             h('small', { style: { color: C.faint, fontSize: 12 } }, t('portHint')),
@@ -751,6 +803,9 @@ window.__ModuleLoader__.load({
               placeholder: '所有提及回复均遵循的补充规则，例如：围绕对方最新发言展开，不要复述对方的话，多用诗词与文言意象...',
               onChange: e => updateConfig(c => ({ ...c, replySettings: { ...(c.replySettings || {}), customPrompt: e.target.value } }))
             }),
+            (config?.replySettings?.customPrompt || '').trim()
+              ? h('small', { style: { color: C.success, fontSize: 12 } }, `✓ 已设置（${config.replySettings.customPrompt.length} 字），生效于提及回复 Worker`)
+              : h('small', { style: { color: C.error, fontSize: 12 } }, '⚠️ 当前为空：提及回复将只使用 Worker 内置文风，不会应用任何自定义补充要求。'),
             h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 14 } },
               ...timingFields.filter(([, , , side]) => side === 'reply').map(([key, min, max, side, hint]) =>
                 h('label', { key, style: { ...labelStyle, flex: '1 1 45%', minWidth: 240, margin: 0 } },
@@ -1454,10 +1509,10 @@ window.__ModuleLoader__.load({
         h('footer', { style: { display: 'flex', gap: 12, alignItems: 'center', marginTop: 12, padding: '12px 0', borderTop: `1px solid ${C.border}`, flexWrap: 'wrap' } },
           h('button', {
             disabled: busy || !state?.ok || state?.configSource === 'invalid',
-            onClick: () => {
+            onClick: async () => {
               // Commit the free-text fields at save time so a value typed but not
               // yet blurred is still persisted.
-              const saveConfig = {
+              const current = {
                 ...config,
                 postSettings: { ...(config.postSettings || {}), topics: splitTopics(topicsText) },
                 specialPersons: {
@@ -1470,7 +1525,21 @@ window.__ModuleLoader__.load({
                     : tier
                 )),
               };
-              act('save-config', undefined, { config: saveConfig, expectedConfigHash: latestSaveHash.current });
+              // Rebase onto the current disk config so untouched fields (prompts,
+              // model choices, …) keep their stored values instead of being
+              // overwritten by an older in-page snapshot.
+              let freshConfig = serverSnapshot.current;
+              let expectedHash = latestSaveHash.current;
+              try {
+                const response = await fetch(ROUTE, { cache: 'no-store' });
+                const data = await response.json();
+                if (data && data.ok !== false && data.config) {
+                  freshConfig = data.config;
+                  expectedHash = data.configHash ?? expectedHash;
+                }
+              } catch { /* offline: fall back to the last snapshot */ }
+              const saveConfig = composeSaveConfig(current, serverSnapshot.current, freshConfig);
+              await act('save-config', undefined, { config: saveConfig, expectedConfigHash: expectedHash });
             },
             style: { ...buttonStyle(true), padding: '8px 20px', fontSize: 14 }
           }, t('save')),

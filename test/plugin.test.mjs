@@ -696,6 +696,115 @@ test('readCruiseSweep reports pending progress or an empty state', async () => {
   } finally { f.cleanup(); }
 });
 
+test('save rebases onto disk so untouched prompts are never wiped', async () => {
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+
+  // The diff engine and the rebase call must both be present.
+  assert.match(source, /function diffConfigPaths\(/);
+  assert.match(source, /function composeSaveConfig\(/);
+  assert.match(source, /composeSaveConfig\(current, serverSnapshot\.current, freshConfig\)/);
+  assert.match(source, /serverSnapshot\.current = data\.config;/);
+
+  // Evaluate the real helpers out of the shipped bundle and check the merge.
+  const grab = name => {
+    const start = source.indexOf(`function ${name}(`);
+    assert.ok(start > -1, `${name} is missing`);
+    let depth = 0;
+    let i = source.indexOf('{', start);
+    const open = i;
+    for (; i < source.length; i += 1) {
+      if (source[i] === '{') depth += 1;
+      else if (source[i] === '}') {
+        depth -= 1;
+        if (depth === 0) { i += 1; break; }
+      }
+    }
+    return source.slice(source.indexOf(`function ${name}(`), i);
+  };
+  const isPlainObjectSrc = source.match(/const isPlainObject = value => [^;]+;/)[0];
+  const body = `
+    ${isPlainObjectSrc}
+    ${grab('diffConfigPaths')}
+    ${grab('readConfigPath')}
+    ${grab('writeConfigPath')}
+    ${grab('composeSaveConfig')}
+    return { diffConfigPaths, composeSaveConfig };
+  `;
+  const { composeSaveConfig, diffConfigPaths } = new Function(body)();
+
+  const baseline = {
+    commentSettings: { model: 'gpt-6-luna', customPrompt: '旧评论提示词' },
+    replySettings: { model: 'gpt-6-luna', customPrompt: '旧回复提示词' },
+    postSettings: { topics: ['A'], queueBatchSize: 10 },
+  };
+  // The in-page snapshot has the prompts blanked and only topics edited.
+  const current = {
+    commentSettings: { model: 'gpt-6-luna', customPrompt: '' },
+    replySettings: { model: 'gpt-6-luna', customPrompt: '' },
+    postSettings: { topics: ['A', 'B'], queueBatchSize: 10 },
+  };
+  // Disk changed meanwhile (someone saved a new prompt).
+  const fresh = {
+    commentSettings: { model: 'gpt-6-luna', customPrompt: '磁盘上的评论提示词' },
+    replySettings: { model: 'gpt-6-luna', customPrompt: '磁盘上的回复提示词' },
+    postSettings: { topics: ['A'], queueBatchSize: 20 },
+  };
+
+  const changed = diffConfigPaths(baseline, current).map(path => path.join('.')).sort();
+  assert.deepEqual(changed, ['commentSettings.customPrompt', 'postSettings.topics', 'replySettings.customPrompt']);
+
+  const merged = composeSaveConfig(current, baseline, fresh);
+  // Only what the operator actually changed is carried over.
+  assert.deepEqual(merged.postSettings.topics, ['A', 'B']);
+  // Untouched settings keep the newer disk value.
+  assert.equal(merged.postSettings.queueBatchSize, 20);
+  // Explicitly clearing a field is a real edit and must be honoured.
+  assert.equal(merged.commentSettings.customPrompt, '');
+  assert.equal(merged.replySettings.customPrompt, '');
+
+  // The genuinely dangerous case: the page loaded a blank value and the user
+  // never touched it, so "unchanged" must mean "keep whatever disk now holds"
+  // instead of wiping the prompt that was saved in another session.
+  const staleBaseline = { commentSettings: { customPrompt: '' }, replySettings: { customPrompt: '' } };
+  const staleCurrent = { commentSettings: { customPrompt: '' }, replySettings: { customPrompt: '' } };
+  const diskWithPrompt = {
+    commentSettings: { customPrompt: '磁盘上后来保存的评论提示词' },
+    replySettings: { customPrompt: '磁盘上后来保存的回复提示词' },
+  };
+  const kept = composeSaveConfig(staleCurrent, staleBaseline, diskWithPrompt);
+  assert.equal(kept.commentSettings.customPrompt, '磁盘上后来保存的评论提示词');
+  assert.equal(kept.replySettings.customPrompt, '磁盘上后来保存的回复提示词');
+});
+
+test('an edited prompt still wins over disk after the rebase', async () => {
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  const isPlainObjectSrc = source.match(/const isPlainObject = value => [^;]+;/)[0];
+  const grab = name => {
+    const start = source.indexOf(`function ${name}(`);
+    let depth = 0;
+    let i = source.indexOf('{', start);
+    for (; i < source.length; i += 1) {
+      if (source[i] === '{') depth += 1;
+      else if (source[i] === '}') { depth -= 1; if (depth === 0) { i += 1; break; } }
+    }
+    return source.slice(start, i);
+  };
+  const { composeSaveConfig } = new Function(`
+    ${isPlainObjectSrc}
+    ${grab('diffConfigPaths')}
+    ${grab('readConfigPath')}
+    ${grab('writeConfigPath')}
+    ${grab('composeSaveConfig')}
+    return { composeSaveConfig };
+  `)();
+
+  const baseline = { commentSettings: { customPrompt: '旧' } };
+  const current = { commentSettings: { customPrompt: '我新写的提示词' } };
+  const fresh = { commentSettings: { customPrompt: '磁盘上的' } };
+  const merged = composeSaveConfig(current, baseline, fresh);
+  assert.equal(merged.commentSettings.customPrompt, '我新写的提示词');
+});
+
 test('reply anti-miss settings validate and stay worker-owned', async () => {
   const config = clone(DEFAULT_CONFIG);
   config.timing.replyMinSeconds = 12;
