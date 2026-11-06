@@ -453,7 +453,7 @@ window.__ModuleLoader__.load({
               t('title')),
             h('p', { style: { margin: '4px 0 0', fontSize: 13, color: C.muted } }, t('subtitle'))),
           h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.10.0'),
+            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.10.1'),
             h('button', {
               type: 'button',
               disabled: busy || updating,
@@ -1083,62 +1083,69 @@ window.__ModuleLoader__.load({
               side: 'post',
               label: '📝 自动发帖专用大模型：'
             }),
-            h('div', { style: { display: 'flex', gap: 16, marginTop: 10, flexWrap: 'wrap' } },
-              h('label', { style: { ...labelStyle, flex: '1 1 170px' } },
-                '随机间隔下限（秒，0=用固定值）：', h(SideBadge, { side: 'post' }),
-                h('input', {
-                  type: 'number', min: 0, max: 86400, style: inputStyle,
-                  placeholder: '例如 300',
-                  value: config?.postSettings?.intervalMinSeconds ?? 0,
-                  onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), intervalMinSeconds: e.target.value === '' ? 0 : Number(e.target.value) } })),
-                })),
-              h('label', { style: { ...labelStyle, flex: '1 1 170px' } },
-                '随机间隔上限（秒，0=用固定值）：', h(SideBadge, { side: 'post' }),
-                h('input', {
-                  type: 'number', min: 0, max: 86400, style: inputStyle,
-                  placeholder: '例如 600',
-                  value: config?.postSettings?.intervalMaxSeconds ?? 0,
-                  onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), intervalMaxSeconds: e.target.value === '' ? 0 : Number(e.target.value) } })),
-                })),
-              h('label', { style: { ...labelStyle, flex: '1 1 200px' } },
-                '固定发帖间隔（秒数，随机范围未启用时生效）：', h(SideBadge, { side: 'post' }),
-                h('input', {
-                  type: 'number',
-                  min: 30,
-                  max: 86400,
-                  style: inputStyle,
-                  placeholder: '例如 180 秒（3分钟）',
-                  value: config?.postSettings?.intervalSeconds ?? ((config?.postSettings?.intervalMinutes ?? 3) * 60),
-                  onChange: e => {
-                    const sec = Number(e.target.value);
-                    updateConfig(c => ({
+            (() => {
+              const ps = config?.postSettings || {};
+              const mode = ps.intervalMode || (((Number(ps.intervalMinSeconds) || 0) > 0 || (Number(ps.intervalMaxSeconds) || 0) > 0) ? 'random' : 'fixed');
+              const setMode = next => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), intervalMode: next } }));
+              const seg = (key, text) => h('button', {
+                type: 'button',
+                onClick: () => setMode(key),
+                style: {
+                  ...buttonStyle(mode === key),
+                  padding: '6px 16px',
+                  fontSize: 13,
+                  background: mode === key ? C.accent : 'transparent',
+                  color: mode === key ? '#fff' : C.muted,
+                  borderColor: mode === key ? C.accent : C.border,
+                },
+              }, text);
+
+              const fixedSeconds = Number(ps.intervalSeconds) || 180;
+              const fixedRow = h('div', { style: { marginTop: 10, fontSize: 12, color: C.muted } },
+                `每条间隔固定 ${fixedSeconds} 秒（约 ${Math.round(fixedSeconds / 6) / 10} 分钟）`);
+
+              const lo = Number(ps.intervalMinSeconds) || 300;
+              const hi = Number(ps.intervalMaxSeconds) || 600;
+              const randomRows = h('div', { style: { marginTop: 10, fontSize: 12, color: C.muted } },
+                `每条发出后，在 ${lo}~${hi} 秒之间重新随机（约 ${Math.round(lo / 6) / 10}~${Math.round(hi / 6) / 10} 分钟）`);
+
+              const fixedInputs = h('div', { style: { display: 'flex', gap: 16, marginTop: 10, flexWrap: 'wrap' } },
+                h('label', { style: { ...labelStyle, flex: '1 1 220px' } },
+                  '固定间隔（秒）：', h(SideBadge, { side: 'post' }),
+                  h('input', {
+                    type: 'number', min: 30, max: 86400, style: inputStyle, placeholder: '例如 180',
+                    value: ps.intervalSeconds ?? 180,
+                    onChange: e => updateConfig(c => ({
                       ...c,
-                      postSettings: {
-                        ...(c.postSettings || {}),
-                        intervalSeconds: sec,
-                        intervalMinutes: Math.max(1, Math.round(sec / 60)),
-                      }
-                    }));
-                  }
-                })
-              ),
-              h('label', { style: { ...labelStyle, flex: '1 1 200px' } },
-                '当前实际节奏：',
-                h('div', { style: { ...inputStyle, background: C.raised, color: C.muted, display: 'flex', alignItems: 'center', fontSize: 12 } },
-                  (() => {
-                    const lo = Number(config?.postSettings?.intervalMinSeconds) || 0;
-                    const hi = Number(config?.postSettings?.intervalMaxSeconds) || 0;
-                    if (lo > 0 || hi > 0) {
-                      const from = lo > 0 ? lo : 30;
-                      const to = hi > 0 ? hi : from;
-                      return `每 ${from}~${to} 秒随机（约 ${Math.round(from / 6) / 10}~${Math.round(to / 6) / 10} 分钟）`;
-                    }
-                    const fixed = Number(config?.postSettings?.intervalSeconds) || 180;
-                    return `固定 ${fixed} 秒（约 ${Math.round(fixed / 6) / 10} 分钟）`;
-                  })()
-                )
-              )
-            ),
+                      postSettings: { ...(c.postSettings || {}), intervalSeconds: e.target.value === '' ? '' : Number(e.target.value) },
+                    })),
+                  })));
+
+              const randomInputs = h('div', { style: { display: 'flex', gap: 16, marginTop: 10, flexWrap: 'wrap' } },
+                h('label', { style: { ...labelStyle, flex: '1 1 170px' } },
+                  '最短间隔（秒）：', h(SideBadge, { side: 'post' }),
+                  h('input', {
+                    type: 'number', min: 30, max: 86400, style: inputStyle, placeholder: '例如 300',
+                    value: ps.intervalMinSeconds ?? 300,
+                    onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), intervalMinSeconds: e.target.value === '' ? 0 : Number(e.target.value) } })),
+                  })),
+                h('label', { style: { ...labelStyle, flex: '1 1 170px' } },
+                  '最长间隔（秒）：', h(SideBadge, { side: 'post' }),
+                  h('input', {
+                    type: 'number', min: 30, max: 86400, style: inputStyle, placeholder: '例如 600',
+                    value: ps.intervalMaxSeconds ?? 600,
+                    onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), intervalMaxSeconds: e.target.value === '' ? 0 : Number(e.target.value) } })),
+                  })));
+
+              return h('div', null,
+                h('label', { style: { ...labelStyle, marginTop: 12 } }, '发帖间隔模式（二选一，Worker 只按选中的模式执行）：', h(SideBadge, { side: 'post' })),
+                h('div', { style: { display: 'flex', gap: 8 } },
+                  seg('fixed', '⏱ 固定间隔'),
+                  seg('random', '🎲 随机区间')),
+                mode === 'random' ? randomInputs : fixedInputs,
+                mode === 'random' ? randomRows : fixedRow);
+            })(),
+
             h('label', { style: { ...labelStyle, marginTop: 10 } }, '原创发帖文案提示词（自定义 Prompt）：', h(SideBadge, { side: 'post' })),
             h('textarea', { style: { ...inputStyle, minHeight: 90 }, value: config?.postSettings?.customPrompt || '', onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), customPrompt: e.target.value } })) }),
             h('label', { style: { ...labelStyle, marginTop: 10 } }, '随机发帖话题灵感池（逗号分隔）：', h(SideBadge, { side: 'post' })),

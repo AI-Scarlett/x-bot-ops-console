@@ -980,9 +980,35 @@ test('random post interval range validates and beats the fixed value', async () 
   assert.equal(FIELD_SIDE['postSettings.intervalMaxSeconds'], 'post');
 
   const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
-  assert.match(source, /随机间隔下限/);
-  assert.match(source, /随机间隔上限/);
-  assert.match(source, /当前实际节奏/);
+  assert.match(source, /发帖间隔模式/);
+  assert.match(source, /⏱ 固定间隔/);
+  assert.match(source, /🎲 随机区间/);
+});
+
+test('interval mode is exclusive so fixed and random never fight', async () => {
+  const config = clone(DEFAULT_CONFIG);
+  assert.equal(config.postSettings.intervalMode, 'fixed');
+
+  const random = clone(DEFAULT_CONFIG);
+  random.postSettings.intervalMode = 'random';
+  random.postSettings.intervalMinSeconds = 300;
+  random.postSettings.intervalMaxSeconds = 600;
+  assert.equal(validateConfig(random).postSettings.intervalMode, 'random');
+
+  const bad = clone(DEFAULT_CONFIG);
+  bad.postSettings.intervalMode = 'sometimes';
+  assert.throws(() => validateConfig(bad), /间隔模式只能是固定或随机/);
+
+  // An old config that only had a range is migrated to random mode.
+  const legacy = clone(DEFAULT_CONFIG);
+  delete legacy.postSettings.intervalMode;
+  legacy.postSettings.intervalMinSeconds = 300;
+  legacy.postSettings.intervalMaxSeconds = 600;
+  assert.equal(validateConfig(legacy).postSettings.intervalMode, 'random');
+
+  const legacyFixed = clone(DEFAULT_CONFIG);
+  delete legacyFixed.postSettings.intervalMode;
+  assert.equal(validateConfig(legacyFixed).postSettings.intervalMode, 'fixed');
 });
 
 test('save rebases onto disk so untouched prompts are never wiped', async () => {
