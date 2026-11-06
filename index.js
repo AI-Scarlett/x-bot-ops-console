@@ -67,6 +67,7 @@ export const FIELD_SIDE = Object.freeze({
   'specialPersons.yijing.handle': 'both',
   'specialPersons.replyStyle': 'both',
   'specialPersons.skipReplyHandles': 'reply',
+  'specialPersons.list': 'reply',
   'specialReplies': 'none',
   'rules.skipFinanceComments': 'comment',
   'rules.mentionPauseDuringQuiet': 'reply',
@@ -1084,8 +1085,15 @@ const DEFAULT_CONFIG = Object.freeze({
     { id: 'other', label: '其他用户', handles: [], rounds: 3, replyStyle: '' },
   ],
   specialPersons: {
-    apex: { handle: '4ggug', enabled: true, rules: { careEnabled: false } },
-    yijing: { handle: 'mrchen1998', enabled: true },
+    // Operator-managed special people: add, edit and remove freely.
+    list: [
+      { id: 'apex', label: 'Apex 专属对象', handle: '4ggug', enabled: true, replyStyle: '聊两性，撩骚' },
+      { id: 'yijing', label: '易经专属对象', handle: 'mrchen1998', enabled: true, replyStyle: '遇到易经的帖子专门跟它聊易经' },
+    ],
+    // Legacy mirrors of the two built-in rows: worker tier logic still reads
+    // these keys, so a save keeps them in sync with the list above.
+    apex: { handle: '4ggug', enabled: true, rules: { careEnabled: false }, replyStyle: '聊两性，撩骚' },
+    yijing: { handle: 'mrchen1998', enabled: true, replyStyle: '遇到易经的帖子专门跟它聊易经' },
     skipReplyHandles: ['grok'],
   },
   specialReplies: { asksAi: '若被问及是否为 AI，请如实回答。', asksToStop: '若对方要求停止，请勿继续回复该讨论串。', care: '礼貌回应并围绕话题。', affection: '尊重回应，不诱导私下联系。', namedAddress: '以中性方式回应称呼。', daddy: '拒绝不合适的亲属角色扮演。', imperialTitle: '不宣称现实中的权力或身份。', vernacular: '仅在明确请求时翻译。' },
@@ -1399,6 +1407,41 @@ function validateConfig(input) {
   for (const id of TIER_IDS) if (!copy.tiers.some(t => t.id === id)) throw new TypeError(`缺少回复档位：${id}`);
   if (copy.tiers.some(t => !TIER_IDS.includes(t.id))) throw new TypeError('未知回复档位');
   if (!isRecord(copy.timing) || !isRecord(copy.specialReplies) || !isRecord(copy.rules) || !isRecord(copy.specialPersons)) throw new TypeError('时段或规则设置无效');
+  {
+    const people = copy.specialPersons;
+    if (people.list === undefined) {
+      // Older configs only had apex/yijing; surface them as editable rows.
+      people.list = [];
+      for (const key of ['apex', 'yijing']) {
+        const legacy = people[key];
+        if (!isRecord(legacy) || typeof legacy.handle !== 'string' || !legacy.handle.trim()) continue;
+        people.list.push({
+          id: key,
+          label: key === 'apex' ? 'Apex 专属对象' : (key === 'yijing' ? '易经专属对象' : key),
+          handle: legacy.handle.trim().toLowerCase(),
+          enabled: legacy.enabled !== false,
+          replyStyle: typeof legacy.replyStyle === 'string' ? legacy.replyStyle : '',
+        });
+      }
+    }
+    if (!Array.isArray(people.list) || people.list.length > 50) throw new TypeError('特例人物最多 50 个');
+    const seenIds = new Set();
+    const seenHandles = new Set();
+    people.list = people.list.map((entry, index) => {
+      if (!isRecord(entry)) throw new TypeError('特例人物条目无效');
+      const handle = String(entry.handle || '').trim().replace(/^@/, '').toLowerCase();
+      if (!/^[a-z0-9_]{1,15}$/.test(handle)) throw new TypeError('特例人物账号名只能是 1~15 位字母、数字或下划线');
+      if (seenHandles.has(handle)) throw new TypeError(`特例人物账号 @${handle} 重复`);
+      seenHandles.add(handle);
+      let id = String(entry.id || '').trim() || `sp_${index}`;
+      if (seenIds.has(id)) id = `sp_${index}_${handle}`;
+      seenIds.add(id);
+      const replyStyle = String(entry.replyStyle || '');
+      if (replyStyle.length > 4000) throw new TypeError('特例人物专属规则不能超过 4000 字');
+      if (typeof entry.enabled !== 'boolean') throw new TypeError('特例人物启用状态无效');
+      return { id, label: String(entry.label || handle).slice(0, 40), handle, enabled: entry.enabled, replyStyle };
+    });
+  }
   if (copy.commentSettings !== undefined) {
     if (!isRecord(copy.commentSettings) || (copy.commentSettings.model !== undefined && typeof copy.commentSettings.model !== 'string') || (copy.commentSettings.customPrompt !== undefined && typeof copy.commentSettings.customPrompt !== 'string')) throw new TypeError('评论个性化设置无效');
     if (copy.commentSettings.skipKeywords !== undefined) {

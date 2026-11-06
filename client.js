@@ -116,10 +116,43 @@ window.__ModuleLoader__.load({
       },
     };
 
-    const specialPersonCards = [
-      { key: 'apex', title: 'Apex 专属对象', badge: '👑 Apex 最高优先级', voice: '文言与诗词歌赋，直抒情欲与爱恋', guidance: '规则提示会作为附加提示词进入两个 Worker；账号、启用状态与提示词均可编辑。' },
-      { key: 'yijing', title: '易经专属对象', badge: '⭐ Tier 1 易经特例', voice: '《易经》卦象与爻辞，阴阳吉凶往来', guidance: '易经模式与无限轮次例外跟随当前用户名和启用状态；专属提示词由此编辑。' },
-    ];
+    // Special people are fully operator-managed rows: add, edit, reorder and
+    // delete all happen in the UI. Older configs only carried apex/yijing
+    // objects, so the editor migrates those into rows as well — otherwise the
+    // list would look empty until the first save.
+    function normalizeSpecialRows(people) {
+      const source = people && typeof people === 'object' ? people : {};
+      if (Array.isArray(source.list)) {
+        return source.list.filter(row => row && typeof row === 'object').map((row, index) => ({
+          id: String(row.id || `sp_${index}`),
+          label: String(row.label || row.handle || `特例人物 ${index + 1}`),
+          handle: String(row.handle || '').toLowerCase(),
+          enabled: row.enabled !== false,
+          replyStyle: String(row.replyStyle || ''),
+          rules: row.rules && typeof row.rules === 'object' ? row.rules : {},
+        }));
+      }
+      const rows = [];
+      for (const key of ['apex', 'yijing']) {
+        const legacy = source[key];
+        if (!legacy || typeof legacy !== 'object' || !legacy.handle) continue;
+        rows.push({
+          id: key,
+          label: key === 'apex' ? 'Apex 专属对象' : '易经专属对象',
+          handle: String(legacy.handle).toLowerCase(),
+          enabled: legacy.enabled !== false,
+          replyStyle: String(legacy.replyStyle || ''),
+          rules: legacy.rules && typeof legacy.rules === 'object' ? legacy.rules : {},
+        });
+      }
+      return rows;
+    }
+
+    const specialRowNote = id => (id === 'apex'
+      ? '👑 最高优先级：文言与诗词歌赋，直抒情欲与爱恋，不受常规含蓄限制。'
+      : id === 'yijing'
+        ? '⭐ 易经特例：《易经》卦象与爻辞，阴阳吉凶往来、不走楚辞；该行启用时回复轮次不封顶。'
+        : '自定义特例：命中该账号时，专属规则会作为附加提示词进入回复 Worker。');
 
     const specialLabel = key => ({
       asksAi: '🤖 被对方询问是否为 AI / 人机',
@@ -367,8 +400,33 @@ window.__ModuleLoader__.load({
       };
 
       const setTiming = (key, value) => updateConfig(current => ({ ...current, timing: { ...current.timing, [key]: value } }));
-      const setSpecialPerson = (key, field, value) => updateConfig(current => ({ ...current, specialPersons: { ...current.specialPersons, [key]: { ...current.specialPersons[key], [field]: value } } }));
       const setSkipHandles = value => updateConfig(current => ({ ...current, specialPersons: { ...current.specialPersons, skipReplyHandles: Array.isArray(value) ? value : splitList(value) } }));
+
+      // Special-person rows: one config array drives the whole editor.
+      const specialRows = normalizeSpecialRows(config?.specialPersons);
+      const setSpecialRows = updater => updateConfig(current => ({
+        ...current,
+        specialPersons: {
+          ...(current.specialPersons || {}),
+          list: updater(normalizeSpecialRows(current.specialPersons)),
+        },
+      }));
+      const updateSpecialRow = (id, patch) => setSpecialRows(rows => rows.map(row => (row.id === id ? { ...row, ...patch } : row)));
+      const removeSpecialRow = id => setSpecialRows(rows => rows.filter(row => row.id !== id));
+      const moveSpecialRow = (id, delta) => setSpecialRows(rows => {
+        const index = rows.findIndex(row => row.id === id);
+        const target = index + delta;
+        if (index < 0 || target < 0 || target >= rows.length) return rows;
+        const next = rows.slice();
+        next.splice(target, 0, next.splice(index, 1)[0]);
+        return next;
+      });
+      const addSpecialRow = () => setSpecialRows(rows => {
+        const taken = new Set(rows.map(row => row.id));
+        let seq = rows.length + 1;
+        while (taken.has(`sp_${seq}`)) seq += 1;
+        return [...rows, { id: `sp_${seq}`, label: `特例人物 ${seq}`, handle: '', enabled: true, replyStyle: '', rules: {} }];
+      });
 
       const askConfirm = (promptKey, onConfirm) => setConfirmModal({ prompt: t(promptKey), onConfirm });
       const askConfirmText = (prompt, onConfirm) => setConfirmModal({ prompt, onConfirm });
@@ -552,22 +610,57 @@ window.__ModuleLoader__.load({
                 h('h2', { style: { margin: 0, fontSize: 16 } }, '🌟 关键特例人物专属回复配置（Special Person Rules）'),
                 h('p', { style: { margin: '4px 0 0', fontSize: 12, color: C.faint } }, '标注 worker 中仍由代码固定的内置分支，以及你可以覆盖的动态句柄和提示词规则。')),
               h('span', { style: { fontSize: 12, color: C.accent, background: C.raised, padding: '4px 8px', borderRadius: 6 } }, 'Worker 核心内置策略')),
-            h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12, marginTop: 14 } },
-              specialPersonCards.map(p => {
-                const person = config?.specialPersons?.[p.key] || {};
-                return h('div', { key: p.key, style: { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 14, display: 'flex', flexDirection: 'column', gap: 8 } },
-                  h('strong', { style: { fontSize: 14, color: C.text } }, p.title),
-                  h('div', { style: { fontSize: 12, color: C.muted } }, p.badge),
-                  h('label', { style: labelStyle }, '特殊用户名（可替换）', h('input', { style: inputStyle, value: person.handle || '', onChange: e => setSpecialPerson(p.key, 'handle', e.target.value.trim().replace(/^@/, '').toLowerCase()) })),
-                  h('label', { style: { display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 } },
-                    h('input', { type: 'checkbox', checked: person.enabled !== false, onChange: e => setSpecialPerson(p.key, 'enabled', e.target.checked) }), '启用该人物特例'),
-                  h('div', { style: { fontSize: 12, color: C.text } }, `默认文风：${p.voice}`),
-                  h('small', { style: { color: C.faint } }, p.guidance),
-                  h('label', { style: labelStyle }, '专属回复规则 / 附加提示词（空白使用 Worker 内置规则）',
-                    h('textarea', { style: { ...inputStyle, minHeight: 100 }, maxLength: 3000, value: person.replyStyle || '', onChange: e => setSpecialPerson(p.key, 'replyStyle', e.target.value) })),
-                  p.key === 'apex' ? h('label', { style: { display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 } },
-                    h('input', { type: 'checkbox', checked: person.rules?.careEnabled !== true, onChange: e => setSpecialPerson(p.key, 'rules', { ...(person.rules || {}), careEnabled: !e.target.checked }) }), '禁用日常问候关怀分支') : null);
-              })),
+            h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginTop: 14 } },
+              h('p', { style: { margin: 0, fontSize: 12, color: C.faint, lineHeight: 1.6 } },
+                `当前 ${specialRows.length} 个特例人物。账号名忽略大小写与 @ 前缀，命中后专属规则会作为附加提示词进入回复 Worker；新增行只在保存后生效。`),
+              h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' } },
+                h('button', { type: 'button', style: buttonStyle(true), onClick: addSpecialRow }, '➕ 添加特例人物'),
+                h('button', {
+                  type: 'button', style: buttonStyle(),
+                  onClick: () => setSpecialRows(rows => [...rows, { id: `sp_${Date.now().toString(36)}`, label: '新特例人物', handle: '', enabled: true, replyStyle: '', rules: {} }].slice(0, 50)),
+                }, '＋ 空白行'))),
+            specialRows.length === 0
+              ? h('div', { style: { marginTop: 12, padding: 14, border: `1px dashed ${C.border}`, borderRadius: 10, color: C.faint, fontSize: 12 } }, '还没有特例人物，点击「添加特例人物」新增一行。')
+              : null,
+            h('div', { style: { display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 } },
+              ...specialRows.map((person, index) => h('div', {
+                key: person.id,
+                style: { background: C.surface, border: `1px solid ${person.enabled === false ? C.border : C.accent}`, borderRadius: 10, padding: 14, display: 'flex', flexDirection: 'column', gap: 8, opacity: person.enabled === false ? 0.72 : 1 },
+              },
+                h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
+                  h('strong', { style: { fontSize: 14, color: C.text } },
+                    `${person.enabled === false ? '⏸' : '✅'} ${person.label || '未命名'}${person.handle ? ` · @${person.handle}` : ' · 未填账号'}`),
+                  h('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap' } },
+                    h('button', { type: 'button', style: { ...buttonStyle(), padding: '3px 9px', fontSize: 12 }, disabled: index === 0, onClick: () => moveSpecialRow(person.id, -1) }, '↑ 上移'),
+                    h('button', { type: 'button', style: { ...buttonStyle(), padding: '3px 9px', fontSize: 12 }, disabled: index === specialRows.length - 1, onClick: () => moveSpecialRow(person.id, 1) }, '↓ 下移'),
+                    h('button', { type: 'button', style: { ...buttonStyle(), padding: '3px 9px', fontSize: 12, color: C.error }, onClick: () => { removeSpecialRow(person.id); setNotice(`已删除特例人物「${person.label || person.handle || '未命名'}」，记得点保存。`); } }, '🗑 删除'))),
+                h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10 } },
+                  h('label', { style: labelStyle }, 'X 账号名（不带 @）',
+                    h('input', {
+                      style: inputStyle, maxLength: 15, placeholder: '例如 4ggug',
+                      value: person.handle || '',
+                      onChange: e => updateSpecialRow(person.id, { handle: e.target.value.replace(/[^A-Za-z0-9_]/g, '').toLowerCase() }),
+                    })),
+                  h('label', { style: labelStyle }, '显示名称（只影响界面）',
+                    h('input', { style: inputStyle, maxLength: 40, value: person.label || '', onChange: e => updateSpecialRow(person.id, { label: e.target.value }) })),
+                  h('label', { style: { ...labelStyle, display: 'flex', gap: 8, alignItems: 'center', marginTop: 28, fontSize: 13 } },
+                    h('input', { type: 'checkbox', checked: person.enabled !== false, onChange: e => updateSpecialRow(person.id, { enabled: e.target.checked }) }), '启用该人物特例')),
+                h('div', { style: { fontSize: 12, color: C.muted } }, specialRowNote(person.id)),
+                h('label', { style: labelStyle }, '专属回复规则 / 附加提示词（空白则只用 Worker 内置规则）',
+                  h('textarea', {
+                    style: { ...inputStyle, minHeight: 88 }, maxLength: 4000,
+                    value: person.replyStyle || '',
+                    placeholder: '例如：聊两性，撩骚；或：遇到易经的帖子专门跟它聊易经',
+                    onChange: e => updateSpecialRow(person.id, { replyStyle: e.target.value }),
+                  })),
+                person.id === 'apex'
+                  ? h('label', { style: { display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 } },
+                    h('input', {
+                      type: 'checkbox', checked: person.rules?.careEnabled !== true,
+                      onChange: e => updateSpecialRow(person.id, { rules: { ...(person.rules || {}), careEnabled: !e.target.checked } }),
+                    }), '禁用日常问候关怀分支')
+                  : null)),
+            ),
             h('section', { style: { marginTop: 12, padding: 14, border: `1px solid ${C.border}`, borderRadius: 10, background: C.surface } },
               h('h3', { style: { margin: '0 0 6px', fontSize: 14 } }, '🤖 回复时跳过名单'),
               h('p', { style: { margin: '0 0 8px', fontSize: 12, color: C.faint } }, '这些句柄不会进入 mention 回复流程；支持增加、删除和批量粘贴。'),
@@ -2400,11 +2493,38 @@ window.__ModuleLoader__.load({
             onClick: async () => {
               // Commit the free-text fields at save time so a value typed but not
               // yet blurred is still persisted.
+              // Special-person rows: drop blank rows (a freshly added row the
+              // operator never filled in) and mirror apex/yijing back into their
+              // legacy objects so old worker builds read the same values.
+              const keptRows = normalizeSpecialRows(config?.specialPersons)
+                .filter(row => String(row.handle || '').trim())
+                .slice(0, 50);
+              const legacyPeople = {};
+              for (const row of keptRows) {
+                if (row.id !== 'apex' && row.id !== 'yijing') continue;
+                legacyPeople[row.id] = {
+                  handle: row.handle, enabled: row.enabled !== false,
+                  replyStyle: row.replyStyle || '', rules: row.rules || {},
+                };
+              }
+              // A deleted row must actually stop contributing rules, otherwise the
+              // legacy apex/yijing objects would keep injecting old prompts.
+              for (const key of ['apex', 'yijing']) {
+                if (legacyPeople[key]) continue;
+                const legacy = (config.specialPersons || {})[key];
+                if (!legacy || typeof legacy !== 'object') continue;
+                legacyPeople[key] = { ...legacy, replyStyle: '', rules: {} };
+              }
               const current = {
                 ...config,
                 postSettings: { ...(config.postSettings || {}), topics: splitTopics(topicsText) },
                 specialPersons: {
                   ...(config.specialPersons || {}),
+                  ...legacyPeople,
+                  list: keptRows.map(row => ({
+                    id: row.id, label: row.label, handle: row.handle,
+                    enabled: row.enabled !== false, replyStyle: row.replyStyle || '',
+                  })),
                   skipReplyHandles: splitList(skipHandlesText),
                 },
                 tiers: (config.tiers || []).map(tier => (

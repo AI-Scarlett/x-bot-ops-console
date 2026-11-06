@@ -1796,3 +1796,61 @@ test('learning tab is present in the client bundle', async () => {
   assert.match(source, /避写话题/);
   assert.match(source, /立即学习一次/);
 });
+
+test('special person rows are operator-managed: migrate, validate, add, delete', () => {
+  // Legacy configs only carried apex/yijing objects; they migrate into rows.
+  const legacy = structuredClone(DEFAULT_CONFIG);
+  delete legacy.specialPersons.list;
+  const migrated = validateConfig(legacy).specialPersons.list;
+  assert.deepEqual(migrated.map(row => row.id), ['apex', 'yijing']);
+  assert.equal(migrated[0].handle, '4ggug');
+  assert.equal(migrated[1].handle, 'mrchen1998');
+  assert.equal(migrated[0].replyStyle, '聊两性，撩骚');
+
+  // A fully custom row is accepted, normalised and trimmed.
+  const custom = structuredClone(DEFAULT_CONFIG);
+  custom.specialPersons.list = [
+    ...custom.specialPersons.list,
+    { id: 'sp_1', label: '新朋友', handle: '@New_Friend', enabled: true, replyStyle: '聊茶与旧书' },
+  ];
+  const kept = validateConfig(custom).specialPersons.list;
+  assert.equal(kept.length, 3);
+  assert.equal(kept[2].handle, 'new_friend');
+  assert.equal(kept[2].label, '新朋友');
+
+  // Deleting a row is allowed and stays deleted.
+  const removed = structuredClone(DEFAULT_CONFIG);
+  removed.specialPersons.list = removed.specialPersons.list.filter(row => row.id !== 'yijing');
+  removed.specialPersons.yijing = { ...removed.specialPersons.yijing, replyStyle: '' };
+  assert.deepEqual(validateConfig(removed).specialPersons.list.map(row => row.id), ['apex']);
+
+  // Junk rows are rejected with actionable messages.
+  const duplicate = structuredClone(DEFAULT_CONFIG);
+  duplicate.specialPersons.list = [
+    { id: 'a', label: 'A', handle: 'same', enabled: true, replyStyle: '' },
+    { id: 'b', label: 'B', handle: 'SAME', enabled: true, replyStyle: '' },
+  ];
+  assert.throws(() => validateConfig(duplicate), /重复/);
+  const badHandle = structuredClone(DEFAULT_CONFIG);
+  badHandle.specialPersons.list = [{ id: 'a', label: 'A', handle: 'bad handle!', enabled: true, replyStyle: '' }];
+  assert.throws(() => validateConfig(badHandle), /1~15 位字母/);
+  const tooMany = structuredClone(DEFAULT_CONFIG);
+  tooMany.specialPersons.list = Array.from({ length: 51 }, (_, i) => ({ id: `s${i}`, label: `S${i}`, handle: `h${i}`, enabled: true, replyStyle: '' }));
+  assert.throws(() => validateConfig(tooMany), /最多 50 个/);
+  const tooLongRow = structuredClone(DEFAULT_CONFIG);
+  tooLongRow.specialPersons.list = [{ id: 'a', label: 'A', handle: 'abc', enabled: true, replyStyle: 'x'.repeat(4001) }];
+  assert.throws(() => validateConfig(tooLongRow), /4000 字/);
+});
+
+test('reply tab ships the special-person editor with add and delete controls', async () => {
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.match(source, /normalizeSpecialRows/);
+  assert.match(source, /updateSpecialRow/);
+  assert.match(source, /removeSpecialRow/);
+  assert.match(source, /moveSpecialRow/);
+  assert.match(source, /添加特例人物/);
+  assert.match(source, /🗑 删除/);
+  assert.match(source, /专属回复规则 \/ 附加提示词/);
+  // Legacy objects stay in sync so tier logic in the workers still resolves.
+  assert.match(source, /legacyPeople/);
+});
