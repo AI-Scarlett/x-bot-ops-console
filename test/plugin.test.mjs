@@ -2091,3 +2091,56 @@ test('ensure-chrome reports every worker and honours a broken launcher', async (
     assert.match(partial.results.find(item => item.key === 'post').error, /chrome_launcher/);
   } finally { f.cleanup(); }
 });
+
+test('x session cookies are filtered, scoped and never echoed to the caller', async () => {
+  const { xSessionCookies, cdpCookieParams } = await import('../index.js');
+  const raw = [
+    { name: 'auth_token', value: 'a'.repeat(40), domain: '.x.com', path: '/', secure: true, httpOnly: true, sameSite: 'Lax' },
+    { name: 'ct0', value: 'b'.repeat(32), domain: 'x.com', path: '/', secure: true, httpOnly: false, sameSite: 'None' },
+    { name: 'guest_id', value: 'v1%3A123', domain: '.x.com', path: '/', expires: 1800000000 },
+    { name: '_other', value: 'nope', domain: '.example.com', path: '/' },
+    { name: 'junk', value: 'x', domain: 'notx.com', path: '/' },
+    { name: '', value: 'empty-name', domain: '.x.com' },
+    null,
+  ];
+  const kept = xSessionCookies(raw);
+  assert.deepEqual(kept.map(item => item.name), ['auth_token', 'ct0', 'guest_id']);
+  // A bare host domain is widened to the registrable domain so it is sent to x.com.
+  assert.equal(cdpCookieParams(kept[1]).domain, '.x.com');
+  assert.equal(cdpCookieParams(kept[0]).httpOnly, true);
+  assert.equal(cdpCookieParams(kept[1]).sameSite, 'None');
+  assert.equal(cdpCookieParams(kept[1]).sameSite === 'None' ? 1 : 0, 1);
+  // Unspecified same-site values fall back to Lax, and expiry only when finite.
+  assert.equal(cdpCookieParams({ name: 'n', value: 'v', domain: '.x.com', sameSite: 'Unspecified' }).sameSite, 'Lax');
+  assert.ok(!('expires' in cdpCookieParams({ name: 'n', value: 'v', domain: '.x.com', expires: -1 })));
+  assert.equal(cdpCookieParams(kept[2]).expires, 1800000000);
+  assert.deepEqual(xSessionCookies(null), []);
+  assert.deepEqual(xSessionCookies([{ name: 'x', domain: '.twitter.com' }]), []);
+});
+
+test('login status and sync-login fail cleanly when nothing is reachable', async () => {
+  const f = fixture();
+  try {
+    const closed = await (async () => {
+      const server = createServer();
+      await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+      const port = server.address().port;
+      await new Promise(resolve => server.close(resolve));
+      return port;
+    })();
+    const targets = {
+      comment: { dir: f.dir, worker: join(f.dir, 'comment_worker.py'), port: closed },
+      reply: { dir: f.dir, worker: join(f.dir, 'reply_worker.py'), port: closed },
+      post: { dir: f.dir, worker: join(f.dir, 'post_worker.py'), port: closed },
+      profile: { dir: f.dir, worker: join(f.dir, 'profile_worker.py'), port: closed },
+    };
+    const targetsPath = join(f.dir, 'targets.json');
+    writeFileSync(targetsPath, JSON.stringify({ targets }));
+    const service = createService({ paths: targets, targetsPath, configPath: join(f.dir, 'config.json'), platform: 'darwin' });
+    const status = await service.action({ action: 'chrome-login-status' });
+    assert.equal(status.loggedIn, 0);
+    assert.equal(status.results.length, 4);
+    assert.ok(status.results.every(item => item.ok === false && /连不上|没有可操作|超时/.test(item.error)));
+    await assert.rejects(service.action({ action: 'sync-login' }), /都没有可用的 X 登录态/);
+  } finally { f.cleanup(); }
+});

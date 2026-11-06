@@ -297,6 +297,8 @@ window.__ModuleLoader__.load({
       const [learnBusy, setLearnBusy] = React.useState(false);
       const [styleGuideDraft, setStyleGuideDraft] = React.useState('');
       const [bannedDraft, setBannedDraft] = React.useState('');
+      // Last X login probe: { comment: true, reply: false, ... } when it ran.
+      const [loginStatus, setLoginStatus] = React.useState(null);
       const saveLock = React.useRef(false);
       const latestSaveHash = React.useRef(null);
       const serverSnapshot = React.useRef(null);
@@ -880,6 +882,46 @@ window.__ModuleLoader__.load({
                     ['comment', 'reply', 'post', 'profile']
                       .map(key => `${key}${state?.items?.[key]?.cdpAvailable ? '✅' : '❌'}`)
                       .join(' '))),
+                h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8, alignItems: 'center' } },
+                  h('button', {
+                    type: 'button', disabled: busy,
+                    style: { ...buttonStyle(false), padding: '7px 14px', fontSize: 12 },
+                    onClick: async () => {
+                      try {
+                        const res = await act('chrome-login-status');
+                        const map = {};
+                        for (const item of res?.results || []) map[item.key] = Boolean(item.ok && item.loggedIn);
+                        setLoginStatus(map);
+                        setNotice(res?.note || '登录状态已检查。');
+                      } catch (err) { setError(`检查登录失败：${err.message || String(err)}`); }
+                    },
+                  }, '🔍 检查 X 登录状态'),
+                  h('button', {
+                    type: 'button', disabled: busy,
+                    style: { ...buttonStyle(false), padding: '7px 14px', fontSize: 12 },
+                    onClick: () => askConfirmText(
+                      '用一个已登录的浏览器，把 x.com 的 Cookie 复制到另外三个浏览器？\n\n'
+                      + '做的是：从一个已登录的 Chrome 读出 13~17 个 x.com Cookie，直接写进其他三个浏览器的 Cookie 库并刷新页面。'
+                      + '这样不用每个窗口手输账号密码。Cookie 值不会显示在界面或日志里，也不会离开这台电脑。',
+                      async () => {
+                        try {
+                          setNotice('正在复制登录态…');
+                          const res = await act('sync-login');
+                          setNotice(res?.note || '登录态已同步。');
+                          const map = {};
+                          for (const item of res?.applied || []) map[item.key] = Boolean(item.loggedIn);
+                          if (res?.source) map[res.source] = true;
+                          setLoginStatus(map);
+                          await refresh();
+                        } catch (err) { setError(`同步登录态失败：${err.message || String(err)}`); }
+                      }),
+                  }, '🍪 同步登录态（免手动登录）'),
+                  loginStatus
+                    ? h('span', { style: { fontSize: 11, color: C.muted } },
+                      ['comment', 'reply', 'post', 'profile']
+                        .map(key => `${key}${loginStatus[key] === undefined ? '❔' : (loginStatus[key] ? '🔓' : '🔒')}`)
+                        .join(' '))
+                    : null),
                 h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 } },
                   h('button', {
                     type: 'button', disabled: busy,
@@ -915,6 +957,7 @@ window.__ModuleLoader__.load({
                   }, '🔄 刷新状态')),
                 h('small', { style: { display: 'block', marginTop: 10, fontSize: 11, color: C.faint, lineHeight: 1.7 } },
                   '重启电脑后 Chrome 不会自己回来：先点「拉起全部 Chrome」，等四个 ✅ 再看 worker 是否恢复。'
+                  + '浏览器起来了但仍显示 waiting_login 时，点「🍪 同步登录态」从一个已登录窗口复制 Cookie，不必逐个手输密码；'
                   + '看门狗挂了会表现为「点重启没反应 / 提示身份未验证」，先点「重启全部看门狗」即可恢复；'
                   + '磁盘满了会导致 Worker 静默崩溃，先点「立即清理缓存」。'),
               );

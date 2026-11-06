@@ -1313,6 +1313,121 @@ export function chromeProfileFor(key, target = {}) {
   return join(CHROME_PROFILE_ROOT, key);
 }
 
+// ---- X session sharing over CDP --------------------------------------------
+// X keeps the login in two cookies (auth_token + ct0). They live in each Chrome
+// profile, so a brand-new profile (or one whose /tmp profile was wiped) is signed
+// out. Rather than asking the operator to log in four times, copy the session from
+// whichever browser is already signed in. Cookie values are never logged or
+// returned to the UI — only counts and names of what moved.
+const X_COOKIE_DOMAIN = /(^|\.)x\.com$/i;
+export const LOGIN_MARKER_JS = "Boolean(document.querySelector('[data-testid=\"SideNav_AccountSwitcher_Button\"]'))";
+
+export function xSessionCookies(cookies) {
+  const list = Array.isArray(cookies) ? cookies : [];
+  return list.filter(item => item && typeof item.name === 'string' && item.name && X_COOKIE_DOMAIN.test(String(item.domain || '')));
+}
+
+export function cdpCookieParams(cookie) {
+  const domain = String(cookie.domain || '.x.com');
+  const sameSite = String(cookie.sameSite || '');
+  const params = {
+    name: String(cookie.name),
+    value: String(cookie.value ?? ''),
+    domain: domain.startsWith('.') ? domain : `.${domain}`,
+    path: String(cookie.path || '/'),
+    secure: cookie.secure !== false,
+    httpOnly: Boolean(cookie.httpOnly),
+    sameSite: sameSite && sameSite !== 'Unspecified' ? sameSite : 'Lax',
+  };
+  const expires = Number(cookie.expires);
+  if (Number.isFinite(expires) && expires > 0) params.expires = expires;
+  return params;
+}
+
+// Minimal CDP client on Node's built-in WebSocket: one page, one promise chain.
+export async function withCdpPage(port, fn, { timeoutMs = 20000 } = {}) {
+  const numericPort = Number(port);
+  if (!Number.isInteger(numericPort) || numericPort <= 0) throw new Error(`无效的调试端口：${port}`);
+  let tabs;
+  try {
+    tabs = await (await fetch(`http://127.0.0.1:${numericPort}/json/list`, { cache: 'no-store' })).json();
+  } catch (error) {
+    throw new Error(`端口 ${numericPort} 连不上（Chrome 没起来？）：${String(error?.message || error).slice(0, 120)}`);
+  }
+  const page = (Array.isArray(tabs) ? tabs : []).find(item => item && item.type === 'page' && item.webSocketDebuggerUrl);
+  if (!page) throw new Error(`端口 ${numericPort} 上没有可操作的页面`);
+  if (typeof WebSocket !== 'function') throw new Error('当前 Node 不支持 WebSocket');
+  const ws = new WebSocket(page.webSocketDebuggerUrl);
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('连接调试页面超时')), timeoutMs);
+    ws.addEventListener('open', () => { clearTimeout(timer); resolve(); }, { once: true });
+    ws.addEventListener('error', () => { clearTimeout(timer); reject(new Error('连接调试页面失败')); }, { once: true });
+  });
+  let nextId = 0;
+  const pending = new Map();
+  ws.addEventListener('message', event => {
+    let message;
+    try { message = JSON.parse(typeof event.data === 'string' ? event.data : String(event.data)); } catch { return; }
+    const waiter = message && message.id ? pending.get(message.id) : null;
+    if (!waiter) return;
+    pending.delete(message.id);
+    if (message.error) waiter.reject(new Error(message.error.message || 'CDP 调用失败'));
+    else waiter.resolve(message.result);
+  });
+  const call = (method, params = {}) => new Promise((resolve, reject) => {
+    const id = ++nextId;
+    const timer = setTimeout(() => { pending.delete(id); reject(new Error(`CDP ${method} 超时`)); }, timeoutMs);
+    pending.set(id, {
+      resolve: value => { clearTimeout(timer); resolve(value); },
+      reject: error => { clearTimeout(timer); reject(error); },
+    });
+    ws.send(JSON.stringify({ id, method, params }));
+  });
+  try {
+    return await fn(call);
+  } finally {
+    try { ws.close(); } catch { /* already closed */ }
+  }
+}
+
+export async function probeXLogin(port, { timeoutMs = 9000 } = {}) {
+  return withCdpPage(port, async call => {
+    const res = await call('Runtime.evaluate', {
+      expression: `({url: location.href, marker: ${LOGIN_MARKER_JS}})`,
+      returnByValue: true,
+    });
+    const value = (res && res.result && res.result.value) || {};
+    return { loggedIn: Boolean(value.marker), url: String(value.url || '') };
+  }, { timeoutMs });
+}
+
+export async function exportXSession(port) {
+  const cookies = await withCdpPage(port, async call => {
+    await call('Network.enable');
+    const result = await call('Network.getAllCookies');
+    return (result && result.cookies) || [];
+  }, { timeoutMs: 15000 });
+  return xSessionCookies(cookies);
+}
+
+export async function applyXSession(port, cookies) {
+  return withCdpPage(port, async call => {
+    await call('Network.enable');
+    let set = 0;
+    const failed = [];
+    for (const cookie of cookies) {
+      try {
+        await call('Network.setCookie', cdpCookieParams(cookie));
+        set += 1;
+      } catch {
+        failed.push(String(cookie.name));
+      }
+    }
+    try { await call('Page.navigate', { url: 'https://x.com/home' }); } catch { /* page may already be there */ }
+    return { set, failed };
+  }, { timeoutMs: 40000 });
+}
+
 export function chromeLauncherPath(target = {}) {
   if (typeof target.chromeLauncher === 'string' && target.chromeLauncher.trim()) {
     return existsSync(target.chromeLauncher.trim()) ? target.chromeLauncher.trim() : '';
@@ -2293,6 +2408,81 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         ready,
         note: `已检查 ${results.length} 个浏览器：${ready} 个 CDP 就绪。` +
           (ready < results.length ? ' 未就绪的请看 results 里的说明；首次使用新配置目录需要在弹出的 Chrome 窗口里登录 X。' : ''),
+      };
+    }
+    if (request.action === 'chrome-login-status') {
+      const all = currentTargets() || {};
+      const order = ['comment', 'reply', 'post', 'profile'];
+      const results = [];
+      for (const key of order) {
+        const target = all[key];
+        if (!target) continue;
+        try {
+          const info = await probeXLogin(target.port);
+          results.push({ key, port: target.port, ok: true, loggedIn: info.loggedIn, url: info.url });
+        } catch (error) {
+          results.push({ key, port: target.port, ok: false, error: String(error?.message || error).slice(0, 200) });
+        }
+      }
+      const loggedIn = results.filter(item => item.ok && item.loggedIn).length;
+      return {
+        ok: true,
+        action: 'chrome-login-status',
+        results,
+        loggedIn,
+        note: `已检查 ${results.length} 个浏览器：${loggedIn} 个已登录 X。`,
+      };
+    }
+    if (request.action === 'sync-login') {
+      const all = currentTargets() || {};
+      const order = ['comment', 'reply', 'post', 'profile'];
+      const preferred = typeof request.from === 'string' && order.includes(request.from) ? request.from : '';
+      const candidates = preferred ? [preferred, ...order.filter(key => key !== preferred)] : order;
+      // 1. Find a browser that still holds a usable X session.
+      let source = '';
+      let session = [];
+      for (const key of candidates) {
+        const target = all[key];
+        if (!target) continue;
+        try {
+          const cookies = await exportXSession(target.port);
+          if (!cookies.some(cookie => cookie.name === 'auth_token')) continue;
+          const probe = await probeXLogin(target.port);
+          if (!probe.loggedIn) continue;
+          source = key;
+          session = cookies;
+          break;
+        } catch { /* try the next browser */ }
+      }
+      if (!session.length) throw new Error('四个浏览器都没有可用的 X 登录态；请先在任意一个窗口里手动登录一次。');
+      // 2. Replay the cookies into every other browser and verify.
+      const applied = [];
+      for (const key of order) {
+        if (key === source) continue;
+        const target = all[key];
+        if (!target) continue;
+        try {
+          const result = await applyXSession(target.port, session);
+          let loggedIn = false;
+          for (let attempt = 0; attempt < 3 && !loggedIn; attempt += 1) {
+            await new Promise(resolve => setTimeout(resolve, attempt === 0 ? 4000 : 3000));
+            try { loggedIn = (await probeXLogin(target.port)).loggedIn; } catch { /* keep polling */ }
+          }
+          applied.push({ key, port: target.port, ok: true, cookiesSet: result.set, failedNames: result.failed, loggedIn });
+        } catch (error) {
+          applied.push({ key, port: target.port, ok: false, error: String(error?.message || error).slice(0, 200) });
+        }
+      }
+      const done = applied.filter(item => item.loggedIn).length;
+      return {
+        ok: true,
+        action: 'sync-login',
+        source,
+        cookieCount: session.length,
+        applied,
+        note: `已从「${source}」复制 ${session.length} 个 x.com Cookie，${done}/${applied.length} 个浏览器恢复登录。`
+          + (done < applied.length ? ' 没成功的窗口请手动登录一次。' : '')
+          + ' Cookie 值不会显示在界面或日志里。',
       };
     }
     if (request.action === 'fetch-trends') {

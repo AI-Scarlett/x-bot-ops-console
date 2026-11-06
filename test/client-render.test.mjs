@@ -266,3 +266,25 @@ test('an invalid React child is rejected by the harness itself', () => {
     assert.throws(() => app.React.createElement('div', null, { topic: 'x', ok: true }), /Invalid React child/);
   } finally { app.close(); }
 });
+
+test('ops panel wires the login probe and the cookie sync button', async () => {
+  const app = mount({ tab: 'general' });
+  try {
+    let tree = app.render();
+    assert.match(flatText(tree), /拉起全部 Chrome/);
+    assert.match(flatText(tree), /检查 X 登录状态/);
+    assert.match(flatText(tree), /同步登录态/);
+
+    // The probe posts the dedicated action and survives a payload without results.
+    await app.click(tree, '检查 X 登录状态');
+    assert.ok(app.requests.some(body => body.action === 'chrome-login-status'), 'probe action should be posted');
+    tree = app.render();
+    assert.ok(!/界面渲染遇到错误/.test(flatText(tree)));
+
+    // The cookie sync asks for confirmation first (no accidental cookie copying).
+    await app.click(tree, '同步登录态');
+    tree = app.render();
+    assert.match(flatText(tree), /复制到另外三个浏览器/);
+    assert.ok(!app.requests.some(body => body.action === 'sync-login'), 'sync must wait for confirmation');
+  } finally { app.close(); }
+});
