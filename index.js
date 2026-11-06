@@ -487,6 +487,39 @@ export function enforceOneSentencePerLine(text) {
 
 export const ONE_SENTENCE_RULE = '【格式硬性要求】每一句话必须单独占一行，句与句之间必须换行；禁止把多句连成一整段，禁止使用空行。';
 
+// Build an exact, interleaved theme plan for a whole batch.
+//
+// Weighted random per item clusters themes together (six "生活" posts in a row).
+// A batch of N instead gets an exact quota per theme (largest-remainder), then
+// the quotas are spread evenly across the batch so themes alternate.
+export function planThemeBatch(mix, count) {
+  const usable = (Array.isArray(mix) ? mix : [])
+    .filter(item => isRecord(item) && Number(item.weight) > 0);
+  const size = Math.max(0, Math.floor(Number(count) || 0));
+  if (!usable.length || size === 0) return [];
+
+  const total = usable.reduce((sum, item) => sum + Number(item.weight), 0);
+  const exact = usable.map(item => (size * Number(item.weight)) / total);
+  const counts = exact.map(value => Math.floor(value));
+  let left = size - counts.reduce((a, b) => a + b, 0);
+  exact
+    .map((value, index) => ({ index, frac: value - Math.floor(value) }))
+    .sort((a, b) => b.frac - a.frac)
+    .slice(0, Math.max(0, left))
+    .forEach(entry => { counts[entry.index] += 1; });
+
+  // Place each theme's slots on an even stride, then order by position.
+  const slots = [];
+  usable.forEach((item, index) => {
+    const n = counts[index];
+    if (!n) return;
+    const stride = size / n;
+    for (let k = 0; k < n; k += 1) slots.push({ theme: item, pos: (k + 0.5) * stride });
+  });
+  slots.sort((a, b) => a.pos - b.pos);
+  return slots.map(slot => slot.theme);
+}
+
 // Pick a content theme by weight, so the mix config drives what gets written about.
 export function pickTopicTheme(mix, random = Math.random) {
   const usable = (Array.isArray(mix) ? mix : []).filter(item => isRecord(item) && Number(item.weight) > 0);
@@ -1369,9 +1402,10 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       const maxSize = Number(postCfg.queueMaxSize) || 100;
       const generated = [];
       const failures = [];
+      const themePlan = planThemeBatch(postCfg.topicMix, count);
       for (let i = 0; i < count; i++) {
         const topic = pool[Math.floor(Math.random() * pool.length)];
-        const theme = pickTopicTheme(postCfg.topicMix);
+        const theme = themePlan[i] || pickTopicTheme(postCfg.topicMix);
         // When a weighted theme is active it owns the content direction; a random
         // topic hint would fight it, so the hint is dropped in that case.
         const themeBlock = theme
@@ -1388,6 +1422,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
               text: draftText,
               topic,
               sig: postSettingsSignature(postCfg),
+              theme: theme ? theme.label : '',
               source: oneOffPrompt ? 'ai_draft_custom' : 'ai_draft',
               urgent: false,
               createdAt: new Date().toISOString(),

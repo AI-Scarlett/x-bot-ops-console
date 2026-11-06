@@ -1122,6 +1122,40 @@ test('persona override, stop keywords and finance keywords are configurable', as
   assert.match(source, /追加「财经类」判定关键词/);
 });
 
+test('batch theme plan hits the exact quota and interleaves themes', async () => {
+  const { planThemeBatch } = await import('../index.js');
+  const mix = [
+    { label: '文言文', weight: 30 },
+    { label: '撩女人', weight: 50 },
+    { label: '谈生活', weight: 20 },
+  ];
+
+  const plan10 = planThemeBatch(mix, 10);
+  assert.equal(plan10.length, 10);
+  const counts = plan10.reduce((acc, item) => { acc[item.label] = (acc[item.label] || 0) + 1; return acc; }, {});
+  assert.deepEqual(counts, { 文言文: 3, 撩女人: 5, 谈生活: 2 });
+
+  // No theme should run for more than two consecutive slots.
+  let run = 1;
+  let worst = 1;
+  for (let i = 1; i < plan10.length; i += 1) {
+    run = plan10[i].label === plan10[i - 1].label ? run + 1 : 1;
+    worst = Math.max(worst, run);
+  }
+  assert.ok(worst <= 2, `themes clustered ${worst} in a row: ${plan10.map(t => t.label).join(',')}`);
+
+  // Odd batch sizes still sum to the requested count and keep ratios close.
+  for (const size of [1, 3, 7, 13]) {
+    const plan = planThemeBatch(mix, size);
+    assert.equal(plan.length, size, `size ${size}`);
+  }
+
+  const single = planThemeBatch([{ label: '唯一', weight: 100 }], 5);
+  assert.deepEqual(single.map(t => t.label), ['唯一', '唯一', '唯一', '唯一', '唯一']);
+  assert.deepEqual(planThemeBatch([], 5), []);
+  assert.deepEqual(planThemeBatch(mix, 0), []);
+});
+
 test('save rebases onto disk so untouched prompts are never wiped', async () => {
   const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
 
