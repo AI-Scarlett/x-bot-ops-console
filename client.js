@@ -453,7 +453,7 @@ window.__ModuleLoader__.load({
               t('title')),
             h('p', { style: { margin: '4px 0 0', fontSize: 13, color: C.muted } }, t('subtitle'))),
           h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.14.0'),
+            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.14.1'),
             h('button', {
               type: 'button',
               disabled: busy || updating,
@@ -1734,7 +1734,45 @@ window.__ModuleLoader__.load({
                     })),
                   })))))),
 
-          // 2. X 榜单拆解
+          // Cookie 配置（需登录态的榜单）
+        h('section', { style: cardStyle },
+          h('h2', { style: { margin: 0, fontSize: 15 } }, '🍪 榜单 Cookie（需登录态的源才要填）'),
+          h('p', { style: { margin: '6px 0 10px', fontSize: 12, color: C.faint, lineHeight: 1.6 } },
+            '打开对应网站登录后：F12 → Network → 任一请求 → Request Headers → 复制 Cookie 整段粘贴进来，然后勾选启用该源。已保存的 Cookie 不会回显（只显示「已配置」）；要更换就重新粘贴，清空输入框再保存即删除。'),
+          h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
+            ...((config?.learningSettings?.trendSources) || []).map(source => {
+              const isSet = source.cookie === '__COOKIE_SET__';
+              return h('div', {
+                key: 'cookie-' + source.id,
+                style: { display: 'flex', gap: 8, alignItems: 'center', padding: '6px 10px', background: C.layerTwo, borderRadius: 6, border: `1px solid ${C.border}` }
+              },
+                h('span', { style: { flex: '0 0 110px', fontSize: 12, color: C.muted } }, source.label),
+                h('span', { style: { flex: '0 0 64px', fontSize: 11, color: isSet ? C.success : C.faint } }, isSet ? '✓ 已配置' : '未配置'),
+                h('input', {
+                  type: 'password',
+                  style: { ...inputStyle, flex: '1 1 260px', margin: 0, fontSize: 12 },
+                  placeholder: isSet ? '已保存；留空保持不变' : '粘贴 Cookie，例如 SUB=...; SUBP=...',
+                  value: isSet ? '' : (source.cookie || ''),
+                  onChange: e => {
+                    const next = e.target.value;
+                    updateConfig(c => ({
+                      ...c,
+                      learningSettings: {
+                        ...(c.learningSettings || {}),
+                        trendSources: (c.learningSettings?.trendSources || []).map(item => {
+                          if (item.id !== source.id) return item;
+                          // An empty box on a saved cookie means "keep it as is".
+                          if (!next && item.cookie === '__COOKIE_SET__') return item;
+                          return { ...item, cookie: next };
+                        }),
+                      },
+                    }));
+                  },
+                }));
+            })))
+        ,
+
+        // 2. X 榜单拆解
           h('section', { style: cardStyle },
             h('h2', { style: { margin: 0, fontSize: 15 } }, '② X 榜单高曝光帖拆解（可选）'),
             h('p', { style: { margin: '6px 0 10px', fontSize: 12, color: C.faint, lineHeight: 1.6 } },

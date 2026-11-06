@@ -1200,6 +1200,59 @@ test('trend sources are configurable and topics are extracted from boards', asyn
   assert.match(source, /立即抓取热榜/);
 });
 
+test('trend cookies are stored, masked in responses and preserved on save', async () => {
+  const f = fixture();
+  try {
+    const configPath = join(f.dir, 'config.json');
+    const service = createService({
+      paths: f.paths,
+      configPath,
+      backupDir: join(f.dir, 'history'),
+      queuePath: join(f.dir, 'q.json'),
+      learningsPath: join(f.dir, 'l.json'),
+      platform: 'darwin',
+    });
+    const initial = await service.action({ action: 'state' });
+    const config = clone(initial.config);
+    config.learningSettings = {
+      ...config.learningSettings,
+      trendSources: [
+        { id: 'weibo', label: '微博热搜', url: 'https://weibo.com/ajax/side/hotSearch', enabled: true, cookie: 'SUB=secret-token; SUBP=more' },
+        { id: 'baidu', label: '百度热搜', url: 'https://top.baidu.com/board', enabled: true, cookie: '' },
+      ],
+    };
+    await service.action({ action: 'save-config', config, expectedConfigHash: initial.configHash });
+
+    // The API must never hand the raw cookie back.
+    const after = await service.action({ action: 'state' });
+    const weibo = after.config.learningSettings.trendSources.find(item => item.id === 'weibo');
+    assert.equal(weibo.cookie, '__COOKIE_SET__');
+    assert.ok(!JSON.stringify(after).includes('secret-token'), 'raw cookie leaked through state');
+    const baidu = after.config.learningSettings.trendSources.find(item => item.id === 'baidu');
+    assert.equal(baidu.cookie, '');
+
+    // Saving the masked config again must keep the stored cookie.
+    await service.action({ action: 'save-config', config: after.config, expectedConfigHash: after.configHash });
+    const stored = JSON.parse(readFileSync(configPath, 'utf8'));
+    const storedWeibo = stored.learningSettings.trendSources.find(item => item.id === 'weibo');
+    assert.equal(storedWeibo.cookie, 'SUB=secret-token; SUBP=more');
+
+    // Clearing the box explicitly removes it.
+    const cleared = clone(after.config);
+    cleared.learningSettings.trendSources = cleared.learningSettings.trendSources.map(item => (
+      item.id === 'weibo' ? { ...item, cookie: '' } : item
+    ));
+    const current = await service.action({ action: 'state' });
+    await service.action({ action: 'save-config', config: cleared, expectedConfigHash: current.configHash });
+    const storedAfterClear = JSON.parse(readFileSync(configPath, 'utf8'));
+    assert.equal(storedAfterClear.learningSettings.trendSources.find(item => item.id === 'weibo').cookie, '');
+
+    const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+    assert.match(source, /榜单 Cookie/);
+    assert.match(source, /已配置/);
+  } finally { f.cleanup(); }
+});
+
 test('save rebases onto disk so untouched prompts are never wiped', async () => {
   const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
 

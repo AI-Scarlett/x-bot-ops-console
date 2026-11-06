@@ -34,6 +34,7 @@ export const POST_METRICS_PATH = join(APP_HOME, 'Library/Application Support/XBo
 export const LEARN_TRIGGER_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/learn_now.trigger');
 export const CRUISE_HISTORY_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/profile_cruise_history.json');
 export const TRENDS_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/trends.json');
+export const COOKIE_SET_SENTINEL = '__COOKIE_SET__';
 export const CONFIG_BACKUP_DIR = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/config-history');
 const MAX_CONFIG_BACKUPS = 20;
 
@@ -399,6 +400,24 @@ export function extractTrendTopics(body) {
   return [...topics].slice(0, 50);
 }
 
+// Replace stored cookies with a sentinel so credentials never reach the UI.
+export function maskTrendCookies(config) {
+  if (!isRecord(config) || !isRecord(config.learningSettings)) return config;
+  const sources = config.learningSettings.trendSources;
+  if (!Array.isArray(sources)) return config;
+  return {
+    ...config,
+    learningSettings: {
+      ...config.learningSettings,
+      trendSources: sources.map(source => {
+        if (!isRecord(source)) return source;
+        const cookie = typeof source.cookie === 'string' ? source.cookie.trim() : '';
+        return { ...source, cookie: cookie ? COOKIE_SET_SENTINEL : '' };
+      }),
+    },
+  };
+}
+
 export function readTrends(trendsPath = TRENDS_PATH) {
   try {
     if (existsSync(trendsPath)) {
@@ -441,6 +460,7 @@ export async function fetchAllTrends(sources, { timeoutMs = 12000 } = {}) {
           headers: {
             'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36',
             accept: 'application/json,text/html,*/*',
+            ...(String(source.cookie || '').trim() ? { cookie: String(source.cookie).trim() } : {}),
           },
         });
         body = await response.text();
@@ -942,11 +962,12 @@ const DEFAULT_CONFIG = Object.freeze({
     model: '',
     // Hot-search boards mined for trending topics.
     trendSources: [
-      { id: 'baidu', label: '百度热搜', url: 'https://top.baidu.com/board?tab=realtime', enabled: true },
-      { id: 'toutiao', label: '头条热榜', url: 'https://www.toutiao.com/hot-event/hot-board/?origin=toutiao_pc', enabled: true },
-      { id: 'weibo', label: '微博热搜（需登录态，默认关）', url: 'https://weibo.com/ajax/side/hotSearch', enabled: false },
-      { id: 'zhihu', label: '知乎热榜（需登录态，默认关）', url: 'https://www.zhihu.com/api/v3/feed/topstory/hot-lists/total?limit=20', enabled: false },
-      { id: 'douyin', label: '抖音热榜（需签名，默认关）', url: 'https://www.douyin.com/aweme/v1/web/hot/search/list/', enabled: false },
+      { id: 'baidu', label: '百度热搜', url: 'https://top.baidu.com/board?tab=realtime', enabled: true, cookie: '' },
+      { id: 'toutiao', label: '头条热榜', url: 'https://www.toutiao.com/hot-event/hot-board/?origin=toutiao_pc', enabled: true, cookie: '' },
+      { id: 'weibo', label: '微博热搜', url: 'https://weibo.com/ajax/side/hotSearch', enabled: false, cookie: '' },
+      { id: 'zhihu', label: '知乎热榜', url: 'https://www.zhihu.com/api/v3/feed/topstory/hot-lists/total?limit=20', enabled: false, cookie: '' },
+      { id: 'douyin', label: '抖音热榜', url: 'https://www.douyin.com/aweme/v1/web/hot/search/list/', enabled: false, cookie: '' },
+      { id: 'xiaohongshu', label: '小红书热榜', url: 'https://www.xiaohongshu.com/api/sns/v1/search/hot_list', enabled: false, cookie: '' },
     ],
   },
 });
@@ -1301,6 +1322,8 @@ function validateConfig(input) {
         if (typeof source.label !== 'string' || !source.label.trim() || source.label.length > 60) throw new TypeError('热榜来源名称需为 1~60 字');
         if (typeof source.url !== 'string' || !/^https?:\/\//i.test(source.url) || source.url.length > 500) throw new TypeError('热榜来源地址必须是 http(s) 链接');
         if (typeof source.enabled !== 'boolean') throw new TypeError('热榜来源启用状态无效');
+        if (source.cookie !== undefined && typeof source.cookie !== 'string') throw new TypeError('热榜来源 Cookie 无效');
+        if (typeof source.cookie === 'string' && source.cookie.length > 8000) throw new TypeError('热榜来源 Cookie 过长');
       }
     }
     if (ls.benchmarkUrl !== undefined) {
@@ -1354,8 +1377,31 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
     try { return createHash('sha256').update(readFileSync(activeConfigPath)).digest('hex'); }
     catch (error) { if (error.code === 'ENOENT') return null; throw error; }
   };
+  // The UI only ever sees a sentinel for an existing cookie. On save, restore
+  // the real value so a plain page save cannot wipe a working login.
+  const restoreTrendCookies = (value) => {
+    if (!isRecord(value) || !isRecord(value.learningSettings)) return value;
+    const incoming = value.learningSettings.trendSources;
+    if (!Array.isArray(incoming)) return value;
+    let disk = null;
+    try { disk = JSON.parse(readFileSync(activeConfigPath, 'utf8')); } catch { disk = null; }
+    const diskSources = Array.isArray(disk?.learningSettings?.trendSources) ? disk.learningSettings.trendSources : [];
+    const byId = new Map(diskSources.filter(isRecord).map(item => [item.id, item]));
+    return {
+      ...value,
+      learningSettings: {
+        ...value.learningSettings,
+        trendSources: incoming.map(source => {
+          if (!isRecord(source) || source.cookie !== COOKIE_SET_SENTINEL) return source;
+          const stored = byId.get(source.id);
+          return { ...source, cookie: typeof stored?.cookie === 'string' ? stored.cookie : '' };
+        }),
+      },
+    };
+  };
+
   const saveConfig = (value, expectedHash) => {
-    const validated = validateConfig(value);
+    const validated = validateConfig(restoreTrendCookies(value));
     const currentHash = hashCurrentConfig();
     if (expectedHash === undefined) throw new Error('缺少配置版本标识；请刷新状态后再保存');
     if (expectedHash !== currentHash) throw new Error('共享配置已被其他进程修改；请刷新状态并重新检查后再保存');
@@ -1412,7 +1458,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       }
     } catch {}
     return {
-      ok: true, config: shared.config, configSource: shared.source, configPath: activeConfigPath, configHash,
+      ok: true, config: maskTrendCookies(shared.config), configSource: shared.source, configPath: activeConfigPath, configHash,
       runtimeConfigApplied: shared.source === 'shared', runtimeCapabilities, fieldSide: FIELD_SIDE,
       dshModels,
       postQueue: postQueue.queue,
