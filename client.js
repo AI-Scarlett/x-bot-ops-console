@@ -863,6 +863,23 @@ window.__ModuleLoader__.load({
                     style: { ...buttonStyle(false), padding: '7px 14px', fontSize: 12 },
                     onClick: () => askConfirmText('重启全部工作进程？看门狗会立即把它们重新拉起来。', () => bulk('重启工作进程', key => act('restart', key))),
                   }, '🔁 重启全部工作进程')),
+                h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8, alignItems: 'center' } },
+                  h('button', {
+                    type: 'button', disabled: busy,
+                    style: { ...buttonStyle(true), padding: '7px 14px', fontSize: 12 },
+                    onClick: async () => {
+                      try {
+                        setNotice('正在逐个拉起四个调试浏览器…');
+                        const res = await act('ensure-chrome');
+                        setNotice(res?.note || '浏览器已检查。');
+                        await refresh();
+                      } catch (err) { setError(`拉起 Chrome 失败：${err.message || String(err)}`); }
+                    },
+                  }, '🌐 拉起全部 Chrome（重启电脑后先点这个）'),
+                  h('span', { style: { fontSize: 11, color: C.muted } },
+                    ['comment', 'reply', 'post', 'profile']
+                      .map(key => `${key}${state?.items?.[key]?.cdpAvailable ? '✅' : '❌'}`)
+                      .join(' '))),
                 h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 } },
                   h('button', {
                     type: 'button', disabled: busy,
@@ -872,7 +889,9 @@ window.__ModuleLoader__.load({
                   h('button', {
                     type: 'button', disabled: busy,
                     style: { ...buttonStyle(false), padding: '7px 14px', fontSize: 12 },
-                    onClick: () => askConfirmText('全量重启：先重启四个看门狗，再重启四个工作进程。', async () => {
+                    onClick: () => askConfirmText('全量重启：先拉起四个调试浏览器，再重启看门狗，最后重启工作进程。', async () => {
+                      setNotice('正在拉起调试浏览器…');
+                      try { await act('ensure-chrome'); } catch (err) { setError(`拉起 Chrome 失败：${err.message || String(err)}`); }
                       setNotice('正在重启看门狗…');
                       await bulk('重启看门狗', key => act('restart-watchdog', key));
                       await new Promise(r => setTimeout(r, 4000));
@@ -895,7 +914,9 @@ window.__ModuleLoader__.load({
                     onClick: async () => { try { await refresh(); setNotice('状态已刷新。'); } catch (err) { setError(String(err.message || err)); } },
                   }, '🔄 刷新状态')),
                 h('small', { style: { display: 'block', marginTop: 10, fontSize: 11, color: C.faint, lineHeight: 1.7 } },
-                  '看门狗挂了会表现为「点重启没反应 / 提示身份未验证」，先点「重启全部看门狗」即可恢复；磁盘满了会导致 Worker 静默崩溃，先点「立即清理缓存」。'),
+                  '重启电脑后 Chrome 不会自己回来：先点「拉起全部 Chrome」，等四个 ✅ 再看 worker 是否恢复。'
+                  + '看门狗挂了会表现为「点重启没反应 / 提示身份未验证」，先点「重启全部看门狗」即可恢复；'
+                  + '磁盘满了会导致 Worker 静默崩溃，先点「立即清理缓存」。'),
               );
             })(),
             h('p', { style: { margin: '6px 0 0', fontSize: 13, color: sourceColor } }, sourceText),

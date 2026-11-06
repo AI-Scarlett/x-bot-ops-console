@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:net';
@@ -2032,4 +2032,62 @@ test('the hot-board safety floor survives an operator list that was replaced who
   assert.equal(kept.dropped.length, 2);
   // The operator list is never mutated in place.
   assert.deepEqual(live.hotFilter.excludeKeywords, ['政治', '被查']);
+});
+
+test('chrome profiles live outside /tmp and the launcher is discovered next to the worker', async () => {
+  const { chromeProfileFor, chromeLauncherPath, CHROME_PROFILE_ROOT, readPluginVersion } = await import('../index.js');
+  assert.match(CHROME_PROFILE_ROOT, /XBotOpsConsole\/chrome$/);
+  assert.ok(!CHROME_PROFILE_ROOT.includes('/tmp/'), 'profiles must not live in /tmp (cleared on reboot)');
+  assert.equal(chromeProfileFor('post', {}), join(CHROME_PROFILE_ROOT, 'post'));
+  // An explicit target field wins over the default.
+  assert.equal(chromeProfileFor('post', { chromeProfile: '/custom/post' }), '/custom/post');
+  assert.equal(chromeLauncherPath({ dir: '/nope' }), '');
+  assert.equal(chromeLauncherPath({}), '');
+  assert.ok(readPluginVersion().length > 0);
+});
+
+test('ensure-chrome reports every worker and honours a broken launcher', async () => {
+  const f = fixture();
+  const dir = join(f.dir, 'workers');
+  mkdirSync(dir, { recursive: true });
+  // Fake launcher that prints a status line like the real one.
+  const launcher = join(dir, 'chrome_launcher.py');
+  writeFileSync(launcher, [
+    'import json, sys',
+    'args = dict(zip(sys.argv[1::2], sys.argv[2::2]))',
+    'print(json.dumps({"worker": args.get("--worker"), "port": int(args.get("--port", 0)), "cdpOpen": True, "ready": True}))',
+  ].join('\n'));
+  // A real executable wrapper: the action runs the launcher through it.
+  const python = join(dir, 'python');
+  writeFileSync(python, '#!/bin/sh\nexec python3 "$@"\n', { mode: 0o755 });
+
+  const targets = {
+    comment: { dir, worker: join(dir, 'comment_worker.py'), port: 9222, python, interpreterPidArgvToken: python, chromeProfile: join(f.dir, 'comment') },
+    reply: { dir, worker: join(dir, 'reply_worker.py'), port: 9223, python, interpreterPidArgvToken: python, chromeProfile: join(f.dir, 'reply') },
+    post: { dir, worker: join(dir, 'post_worker.py'), port: 9224, python, interpreterPidArgvToken: python, chromeProfile: join(f.dir, 'post') },
+    profile: { dir, worker: join(dir, 'profile_worker.py'), port: 9225, python, interpreterPidArgvToken: python, chromeProfile: join(f.dir, 'profile') },
+  };
+  const targetsPath = join(f.dir, 'console-targets.json');
+  writeFileSync(targetsPath, JSON.stringify({ targets }));
+  try {
+    const service = createService({
+      paths: targets, targetsPath,
+      configPath: join(f.dir, 'config.json'), platform: 'darwin',
+    });
+    const res = await service.action({ action: 'ensure-chrome' });
+    assert.equal(res.ok, true);
+    assert.equal(res.ready, 4);
+    assert.deepEqual(res.results.map(item => item.key), ['comment', 'reply', 'post', 'profile']);
+    assert.ok(res.results.every(item => item.ok && item.cdpOpen === true));
+    assert.match(res.note, /4 个 CDP 就绪/);
+
+    // A worker whose launcher is missing must not abort the whole batch.
+    const broken = structuredClone(targets);
+    broken.post = { ...broken.post, dir: join(f.dir, 'missing'), chromeLauncher: join(f.dir, 'nope.py') };
+    writeFileSync(targetsPath, JSON.stringify({ targets: broken }));
+    const partial = await createService({ paths: broken, targetsPath, configPath: join(f.dir, 'config.json'), platform: 'darwin' })
+      .action({ action: 'ensure-chrome' });
+    assert.equal(partial.ready, 3);
+    assert.match(partial.results.find(item => item.key === 'post').error, /chrome_launcher/);
+  } finally { f.cleanup(); }
 });

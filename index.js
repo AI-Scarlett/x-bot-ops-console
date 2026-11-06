@@ -39,7 +39,7 @@ export const CACHE_CLEANUP_STATE = join(homedir(), 'Library/Application Support/
 export const CONFIG_BACKUP_DIR = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/config-history');
 const MAX_CONFIG_BACKUPS = 20;
 
-const TARGET_FIELDS = ['dir', 'worker', 'watchdog', 'watchdogPid', 'stop', 'pid', 'log', 'heartbeat', 'rate'];
+const TARGET_FIELDS = ['dir', 'worker', 'watchdog', 'watchdogPid', 'stop', 'pid', 'log', 'heartbeat', 'rate', 'chromeProfile', 'chromeLauncher'];
 
 // Every shared setting, and which worker actually reads it. Mirrors the two Python workers.
 export const FIELD_SIDE = Object.freeze({
@@ -1300,6 +1300,34 @@ function readJsonSafe(path) {
   try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; }
 }
 
+// Chrome profiles live under Application Support. They used to sit in /tmp, which
+// macOS clears on reboot, so every reboot silently logged the workers out.
+export const CHROME_PROFILE_ROOT = join(homedir(), 'Library/Application Support/XBotOpsConsole/chrome');
+
+export function chromeProfileFor(key, target = {}) {
+  if (target && typeof target.chromeProfile === 'string' && target.chromeProfile.trim()) return target.chromeProfile.trim();
+  if (key === 'reply') {
+    const legacy = join(homedir(), 'Library/Application Support/CursorXRunner/ChromeProfile');
+    if (existsSync(legacy)) return legacy;
+  }
+  return join(CHROME_PROFILE_ROOT, key);
+}
+
+export function chromeLauncherPath(target = {}) {
+  if (typeof target.chromeLauncher === 'string' && target.chromeLauncher.trim()) {
+    return existsSync(target.chromeLauncher.trim()) ? target.chromeLauncher.trim() : '';
+  }
+  const dir = target.dir ? String(target.dir) : '';
+  const scriptDir = target.worker ? dirname(String(target.worker)) : '';
+  const candidates = [
+    scriptDir ? join(scriptDir, 'chrome_launcher.py') : '',
+    dir ? join(dir, 'chrome_launcher.py') : '',
+    dir ? join(dir, 'scripts', 'chrome_launcher.py') : '',
+  ].filter(Boolean);
+  for (const candidate of candidates) if (existsSync(candidate)) return candidate;
+  return '';
+}
+
 export function resolveTargets(base = DEFAULT_TARGETS, overridesPath = TARGETS_PATH) {
   const raw = readJsonSafe(overridesPath);
   if (!isRecord(raw)) return base;
@@ -1905,7 +1933,9 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         stateDir: dirname(t.heartbeat),
         pausedUntil: rate && Number.isFinite(Number(rate.until)) ? Number(rate.until) : null,
         pauseReason: rate && ['rate_limit', 'manual'].includes(rate.reason) ? rate.reason : (rate ? 'other' : null),
-        cdpPort: t.port, cdpAvailable: await portListening(t.port), logTail, watchdogLogTail,
+        cdpPort: t.port, cdpAvailable: await portListening(t.port),
+        chromeProfile: chromeProfileFor(key, t), chromeProfileExists: existsSync(chromeProfileFor(key, t)),
+        chromeLauncher: chromeLauncherPath(t), logTail, watchdogLogTail,
         priorityHandles: readPriorityHandles(t.worker),
       };
     }
@@ -2227,6 +2257,42 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         diskFreeAfter: after,
         cacheCleanup: state,
         note: `缓存已清理，释放约 ${reclaimed != null ? Math.round(reclaimed / (1024 * 1024)) : Math.round((state?.reclaimedBytes || 0) / (1024 * 1024))} MB。`,
+      };
+    }
+    if (request.action === 'ensure-chrome') {
+      const all = currentTargets() || {};
+      const wanted = Array.isArray(request.targets) && request.targets.length ? request.targets : ['comment', 'reply', 'post', 'profile'];
+      const results = [];
+      for (const key of wanted) {
+        const target = all[key];
+        if (!target) { results.push({ key, ok: false, error: '未配置该工作进程' }); continue; }
+        const launcher = chromeLauncherPath(target);
+        if (!launcher) { results.push({ key, ok: false, error: `未找到 chrome_launcher.py（${target.dir || ''}）` }); continue; }
+        // resolvePython enforces the watchdog identity token; fall back rather than
+        // failing the whole batch when a target was configured by hand.
+        let python = '';
+        try { python = resolvePython(target) || ''; } catch { python = typeof target.python === 'string' ? target.python : ''; }
+        if (!python) python = 'python3';
+        const profile = chromeProfileFor(key, target);
+        const args = [launcher, '--port', String(target.port || 0), '--worker', key, '--profile', profile, '--wait', '25'];
+        let parsed = null;
+        try {
+          const output = execFileSync(python, args, { encoding: 'utf8', timeout: 120000 });
+          try { parsed = JSON.parse(String(output || '').trim().split('\n').pop()); } catch { parsed = null; }
+          results.push({ key, ok: true, ...(parsed || {}), output: String(output || '').trim().slice(-400) });
+        } catch (error) {
+          const message = String(error?.stdout || error?.message || error).trim().split('\n').slice(-3).join(' ');
+          results.push({ key, ok: false, error: message.slice(0, 400), profile });
+        }
+      }
+      const ready = results.filter(item => item.ok && item.cdpOpen !== false && item.ready !== false).length;
+      return {
+        ok: true,
+        action: 'ensure-chrome',
+        results,
+        ready,
+        note: `已检查 ${results.length} 个浏览器：${ready} 个 CDP 就绪。` +
+          (ready < results.length ? ' 未就绪的请看 results 里的说明；首次使用新配置目录需要在弹出的 Chrome 窗口里登录 X。' : ''),
       };
     }
     if (request.action === 'fetch-trends') {
