@@ -538,7 +538,10 @@ window.__ModuleLoader__.load({
               t('title')),
             h('p', { style: { margin: '4px 0 0', fontSize: 13, color: C.muted } }, t('subtitle'))),
           h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.19.0'),
+            h('span', {
+              title: state?.pluginVersion ? '版本号读取自已安装插件的 package.json' : '宿主进程还没重新加载插件（重启 DSH 后自动显示真实版本）',
+              style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: state?.pluginVersion ? C.muted : C.accent, border: `1px solid ${C.border}` },
+            }, state?.pluginVersion ? `v${state.pluginVersion}` : 'v? 待宿主重载'),
             h('button', {
               type: 'button',
               disabled: busy || updating,
@@ -2116,7 +2119,7 @@ window.__ModuleLoader__.load({
                     : [h('span', { style: { fontSize: 12, color: C.faint } }, '（无，全部被过滤——请检查筛选规则是否过严）')])),
                 h('div', { style: { fontSize: 12, fontWeight: '600', margin: '10px 0 4px', color: C.text } }, '🚫 被剔除的'),
                 h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 5, maxHeight: 110, overflowY: 'auto' } },
-                  ...(dropped.length ? dropped.map(chip) : [h('span', { style: { fontSize: 12, color: C.faint } }, '（无）')])),
+                  ...(dropped.length ? dropped.map((item, index) => chip(item, index)) : [h('span', { style: { fontSize: 12, color: C.faint } }, '（无）')])),
                 h('div', { style: { fontSize: 12, fontWeight: '600', margin: '10px 0 4px', color: C.text } }, `🚫 手动剔除的话题（${excludedTopics.length} 条，点 ↩ 恢复）`),
                 h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 5, maxHeight: 110, overflowY: 'auto' } },
                   ...(excludedTopics.length

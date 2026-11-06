@@ -1901,3 +1901,21 @@ test('manually excluded hot topics are skipped and stay excluded', async () => {
   tooLong.postSettings.hotFilter.excludedTopics = ['x'.repeat(81)];
   assert.throws(() => validateConfig(tooLong), /不能超过 80 字/);
 });
+
+test('state reports the installed plugin version and the UI no longer hardcodes one', async () => {
+  const { readPluginVersion, createService } = await import('../index.js');
+  const version = readPluginVersion();
+  assert.match(version, /^\d+\.\d+\.\d+$/);
+  assert.equal(readPluginVersion(new URL('file:///nonexistent/package.json')), '');
+
+  const f = fixture();
+  try {
+    const service = createService({ paths: f.paths, configPath: join(f.dir, 'config.json'), platform: 'darwin' });
+    const state = await service.action({ action: 'state' });
+    assert.equal(state.pluginVersion, version);
+  } finally { f.cleanup(); }
+
+  const client = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.match(client, /state\?\.pluginVersion/);
+  assert.doesNotMatch(client, /'v0\.19\.0'/);
+});

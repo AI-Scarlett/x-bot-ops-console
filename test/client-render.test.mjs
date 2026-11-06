@@ -65,7 +65,19 @@ function mount({ config = sampleConfig(), state = sampleState, tab = 'tiers' } =
   let rootComponent = null;
 
   const React = {
-    createElement(type, props, ...children) { return { type, props: props || {}, children: children.flat(Infinity) }; },
+    createElement(type, props, ...children) {
+      const flat = children.flat(Infinity);
+      // React throws "Objects are not valid as a React child" for this, and the
+      // real page dies behind its error boundary — so fail here instead. It is
+      // how `dropped.map(chip)` with a 3-arg callback got shipped once.
+      for (const child of flat) {
+        if (child === null || child === undefined || typeof child === 'boolean') continue;
+        if (typeof child === 'string' || typeof child === 'number') continue;
+        if (typeof child === 'object' && 'type' in child) continue;
+        throw new Error(`Invalid React child (would crash the panel): ${JSON.stringify(child).slice(0, 160)}`);
+      }
+      return { type, props: props || {}, children: flat };
+    },
     useState(initial) {
       const index = hookIndex++;
       if (!(index in hooks)) hooks[index] = typeof initial === 'function' ? initial() : initial;
@@ -231,5 +243,26 @@ test('hot board adopted list lets the operator strike a topic out, and undo it',
     tree = app.render();
     assert.deepEqual(app.config().postSettings.hotFilter.excludedTopics, []);
     assert.match(flatText(tree), /手动剔除的话题（0 条/);
+  } finally { app.close(); }
+});
+
+test('the panel version badge shows the installed version instead of a frozen string', () => {
+  const app = mount({ state: { ...sampleState, pluginVersion: '9.9.9' } });
+  try {
+    const tree = app.render();
+    assert.match(flatText(tree), /v9\.9\.9/);
+    assert.doesNotMatch(flatText(tree), /v0\.19\.0/);
+  } finally { app.close(); }
+  // Without a host-provided version the badge says so instead of lying.
+  const stale = mount();
+  try {
+    assert.match(flatText(stale.render()), /待宿主重载/);
+  } finally { stale.close(); }
+});
+
+test('an invalid React child is rejected by the harness itself', () => {
+  const app = mount();
+  try {
+    assert.throws(() => app.React.createElement('div', null, { topic: 'x', ok: true }), /Invalid React child/);
   } finally { app.close(); }
 });

@@ -1776,6 +1776,17 @@ function validateConfig(input) {
   return copy;
 }
 
+// The badge in the panel must never drift from the installed package again: it is
+// read from package.json on every state call instead of being hardcoded in the UI.
+export function readPluginVersion(packageUrl = new URL('./package.json', import.meta.url)) {
+  try {
+    const parsed = JSON.parse(readFileSync(packageUrl, 'utf8'));
+    return typeof parsed.version === 'string' ? parsed.version : '';
+  } catch {
+    return '';
+  }
+}
+
 export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGETS, configPath = CONFIG_PATH, targetsPath = null, platform = process.platform, spawnProcess = spawn, queuePath = POST_QUEUE_PATH, learningsPath = LEARNINGS_PATH, backupDir = CONFIG_BACKUP_DIR } = {}) {
   let activeConfigPath = configPath;
   const activeQueuePath = queuePath;
@@ -1887,7 +1898,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       }
     } catch {}
     return {
-      ok: true, config: maskTrendCookies(shared.config), configSource: shared.source, configPath: activeConfigPath, configHash,
+      ok: true, pluginVersion: readPluginVersion(), config: maskTrendCookies(shared.config), configSource: shared.source, configPath: activeConfigPath, configHash,
       runtimeConfigApplied: shared.source === 'shared', runtimeCapabilities, fieldSide: FIELD_SIDE,
       dshModels,
       postQueue: postQueue.queue,
