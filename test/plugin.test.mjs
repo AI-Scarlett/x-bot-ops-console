@@ -1854,3 +1854,22 @@ test('reply tab ships the special-person editor with add and delete controls', a
   // Legacy objects stay in sync so tier logic in the workers still resolves.
   assert.match(source, /legacyPeople/);
 });
+
+test('post skeleton fingerprint is stable and drives the 48h cooldown', async () => {
+  const { postSkeleton, checkPostDraft } = await import('../index.js');
+  const a = '昔周礼纳征，不过束帛数端；\n今人相亲，茶未凉，彩礼单已摊。\n君以为，今人择偶，求情乎，求账乎？';
+  // Same line lengths and same first/last characters => same skeleton.
+  const b = '昔聘礼简约，不过丝帛几卷；\n今人相看，话未暖，房产本已陈。\n君以为，今人成家，重义乎，重财乎？';
+  assert.equal(postSkeleton(a), postSkeleton(b));
+  assert.notEqual(postSkeleton(a), postSkeleton(a.replace(/\n/g, '')));
+  assert.equal(postSkeleton(''), '');
+
+  const format = { lineCount: 3, minChars: 10, maxChars: 120, closingPrefix: '君', requireClosingQuestion: true, forbidColloquial: [], softOpeners: [], bannedPatterns: [] };
+  const clean = checkPostDraft(a, format, [], [], 48);
+  assert.equal(clean.ok, true, clean.reasons.join(';'));
+  const clash = checkPostDraft(a, format, [], [b], 48);
+  assert.equal(clash.ok, false);
+  assert.match(clash.reasons.join(';'), /结构骨架与 48 小时内的旧帖重复/);
+  // 0 disables the cooldown entirely.
+  assert.equal(checkPostDraft(a, format, [], [b], 0).ok, true);
+});

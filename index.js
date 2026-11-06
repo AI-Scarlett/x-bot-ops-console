@@ -715,7 +715,19 @@ export function buildStructureBlock(format = {}, style = {}) {
 
 // Enforce the writer rules: fixed line count, length, an addressing question at
 // the end, no soft openers, no colloquial filler, no retired templates.
-export function checkPostDraft(text, format = {}, recentTexts = []) {
+// Structural fingerprint: per line the character count plus the first and last
+// character. Two drafts that differ only by swapped words share a skeleton, which
+// is what the 48h cooldown is meant to stop.
+export function postSkeleton(text) {
+  const lines = String(text || '').split('\n').map(line => line.replace(/\s+/g, '')).filter(Boolean);
+  if (!lines.length) return '';
+  return lines.map(line => {
+    const chars = Array.from(line);
+    return `${chars.length}:${chars[0] || ''}:${chars[chars.length - 1] || ''}`;
+  }).join('|');
+}
+
+export function checkPostDraft(text, format = {}, recentTexts = [], skeletonTexts = [], skeletonCooldownHours = 0) {
   const reasons = [];
   const fmt = format || {};
   // 0 means automatic, so it must not fall back to the default.
@@ -766,6 +778,14 @@ export function checkPostDraft(text, format = {}, recentTexts = []) {
         }
       }
       if (reasons.some(reason => reason.startsWith('与已发内容'))) break;
+    }
+  }
+  const cooldown = Number(skeletonCooldownHours) || 0;
+  if (cooldown > 0 && Array.isArray(skeletonTexts) && skeletonTexts.length) {
+    const skeleton = postSkeleton(text);
+    if (skeleton) {
+      const clash = skeletonTexts.find(previous => previous && postSkeleton(previous) === skeleton);
+      if (clash) reasons.push(`结构骨架与 ${Math.round(cooldown)} 小时内的旧帖重复（${clash.slice(0, 12)}…）`);
     }
   }
   return { ok: reasons.length === 0, reasons, hanCount, lineCount: lines.length };
@@ -2004,6 +2024,18 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       const politicalToday = todayPosts.filter(item => (capCfg.keywords || []).some(word => `${item?.theme || ''}${item?.hotTopic || ''}`.includes(word)));
       const politicalBudget = Math.max(0, (Number(capCfg.dailyMax) || 0) - politicalToday.length);
       const recentTexts = historyPosts.slice(-(Number(dedupeCfg.recentPosts) || 50)).map(item => item?.text).filter(Boolean);
+      // Skeleton pool: only posts inside the cooldown window take part.
+      const skeletonHours = Math.max(0, Number(dedupeCfg.skeletonCooldownHours) || 0);
+      const skeletonCutoff = Date.now() + 8 * 3600 * 1000 - skeletonHours * 3600 * 1000;
+      const skeletonTexts = skeletonHours > 0
+        ? historyPosts
+          .filter(item => {
+            const stamp = Date.parse(String(item?.time || '').replace(' ', 'T') + '+08:00');
+            return Number.isFinite(stamp) && stamp >= skeletonCutoff;
+          })
+          .map(item => item?.text)
+          .filter(Boolean)
+        : [];
       const trendPool = hotQuota > 0
         ? screenHotTopics(readTrends().topics, {
             ...(postCfg.hotFilter || DEFAULT_CONFIG.postSettings.hotFilter),
@@ -2040,7 +2072,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
           let draftText = fmtCfg.lineCount > 0
             ? String(rawDraft || '').trim()
             : enforceOneSentencePerLine(rawDraft);
-          let verdict = checkPostDraft(draftText, { ...fmtCfg, maxOverlapChars: dedupeCfg.maxOverlapChars }, recentTexts);
+          let verdict = checkPostDraft(draftText, { ...fmtCfg, maxOverlapChars: dedupeCfg.maxOverlapChars }, recentTexts, skeletonTexts, skeletonHours);
           for (let attempt = 0; attempt < 2 && !verdict.ok; attempt += 1) {
             // Corrective retries that name every violation.
             const retryPrompt = `${prompt}\n\n【上一次不合格，必须逐条修正】\n- ${verdict.reasons.join('\n- ')}`
@@ -2049,7 +2081,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
             draftText = fmtCfg.lineCount > 0
               ? String(rawDraft || '').trim()
               : enforceOneSentencePerLine(rawDraft);
-            verdict = checkPostDraft(draftText, { ...fmtCfg, maxOverlapChars: dedupeCfg.maxOverlapChars }, recentTexts);
+            verdict = checkPostDraft(draftText, { ...fmtCfg, maxOverlapChars: dedupeCfg.maxOverlapChars }, recentTexts, skeletonTexts, skeletonHours);
           }
           if (!verdict.ok) {
             failures.push(`结构不合规：${verdict.reasons.join('；')}`);
@@ -2058,6 +2090,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
           }
           if (draftText) {
             recentTexts.unshift(draftText);
+            if (skeletonHours > 0) skeletonTexts.unshift(draftText);
             generated.push({
               id: `post_ai_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 6)}`,
               text: draftText,
