@@ -1253,6 +1253,34 @@ test('trend cookies are stored, masked in responses and preserved on save', asyn
   } finally { f.cleanup(); }
 });
 
+test('cookies pasted as a DevTools table are converted to a request header', async () => {
+  const { normalizeCookie, originReferer } = await import('../index.js');
+
+  // Header format passes through cleaned up.
+  assert.equal(normalizeCookie('a=1; b=2'), 'a=1; b=2');
+  assert.equal(normalizeCookie('Cookie: a=1;  b=2'), 'a=1; b=2');
+  assert.equal(normalizeCookie(''), '');
+
+  // DevTools table: Name, Value, Domain, Path, … with the Priority column
+  // running into the next row's name.
+  const table = [
+    'd_c0', 'abc|123', '.zhihu.com', '/', '2027-01-26T01:46:30.779Z', '51', '', '', '', '', 'Medium delPer', '0', '.zhihu.com', '/',
+    'stale', '', '', '', '', 'Medium z_c0', 'secret==', '.zhihu.com', '/', '2027-01-26T01:46:30.779Z',
+  ].join('\t');
+  const parsed = normalizeCookie(table);
+  assert.match(parsed, /d_c0=abc\|123/);
+  assert.match(parsed, /delPer=0/);
+  assert.match(parsed, /z_c0=secret==/);
+  assert.ok(!parsed.includes('Medium'), 'priority column leaked into the header');
+
+  // A row whose name is a Priority word must not become a cookie.
+  assert.ok(!/;\s*Medium=/.test(normalizeCookie(table)));
+
+  // Referer is derived from the endpoint origin so boards accept the request.
+  assert.deepEqual(originReferer('https://weibo.com/ajax/side/hotSearch'), { referer: 'https://weibo.com/', origin: 'https://weibo.com' });
+  assert.deepEqual(originReferer('not a url'), {});
+});
+
 test('save rebases onto disk so untouched prompts are never wiped', async () => {
   const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
 

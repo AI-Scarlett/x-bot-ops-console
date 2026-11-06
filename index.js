@@ -400,6 +400,44 @@ export function extractTrendTopics(body) {
   return [...topics].slice(0, 50);
 }
 
+// DevTools shows cookies as a tab-separated table (Name, Value, Domain, Path, …)
+// while a request needs "name=value; name2=value2". Accept either.
+export function normalizeCookie(raw) {
+  let text = String(raw || '').trim();
+  if (!text) return '';
+  if (text.toLowerCase().startsWith('cookie:')) text = text.slice(7).trim();
+  text = text.replace(/^["']|["']$/g, '');
+
+  if (!text.includes('\t')) {
+    // Already header-shaped: just tidy separators and whitespace.
+    return text
+      .split(';')
+      .map(part => part.trim())
+      .filter(part => part.includes('='))
+      .join('; ');
+  }
+
+  const tokens = text.split(/[\t\n\r]+/).map(token => token.trim());
+  const domainLike = /^\.?[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/i;
+  const pairs = [];
+  const seen = new Map();
+  for (let i = 2; i < tokens.length; i += 1) {
+    if (!domainLike.test(tokens[i])) continue;
+    if (tokens[i + 1] !== '/') continue;
+    // The Priority column ("Medium") runs into the next row's Name.
+    const name = tokens[i - 2].replace(/^(?:Medium|Low|High)\s+/i, '').trim();
+    const value = tokens[i - 1];
+    if (!name || /\s/.test(name) || name === 'Session') continue;
+    if (seen.has(name)) {
+      pairs[seen.get(name)] = `${name}=${value}`;
+    } else {
+      seen.set(name, pairs.length);
+      pairs.push(`${name}=${value}`);
+    }
+  }
+  return pairs.join('; ');
+}
+
 // Replace stored cookies with a sentinel so credentials never reach the UI.
 export function maskTrendCookies(config) {
   if (!isRecord(config) || !isRecord(config.learningSettings)) return config;
@@ -443,6 +481,18 @@ export function writeTrends(data, trendsPath = TRENDS_PATH) {
 }
 
 // Fetch every enabled board. Failures are reported per source instead of aborting.
+// Boards such as Weibo reject requests that do not look like they came from
+// their own page, so default the Referer to the endpoint's origin.
+export function originReferer(url) {
+  try {
+    const parsed = new URL(String(url));
+    if (!/^https?:$/.test(parsed.protocol)) return {};
+    return { referer: `${parsed.origin}/`, origin: parsed.origin };
+  } catch {
+    return {};
+  }
+}
+
 export async function fetchAllTrends(sources, { timeoutMs = 12000 } = {}) {
   const results = [];
   const topics = [];
@@ -460,7 +510,9 @@ export async function fetchAllTrends(sources, { timeoutMs = 12000 } = {}) {
           headers: {
             'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36',
             accept: 'application/json,text/html,*/*',
-            ...(String(source.cookie || '').trim() ? { cookie: String(source.cookie).trim() } : {}),
+            // Several boards reject requests without a same-site Referer.
+            ...(source.referer ? { referer: String(source.referer) } : originReferer(url)),
+            ...(normalizeCookie(source.cookie) ? { cookie: normalizeCookie(source.cookie) } : {}),
           },
         });
         body = await response.text();
