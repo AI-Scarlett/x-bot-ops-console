@@ -229,7 +229,13 @@ window.__ModuleLoader__.load({
         if (!this.state.focused && before !== after) this.setState({ draft: ListText.textOf(this.props) });
       }
       onFocus() { this.setState({ focused: true }); }
-      onChange(event) { this.setState({ draft: event.target.value }); }
+      onChange(event) {
+        const draft = event.target.value;
+        this.setState({ draft });
+        // Commit on every keystroke as well: the box displays the raw draft, so
+        // nothing jumps, but a save without blurring still captures the edit.
+        if (typeof this.props.onCommit === 'function') this.props.onCommit(ListText.parse(this.props, draft));
+      }
       onBlur() {
         const next = ListText.parse(this.props, this.state.draft);
         this.setState({ focused: false, draft: next.join(this.props.join ?? ', ') });

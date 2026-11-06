@@ -302,17 +302,21 @@ test('list fields keep exactly what you type and only parse on blur', () => {
     let field = inst.render();
     // Type a separator plus a new item, then leave a trailing comma in place.
     const typed = `${field.props.value}, 新词, `;
+    let liveCommitted = null;
+    inst.props = { ...multiline.props, onCommit: items => { liveCommitted = items; } };
     field.props.onFocus();
     field.props.onChange({ target: { value: typed } });
     field = inst.render();
     // The trailing comma and space must survive while typing.
     assert.equal(field.props.value, typed);
     assert.match(field.props.value, /新词, $/);
+    // The saved value is already updated mid-typing (so 保存 without blurring is safe).
+    assert.ok(liveCommitted.includes('新词'), 'edit is committed as you type');
 
     let committed = null;
-    inst.props = { ...multiline.props, onCommit: items => { committed = items; } };
+    inst.props = { ...inst.props, onCommit: items => { committed = items; } };
     field.props.onBlur();
-    assert.ok(Array.isArray(committed));
+    assert.ok(Array.isArray(committed), 'blur commits too');
     assert.ok(committed.includes('新词'), 'item is committed on blur');
     assert.ok(committed.every(item => item !== ''), 'no empty entries from the separator');
     field = inst.render();
