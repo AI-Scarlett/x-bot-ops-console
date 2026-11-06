@@ -1092,6 +1092,36 @@ test('built-in worker rules are editable and validated', async () => {
   assert.match(source, /跳过关键词/);
 });
 
+test('persona override, stop keywords and finance keywords are configurable', async () => {
+  const config = clone(DEFAULT_CONFIG);
+  assert.equal(config.replySettings.personaOverride, '');
+  assert.deepEqual(config.replySettings.stopKeywords, []);
+  assert.deepEqual(config.commentSettings.extraFinanceKeywords, []);
+
+  const edited = clone(DEFAULT_CONFIG);
+  edited.replySettings.personaOverride = '你是周天子姬霸。';
+  edited.replySettings.stopKeywords = ['别私信了', ' 别私信了 ', '到此为止吧'];
+  edited.commentSettings.extraFinanceKeywords = ['黄金', '黄金', '期货'];
+  const ok = validateConfig(edited);
+  assert.equal(ok.replySettings.personaOverride, '你是周天子姬霸。');
+  assert.deepEqual(ok.replySettings.stopKeywords, ['别私信了', '到此为止吧']);
+  assert.deepEqual(ok.commentSettings.extraFinanceKeywords, ['黄金', '期货']);
+
+  const badPersona = clone(DEFAULT_CONFIG);
+  badPersona.replySettings.personaOverride = 123;
+  assert.throws(() => validateConfig(badPersona), /人设覆盖文本无效/);
+
+  const { FIELD_SIDE } = await import('../index.js');
+  assert.equal(FIELD_SIDE['replySettings.personaOverride'], 'reply');
+  assert.equal(FIELD_SIDE['replySettings.stopKeywords'], 'reply');
+  assert.equal(FIELD_SIDE['commentSettings.extraFinanceKeywords'], 'comment');
+
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.match(source, /人设覆盖/);
+  assert.match(source, /追加「对方不想继续」判定词/);
+  assert.match(source, /追加「财经类」判定关键词/);
+});
+
 test('save rebases onto disk so untouched prompts are never wiped', async () => {
   const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
 

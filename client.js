@@ -453,7 +453,7 @@ window.__ModuleLoader__.load({
               t('title')),
             h('p', { style: { margin: '4px 0 0', fontSize: 13, color: C.muted } }, t('subtitle'))),
           h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.12.0'),
+            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.12.1'),
             h('button', {
               type: 'button',
               disabled: busy || updating,
@@ -793,6 +793,13 @@ window.__ModuleLoader__.load({
                   },
                 })),
               }),
+              h('label', { style: { ...labelStyle, marginTop: 10 } }, '追加「财经类」判定关键词（内置词库之外，逗号分隔）：'),
+              h('input', {
+                style: inputStyle,
+                placeholder: '例如：黄金, 白银, 期货',
+                value: (config?.commentSettings?.extraFinanceKeywords || []).join(', '),
+                onChange: e => updateConfig(c => ({ ...c, commentSettings: { ...(c.commentSettings || {}), extraFinanceKeywords: e.target.value.split(/[,，\s]+/).map(x => x.trim()).filter(Boolean) } })),
+              }),
               h('div', { style: { display: 'flex', gap: 16, marginTop: 10, flexWrap: 'wrap' } },
                 h('label', { style: { ...labelStyle, flex: '1 1 160px' } },
                   '评论最短字数：',
@@ -921,6 +928,20 @@ window.__ModuleLoader__.load({
                 placeholder: '例如：好的, 收到, 谢谢',
                 value: (config?.replySettings?.thinReplyExtra || []).join(', '),
                 onChange: e => updateConfig(c => ({ ...c, replySettings: { ...(c.replySettings || {}), thinReplyExtra: e.target.value.split(/[,，\s]+/).map(x => x.trim()).filter(Boolean) } })),
+              }),
+              h('label', { style: { ...labelStyle, marginTop: 10 } }, '人设覆盖（留空则用 Worker 内置人设描述）：'),
+              h('textarea', {
+                style: { ...inputStyle, minHeight: 56, fontSize: 12 },
+                value: config?.replySettings?.personaOverride || '',
+                placeholder: '例如：你是周朝天子姬霸，幽默古奥，自称寡人…',
+                onChange: e => updateConfig(c => ({ ...c, replySettings: { ...(c.replySettings || {}), personaOverride: e.target.value } })),
+              }),
+              h('label', { style: { ...labelStyle, marginTop: 10 } }, '追加「对方不想继续」判定词（逗号分隔）：'),
+              h('input', {
+                style: inputStyle,
+                placeholder: '例如：别私信了, 到此为止吧',
+                value: (config?.replySettings?.stopKeywords || []).join(', '),
+                onChange: e => updateConfig(c => ({ ...c, replySettings: { ...(c.replySettings || {}), stopKeywords: e.target.value.split(/[,，\s]+/).map(x => x.trim()).filter(Boolean) } })),
               }),
               h('label', { style: { ...labelStyle, marginTop: 10 } }, '回复中禁止出现的词（逗号分隔）：'),
               h('input', {

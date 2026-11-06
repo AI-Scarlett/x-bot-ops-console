@@ -71,6 +71,7 @@ export const FIELD_SIDE = Object.freeze({
   'commentSettings.model': 'comment',
   'commentSettings.customPrompt': 'comment',
   'commentSettings.skipKeywords': 'comment',
+  'commentSettings.extraFinanceKeywords': 'comment',
   'commentSettings.minLength': 'comment',
   'commentSettings.maxLength': 'comment',
   'replySettings.model': 'reply',
@@ -78,6 +79,8 @@ export const FIELD_SIDE = Object.freeze({
   'replySettings.lengthRule': 'reply',
   'replySettings.cannedForbidden': 'reply',
   'replySettings.thinReplyExtra': 'reply',
+  'replySettings.personaOverride': 'reply',
+  'replySettings.stopKeywords': 'reply',
   'replySettings.forbiddenPhrases': 'reply',
   'postSettings.enabled': 'post',
   'postSettings.intervalMinutes': 'post',
@@ -712,6 +715,7 @@ const DEFAULT_CONFIG = Object.freeze({
     customPrompt: '',
     // Words that make the worker skip a post entirely.
     skipKeywords: [],
+    extraFinanceKeywords: [],
     minLength: 8,
     maxLength: 60,
   },
@@ -723,6 +727,10 @@ const DEFAULT_CONFIG = Object.freeze({
     cannedForbidden: '禁止“评论区卧虎藏龙”“感谢分享”“支持一下”“同谋共济”“投书密语”这类套话，禁止方括号表情。',
     thinReplyExtra: [],
     forbiddenPhrases: [],
+    // Replaces the built-in persona sentence when non-empty.
+    personaOverride: '',
+    // Extra phrases that mean "stop replying to me".
+    stopKeywords: [],
   },
   timing: { commentWindowHours: 6, mentionWindowHours: 12, quietHoursStart: 0, quietHoursEnd: 7, fullStopStart: 1, fullStopEnd: 6, publishMinSeconds: 30, publishMaxSeconds: 100, replyMinSeconds: 0, replyMaxSeconds: 0, authorCooldownSeconds: 1800, postingWorkMinutes: 20, postingRestMinutes: 5, rateLimitMinutes: 5, rateLimitLongMinutes: 15 },
   tiers: [
@@ -960,6 +968,10 @@ function validateConfig(input) {
       if (!Array.isArray(copy.commentSettings.skipKeywords) || copy.commentSettings.skipKeywords.length > 500) throw new TypeError('评论跳过关键词名单无效');
       copy.commentSettings.skipKeywords = [...new Set(copy.commentSettings.skipKeywords.map(item => String(item || '').trim()).filter(Boolean))];
     }
+    if (copy.commentSettings.extraFinanceKeywords !== undefined) {
+      if (!Array.isArray(copy.commentSettings.extraFinanceKeywords) || copy.commentSettings.extraFinanceKeywords.length > 500) throw new TypeError('追加财经关键词名单无效');
+      copy.commentSettings.extraFinanceKeywords = [...new Set(copy.commentSettings.extraFinanceKeywords.map(item => String(item || '').trim()).filter(Boolean))];
+    }
     for (const key of ['minLength', 'maxLength']) {
       if (copy.commentSettings[key] === undefined) continue;
       const value = Number(copy.commentSettings[key]);
@@ -970,6 +982,11 @@ function validateConfig(input) {
   }
   if (copy.replySettings !== undefined) {
     if (!isRecord(copy.replySettings) || (copy.replySettings.model !== undefined && typeof copy.replySettings.model !== 'string') || (copy.replySettings.customPrompt !== undefined && typeof copy.replySettings.customPrompt !== 'string')) throw new TypeError('回复个性化设置无效');
+    if (copy.replySettings.personaOverride !== undefined && (typeof copy.replySettings.personaOverride !== 'string' || copy.replySettings.personaOverride.length > 2000)) throw new TypeError('人设覆盖文本无效');
+    if (copy.replySettings.stopKeywords !== undefined) {
+      if (!Array.isArray(copy.replySettings.stopKeywords) || copy.replySettings.stopKeywords.length > 200) throw new TypeError('停止回复关键词名单无效');
+      copy.replySettings.stopKeywords = [...new Set(copy.replySettings.stopKeywords.map(item => String(item || '').trim()).filter(Boolean))];
+    }
     for (const key of ['lengthRule', 'cannedForbidden']) {
       if (copy.replySettings[key] !== undefined && (typeof copy.replySettings[key] !== 'string' || copy.replySettings[key].length > 2000)) throw new TypeError('回复内置提示词片段无效');
     }
