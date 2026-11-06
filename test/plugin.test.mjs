@@ -951,9 +951,12 @@ test('one-sentence rule is on by default and can be turned off', async () => {
 
 test('random post interval range validates and beats the fixed value', async () => {
   const config = clone(DEFAULT_CONFIG);
-  assert.equal(config.postSettings.intervalMinSeconds, 0);
-  assert.equal(config.postSettings.intervalMaxSeconds, 0);
-  assert.equal(validateConfig(config).postSettings.intervalMinSeconds, 0);
+  assert.equal(config.postSettings.intervalMinSeconds, 480);
+  assert.equal(config.postSettings.intervalMaxSeconds, 600);
+  const zeroed = clone(DEFAULT_CONFIG);
+  zeroed.postSettings.intervalMinSeconds = 0;
+  zeroed.postSettings.intervalMaxSeconds = 0;
+  assert.equal(validateConfig(zeroed).postSettings.intervalMinSeconds, 0);
 
   const ranged = clone(DEFAULT_CONFIG);
   ranged.postSettings.intervalMinSeconds = 300;
@@ -1008,6 +1011,8 @@ test('interval mode is exclusive so fixed and random never fight', async () => {
 
   const legacyFixed = clone(DEFAULT_CONFIG);
   delete legacyFixed.postSettings.intervalMode;
+  legacyFixed.postSettings.intervalMinSeconds = 0;
+  legacyFixed.postSettings.intervalMaxSeconds = 0;
   assert.equal(validateConfig(legacyFixed).postSettings.intervalMode, 'fixed');
 });
 
@@ -1382,6 +1387,72 @@ test('maintenance panel offers bulk restarts and manual cache cleanup', async ()
   assert.match(host, /maintenance: \{ diskFreeBytes/);
 });
 
+test('writer rules enforce three lines, closing question and banned words', async () => {
+  const { checkPostDraft, DEFAULT_CONFIG: defaults } = await import('../index.js');
+  const fmt = defaults.postSettings.format;
+  assert.equal(fmt.lineCount, 3);
+  assert.equal(fmt.minChars, 30);
+  assert.equal(fmt.maxChars, 60);
+
+  const good = '余昨夜赴宴，卿举杯便解罗带。\n满座皆惊，余却只顾看她嘴角那点酒。\n尔若同席，先劝酒还是先劝归？';
+  const pass = checkPostDraft(good, fmt, []);
+  assert.equal(pass.ok, true);
+  assert.equal(pass.lineCount, 3);
+
+  const twoLines = '余昨夜赴宴，卿举杯便解罗带，满座皆惊，余只顾看她嘴角那点酒，实在难当。\n尔若同席，先劝酒还是先劝归？';
+  assert.ok(checkPostDraft(twoLines, fmt, []).reasons.some(r => r.includes('行数')));
+
+  const noQuestion = '余昨夜赴宴，卿举杯便解罗带，满座皆惊。\n余只顾看她嘴角那点酒，实在难当得很。\n尔若同席，先劝酒还是先劝归';
+  assert.ok(checkPostDraft(noQuestion, fmt, []).reasons.some(r => r.includes('问号')));
+
+  const wrongPrefix = '余昨夜赴宴，卿举杯便解罗带，满座皆惊。\n余只顾看她嘴角那点酒，实在难当得很。\n你若同席，先劝酒还是先劝归？';
+  const prefixVerdict = checkPostDraft(wrongPrefix, fmt, []);
+  assert.ok(prefixVerdict.reasons.some(r => r.includes('尔')));
+
+  const softOpener = '昨夜月色很好，卿举杯便解罗带，满座皆惊。\n余只顾看她嘴角那点酒，实在难当得很。\n尔若同席，先劝酒还是先劝归？';
+  assert.ok(checkPostDraft(softOpener, fmt, []).reasons.some(r => r.includes('软铺垫')));
+
+  const colloquial = '余昨夜赴宴，卿举杯便解罗带，大家都觉得不错。\n余只顾看她嘴角那点酒，实在难当得很。\n尔若同席，先劝酒还是先劝归？';
+  assert.ok(checkPostDraft(colloquial, fmt, []).reasons.some(r => r.includes('白话虚词')));
+
+  const retired = '君不见余昨夜赴宴，卿举杯便解罗带，满座皆惊。\n余只顾看她嘴角那点酒，实在难当得很。\n尔若同席，先劝酒还是先劝归？';
+  assert.ok(checkPostDraft(retired, fmt, []).reasons.some(r => r.includes('作废句式')));
+
+  // Long verbatim overlap with an already published post is rejected.
+  // maxOverlapChars lives in dedupe and is merged into the format at generation.
+  const dup = checkPostDraft(good, { ...fmt, maxOverlapChars: defaults.postSettings.dedupe.maxOverlapChars }, [good]);
+  assert.ok(dup.reasons.some(r => r.includes('重复')));
+});
+
+test('writer rule settings are editable and validated', async () => {
+  const config = clone(DEFAULT_CONFIG);
+  config.postSettings.format.lineCount = 6;
+  config.postSettings.format.maxChars = 120;
+  const ok = validateConfig(config);
+  assert.equal(ok.postSettings.format.lineCount, 6);
+  assert.equal(ok.postSettings.format.maxChars, 120);
+
+  const badLines = clone(DEFAULT_CONFIG);
+  badLines.postSettings.format.lineCount = 20;
+  assert.throws(() => validateConfig(badLines), /行数不能超过/);
+
+  const badChars = clone(DEFAULT_CONFIG);
+  badChars.postSettings.format.minChars = 100;
+  badChars.postSettings.format.maxChars = 20;
+  assert.throws(() => validateConfig(badChars), /字数下限不能大于上限/);
+
+  assert.equal(DEFAULT_CONFIG.postSettings.dedupe.maxOverlapChars, 8);
+  assert.equal(DEFAULT_CONFIG.postSettings.dedupe.skeletonCooldownHours, 48);
+  assert.equal(DEFAULT_CONFIG.postSettings.politicalCap.dailyMax, 3);
+  assert.equal(DEFAULT_CONFIG.postSettings.politicalCap.perEventMax, 1);
+  assert.equal(DEFAULT_CONFIG.postSettings.hotTopicShareMinPercent, 33);
+
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.match(source, /写作规则（三行结构/);
+  assert.match(source, /末行引导字/);
+  assert.match(source, /套用文档配比/);
+});
+
 test('save rebases onto disk so untouched prompts are never wiped', async () => {
   const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
 
@@ -1564,7 +1635,7 @@ test('learning prompt block carries topics but never overrides the writing style
   // The style remains the caller's; the block only says to borrow structure.
   assert.match(block, /行文风格仍必须严格遵循/);
   assert.doesNotMatch(block, /请改用|改为白话|英文/);
-  assert.ok(defaults.postSettings.customPrompt.includes('文言文'));
+  assert.ok(/文言/.test(defaults.postSettings.customPrompt));
 });
 
 test('learnings store normalizes, removes and clears entries', async () => {

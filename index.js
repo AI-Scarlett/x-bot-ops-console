@@ -100,6 +100,10 @@ export const FIELD_SIDE = Object.freeze({
   'postSettings.hotTopicPerBatch': 'post',
   'postSettings.hotFilter': 'post',
   'postSettings.manualBannedTopics': 'post',
+  'postSettings.hotTopicShareMinPercent': 'post',
+  'postSettings.politicalCap': 'post',
+  'postSettings.dedupe': 'post',
+  'postSettings.format': 'post',
   'postSettings.restEveryPosts': 'post',
   'postSettings.restMinutes': 'post',
   'postSettings.learningInfluence': 'post',
@@ -679,6 +683,59 @@ export function enforceOneSentencePerLine(text) {
 
 export const ONE_SENTENCE_RULE = '【格式硬性要求】每一句话必须单独占一行，句与句之间必须换行；禁止把多句连成一整段，禁止使用空行。';
 
+// Enforce the writer rules: fixed line count, length, an addressing question at
+// the end, no soft openers, no colloquial filler, no retired templates.
+export function checkPostDraft(text, format = {}, recentTexts = []) {
+  const reasons = [];
+  const fmt = format || {};
+  const lineCount = Number(fmt.lineCount) || 3;
+  const minChars = Number(fmt.minChars) || 30;
+  const maxChars = Number(fmt.maxChars) || 60;
+  const closingPrefix = String(fmt.closingPrefix ?? '尔');
+  const lines = String(text || '').split('\n').map(line => line.trim()).filter(Boolean);
+  const body = lines.join('');
+
+  if (!body) return { ok: false, reasons: ['内容为空'] };
+  if (lines.length !== lineCount) reasons.push(`行数为 ${lines.length}，应为 ${lineCount}`);
+  const hanCount = (body.match(/[\u4e00-\u9fff]/g) || []).length;
+  if (hanCount < minChars || hanCount > maxChars) reasons.push(`汉字 ${hanCount} 个，应在 ${minChars}-${maxChars}`);
+
+  if (fmt.requireClosingQuestion !== false && lines.length) {
+    const last = lines[lines.length - 1];
+    if (!last.startsWith(closingPrefix)) reasons.push(`末行应以「${closingPrefix}」开头`);
+    if (!/[？?]$/.test(last)) reasons.push('末行应以问号结尾');
+  }
+
+  const openers = Array.isArray(fmt.softOpeners) ? fmt.softOpeners : [];
+  if (lines.length && openers.some(word => word && lines[0].includes(word))) reasons.push('首行使用了软铺垫词');
+
+  const banned = Array.isArray(fmt.bannedPatterns) ? fmt.bannedPatterns : [];
+  const hitBanned = banned.find(word => word && body.includes(word));
+  if (hitBanned) reasons.push(`含作废句式「${hitBanned}」`);
+
+  const colloquial = Array.isArray(fmt.forbidColloquial) ? fmt.forbidColloquial : [];
+  const hitColloquial = colloquial.find(word => word && body.includes(word));
+  if (hitColloquial) reasons.push(`含白话虚词「${hitColloquial}」`);
+
+  if (/https?:\/\/|www\.|@[A-Za-z0-9_]{2,}/.test(body)) reasons.push('含链接或 @');
+
+  const overlap = Number(fmt.maxOverlapChars) || 0;
+  if (overlap > 0 && Array.isArray(recentTexts)) {
+    for (const previous of recentTexts) {
+      const prev = String(previous || '').replace(/\s+/g, '');
+      if (!prev) continue;
+      for (let i = 0; i + overlap <= body.length; i += 1) {
+        if (prev.includes(body.slice(i, i + overlap))) {
+          reasons.push(`与已发内容连续 ${overlap} 字重复`);
+          break;
+        }
+      }
+      if (reasons.some(reason => reason.startsWith('与已发内容'))) break;
+    }
+  }
+  return { ok: reasons.length === 0, reasons, hanCount, lineCount: lines.length };
+}
+
 // Learned bans plus the operator's own list; either one vetoes a topic.
 export function mergeBannedTopics(learnings, postCfg) {
   const learned = Array.isArray(learnings?.bannedTopics) ? learnings.bannedTopics : [];
@@ -1005,12 +1062,34 @@ const DEFAULT_CONFIG = Object.freeze({
     intervalMode: 'fixed',
     intervalSeconds: 180,
     // Random interval range in seconds (0 = use the fixed intervalSeconds).
-    intervalMinSeconds: 0,
-    intervalMaxSeconds: 0,
+    intervalMinSeconds: 480,
+    intervalMaxSeconds: 600,
     queueBatchSize: 10,
     queueLowThreshold: 3,
     queueAutoRefill: true,
     queueMaxSize: 100,
+    // Post shape from the writer rules: fixed line count, length, ending style.
+    format: {
+      lineCount: 3,
+      minChars: 30,
+      maxChars: 60,
+      closingPrefix: '尔',
+      requireClosingQuestion: true,
+      forbidColloquial: ['的', '了', '吗', '呢', '吧', '啊', '我们', '你们', '这个', '那个', '没有', '什么', '怎么', '是不是', '觉得', '一下', '就是'],
+      softOpeners: ['茶', '灯', '天气', '衣服', '眼神', '走路', '月色', '帘', '香囊', '玉佩'],
+      bannedPatterns: ['君不见', '诸君', '敢问诸君', '君以为然', '敢问', '《X赋》', '赋体'],
+      hardBottomLines: '只写虚构、自愿的成年人；不写未成年人、露骨性行为过程、生殖器、裸体细节；不写胁迫、偷拍、灌醉/下药；不违法、不仇恨、不歧视。',
+    },
+    // Reuse guard: no long verbatim run and no repeated skeleton.
+    dedupe: { maxOverlapChars: 8, recentPosts: 50, skeletonCooldownHours: 48 },
+    // Political topics are capped per day and per event.
+    politicalCap: {
+      dailyMax: 3,
+      perEventMax: 1,
+      keywords: ['政治', '主席', '总统', '总理', '政府', '中央', '国务院', '人大', '政协', '部长', '书记', '外交', '选战', '制裁'],
+    },
+    // At least this share of a batch should ride a trending topic.
+    hotTopicShareMinPercent: 33,
     // Topics the operator never wants posted about, regardless of learning.
     manualBannedTopics: [],
     // Rules that decide which trending topics are safe and on-brand to reuse.
@@ -1059,7 +1138,7 @@ const DEFAULT_CONFIG = Object.freeze({
     ],
     topics: ['文言雅趣', '周朝掌故', '易经随笔', '日常感悟'],
     model: '',
-    customPrompt: '你在推特(X)上用周天子姬霸的人设发一条原创推文。文风为幽默、古奥的文言文或诗词歌赋，自称周天子、姬霸或夫子，不要露骨，禁止提现代网络低俗梗，字数在30到90字之间。',
+    customPrompt: '你在推特(X)上用浅显文言发一条原创推文。自称余/吾，称对方君/卿/尔，不用我/你作主语，不用白话虚词。写虚构成年人之间自愿的暧昧、男女博弈、相亲彩礼、渣男渣女，或骂一件具体的事。陌生人一读就懂，不写骈赋、不堆僻字。',
   },
   cruiseSettings: {
     enabled: true,
@@ -1351,6 +1430,55 @@ function validateConfig(input) {
     }
     if (copy.postSettings.queueAutoRefill !== undefined && typeof copy.postSettings.queueAutoRefill !== 'boolean') throw new TypeError('自动补仓开关无效');
     if (copy.postSettings.oneSentencePerLine !== undefined && typeof copy.postSettings.oneSentencePerLine !== 'boolean') throw new TypeError('一句一行开关无效');
+    if (copy.postSettings.format !== undefined) {
+      const fmt = copy.postSettings.format;
+      if (!isRecord(fmt)) throw new TypeError('发帖结构设置无效');
+      for (const key of ['lineCount', 'minChars', 'maxChars']) {
+        if (fmt[key] === undefined) continue;
+        const value = Number(fmt[key]);
+        if (!Number.isInteger(value) || value < 1 || value > 500) throw new TypeError('发帖结构数值需为 1~500 的整数');
+        fmt[key] = value;
+      }
+      if (fmt.lineCount > 12) throw new TypeError('发帖行数不能超过 12 行');
+      if (fmt.minChars > fmt.maxChars) throw new TypeError('字数下限不能大于上限');
+      if (fmt.closingPrefix !== undefined && (typeof fmt.closingPrefix !== 'string' || fmt.closingPrefix.length > 10)) throw new TypeError('结尾引导字无效');
+      for (const key of ['forbidColloquial', 'softOpeners', 'bannedPatterns']) {
+        if (fmt[key] === undefined) continue;
+        if (!Array.isArray(fmt[key]) || fmt[key].length > 200) throw new TypeError('发帖结构词表无效');
+        fmt[key] = [...new Set(fmt[key].map(item => String(item || '').trim()).filter(Boolean))];
+      }
+      if (fmt.hardBottomLines !== undefined && (typeof fmt.hardBottomLines !== 'string' || fmt.hardBottomLines.length > 2000)) throw new TypeError('硬底线文本无效');
+      if (fmt.requireClosingQuestion !== undefined && typeof fmt.requireClosingQuestion !== 'boolean') throw new TypeError('结尾提问开关无效');
+    }
+    if (copy.postSettings.dedupe !== undefined) {
+      const dedupe = copy.postSettings.dedupe;
+      if (!isRecord(dedupe)) throw new TypeError('去重设置无效');
+      for (const key of ['maxOverlapChars', 'recentPosts', 'skeletonCooldownHours']) {
+        if (dedupe[key] === undefined) continue;
+        const value = Number(dedupe[key]);
+        if (!Number.isInteger(value) || value < 0 || value > 10000) throw new TypeError('去重数值需为非负整数');
+        dedupe[key] = value;
+      }
+    }
+    if (copy.postSettings.politicalCap !== undefined) {
+      const cap = copy.postSettings.politicalCap;
+      if (!isRecord(cap)) throw new TypeError('政治话题上限设置无效');
+      for (const key of ['dailyMax', 'perEventMax']) {
+        if (cap[key] === undefined) continue;
+        const value = Number(cap[key]);
+        if (!Number.isInteger(value) || value < 0 || value > 50) throw new TypeError('政治话题上限需为 0~50 的整数');
+        cap[key] = value;
+      }
+      if (cap.keywords !== undefined) {
+        if (!Array.isArray(cap.keywords) || cap.keywords.length > 200) throw new TypeError('政治关键词名单无效');
+        cap.keywords = [...new Set(cap.keywords.map(item => String(item || '').trim()).filter(Boolean))];
+      }
+    }
+    if (copy.postSettings.hotTopicShareMinPercent !== undefined) {
+      const percent = Number(copy.postSettings.hotTopicShareMinPercent);
+      if (!Number.isInteger(percent) || percent < 0 || percent > 100) throw new TypeError('热点占比需为 0~100 的整数');
+      copy.postSettings.hotTopicShareMinPercent = percent;
+    }
     if (copy.postSettings.manualBannedTopics !== undefined) {
       if (!Array.isArray(copy.postSettings.manualBannedTopics) || copy.postSettings.manualBannedTopics.length > 200) throw new TypeError('手动避写话题最多 200 条');
       copy.postSettings.manualBannedTopics = [...new Set(
@@ -1732,7 +1860,22 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       // A one-off prompt overrides the global style prompt for this batch only.
       const oneOffPrompt = typeof request.prompt === 'string' && request.prompt.trim() ? request.prompt.trim() : '';
       const onePerLine = postCfg.oneSentencePerLine !== false;
-      const formatRule = onePerLine ? `\n\n${ONE_SENTENCE_RULE}` : '';
+      const fmtCfg = { ...DEFAULT_CONFIG.postSettings.format, ...(postCfg.format || {}) };
+      const dedupeCfg = { ...DEFAULT_CONFIG.postSettings.dedupe, ...(postCfg.dedupe || {}) };
+      const capCfg = { ...DEFAULT_CONFIG.postSettings.politicalCap, ...(postCfg.politicalCap || {}) };
+      const structureLines = [
+        `【硬性结构】共 ${fmtCfg.lineCount} 行，不多不少。汉字 ${fmtCfg.minChars}-${fmtCfg.maxChars} 个。`,
+        `第 1 行：直接扔出冲突、欲望或暧昧，禁止茶、灯、天气、衣物、眼神、走路之类软铺垫。`,
+        `第 2 行：立刻揭底或反转，动作具体。`,
+        `第 3 行：以「${fmtCfg.closingPrefix}」开头的具体提问，并以问号结尾。`,
+        fmtCfg.softOpeners?.length ? `禁在首行使用：${fmtCfg.softOpeners.join('、')}。` : '',
+        fmtCfg.bannedPatterns?.length ? `禁用作废句式：${fmtCfg.bannedPatterns.join('、')}。` : '',
+        fmtCfg.forbidColloquial?.length ? `禁用白话虚词：${fmtCfg.forbidColloquial.join('、')}。自称余/吾，称对方君/卿/尔。` : '',
+        '禁链接、@、话题标签。',
+        fmtCfg.hardBottomLines ? `【硬底线】${fmtCfg.hardBottomLines}` : '',
+      ].filter(Boolean);
+      const structureBlock = `\n\n${structureLines.join('\n')}`;
+      const formatRule = fmtCfg.lineCount > 0 ? structureBlock : (onePerLine ? `\n\n${ONE_SENTENCE_RULE}` : '');
       const basePrompt = oneOffPrompt || postCfg.customPrompt || '你在推特(X)上用周天子姬霸的人设发一条原创推文。文风为幽默、古奥的文言文或诗词歌赋，自称周天子、姬霸或夫子，不要露骨，禁止提现代网络低俗梗，字数在30到90字之间。';
       // Learned patterns steer topic choice and structure; the writing style above stays authoritative.
       const rawLearnings = readLearnings(activeLearningsPath);
@@ -1754,7 +1897,25 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       const generated = [];
       const failures = [];
       const themePlan = planThemeBatch(postCfg.topicMix, count);
-      const hotQuota = Math.max(0, Math.min(Number(postCfg.hotTopicPerBatch) || 0, count));
+      const sharePercent = Number(postCfg.hotTopicShareMinPercent ?? DEFAULT_CONFIG.postSettings.hotTopicShareMinPercent) || 0;
+      const shareQuota = Math.ceil((count * sharePercent) / 100);
+      // Recent history drives the overlap check and today's political budget.
+      let historyPosts = [];
+      try {
+        const stored = JSON.parse(readFileSync(POST_HISTORY_PATH, 'utf8'));
+        if (stored && Array.isArray(stored.posts)) historyPosts = stored.posts;
+      } catch { historyPosts = []; }
+      const hotQuota = Math.max(0, Math.min(Math.max(Number(postCfg.hotTopicPerBatch) || 0, shareQuota), count));
+      // Political topics are rationed: today's quota and one post per event.
+      const politicalWords = (capCfg.keywords || []).map(word => String(word).toLowerCase());
+      const todayKey = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+      const todayPosts = historyPosts.filter(item => {
+        const stamp = String(item?.time || item?.createdAt || '');
+        return stamp.slice(0, 10) === todayKey;
+      });
+      const politicalToday = todayPosts.filter(item => (capCfg.keywords || []).some(word => `${item?.theme || ''}${item?.hotTopic || ''}`.includes(word)));
+      const politicalBudget = Math.max(0, (Number(capCfg.dailyMax) || 0) - politicalToday.length);
+      const recentTexts = historyPosts.slice(-(Number(dedupeCfg.recentPosts) || 50)).map(item => item?.text).filter(Boolean);
       const trendPool = hotQuota > 0
         ? screenHotTopics(readTrends().topics, {
             ...(postCfg.hotFilter || DEFAULT_CONFIG.postSettings.hotFilter),
@@ -1768,6 +1929,9 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         const j = Math.floor(Math.random() * (k + 1));
         [trendPool[k], trendPool[j]] = [trendPool[j], trendPool[k]];
       }
+      // When today's political budget is spent, non-political topics go first.
+      const isPolitical = topic => (capCfg.keywords || []).some(word => String(topic).includes(word));
+      if (politicalBudget <= 0) trendPool.sort((a, b) => Number(isPolitical(a)) - Number(isPolitical(b)));
       const hotTopics = trendPool.slice(0, Math.min(hotQuota, trendPool.length));
       for (let i = 0; i < count; i++) {
         const hotTopic = i < hotTopics.length ? hotTopics[i] : '';
@@ -1784,9 +1948,27 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         const topicHint = theme ? `\n（请紧扣「${theme.label}」这个主题方向，不要跑题）` : `\n（当前话题灵感参考：${topic}）`;
         const prompt = basePrompt + themeBlock + hotBlock + learningBlock + topicHint + formatRule;
         try {
-          const rawDraft = await generateTweetViaLmh(prompt, { model, port });
-          const draftText = onePerLine ? enforceOneSentencePerLine(rawDraft) : rawDraft;
+          let rawDraft = await generateTweetViaLmh(prompt, { model, port });
+          let draftText = fmtCfg.lineCount > 0
+            ? String(rawDraft || '').trim()
+            : (onePerLine ? enforceOneSentencePerLine(rawDraft) : rawDraft);
+          let verdict = checkPostDraft(draftText, { ...fmtCfg, maxOverlapChars: dedupeCfg.maxOverlapChars }, recentTexts);
+          if (!verdict.ok) {
+            // One corrective retry that names every violation.
+            const retryPrompt = `${prompt}\n\n【上一次不合格，必须修正】\n- ${verdict.reasons.join('\n- ')}`;
+            rawDraft = await generateTweetViaLmh(retryPrompt, { model, port });
+            draftText = fmtCfg.lineCount > 0
+              ? String(rawDraft || '').trim()
+              : (onePerLine ? enforceOneSentencePerLine(rawDraft) : rawDraft);
+            verdict = checkPostDraft(draftText, { ...fmtCfg, maxOverlapChars: dedupeCfg.maxOverlapChars }, recentTexts);
+          }
+          if (!verdict.ok) {
+            failures.push(`结构不合规：${verdict.reasons.join('；')}`);
+            console.error('Draft rejected:', verdict.reasons.join('; '));
+            continue;
+          }
           if (draftText) {
+            recentTexts.unshift(draftText);
             generated.push({
               id: `post_ai_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 6)}`,
               text: draftText,
@@ -1794,6 +1976,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
               sig: postSettingsSignature(postCfg),
               theme: theme ? theme.label : '',
               hotTopic: hotTopic || '',
+              political: (capCfg.keywords || []).some(word => `${theme?.label || ''}${hotTopic}`.includes(word)),
               source: oneOffPrompt ? 'ai_draft_custom' : 'ai_draft',
               urgent: false,
               createdAt: new Date().toISOString(),

@@ -341,6 +341,19 @@ window.__ModuleLoader__.load({
           return { ...tier, [key]: value };
         }),
       }));
+      const setPostFormat = (key, value) => updateConfig(c => ({
+        ...c,
+        postSettings: { ...(c.postSettings || {}), format: { ...(c.postSettings?.format || {}), [key]: value } },
+      }));
+      const setPostDedupe = (key, value) => updateConfig(c => ({
+        ...c,
+        postSettings: { ...(c.postSettings || {}), dedupe: { ...(c.postSettings?.dedupe || {}), [key]: value } },
+      }));
+      const setPostCap = (key, value) => updateConfig(c => ({
+        ...c,
+        postSettings: { ...(c.postSettings || {}), politicalCap: { ...(c.postSettings?.politicalCap || {}), [key]: value } },
+      }));
+
       const addBanned = () => {
         const items = bannedDraft.split(/[,，\n]+/).map(item => item.trim()).filter(Boolean);
         if (!items.length) return;
@@ -467,7 +480,7 @@ window.__ModuleLoader__.load({
               t('title')),
             h('p', { style: { margin: '4px 0 0', fontSize: 13, color: C.muted } }, t('subtitle'))),
           h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.17.0'),
+            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.18.0'),
             h('button', {
               type: 'button',
               disabled: busy || updating,
@@ -1321,6 +1334,133 @@ window.__ModuleLoader__.load({
                 updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), topics: parsed } }));
               },
             })),
+
+          // 写作规则（来自 builtbyxm 写手规则）
+          h('section', { style: cardStyle },
+            h('h2', { style: { margin: 0, fontSize: 15 } }, '📖 写作规则（三行结构 / 禁则 / 去重）'),
+            h('p', { style: { margin: '6px 0 10px', fontSize: 12, color: C.faint, lineHeight: 1.6 } },
+              '改动即时生效：生成提示词会带上这些要求，生成后再按同样规则硬校验，不合规重写一次，仍不合格就丢弃不入队。'),
+            h('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' } },
+              h('label', { style: { ...labelStyle, flex: '1 1 130px' } },
+                '固定行数：', h(SideBadge, { side: 'post' }),
+                h('input', {
+                  type: 'number', min: 1, max: 12, style: inputStyle,
+                  value: config?.postSettings?.format?.lineCount ?? 3,
+                  onChange: e => setPostFormat('lineCount', e.target.value === '' ? '' : Number(e.target.value)),
+                })),
+              h('label', { style: { ...labelStyle, flex: '1 1 130px' } },
+                '汉字下限：',
+                h('input', {
+                  type: 'number', min: 1, max: 500, style: inputStyle,
+                  value: config?.postSettings?.format?.minChars ?? 30,
+                  onChange: e => setPostFormat('minChars', e.target.value === '' ? '' : Number(e.target.value)),
+                })),
+              h('label', { style: { ...labelStyle, flex: '1 1 130px' } },
+                '汉字上限：',
+                h('input', {
+                  type: 'number', min: 1, max: 500, style: inputStyle,
+                  value: config?.postSettings?.format?.maxChars ?? 60,
+                  onChange: e => setPostFormat('maxChars', e.target.value === '' ? '' : Number(e.target.value)),
+                })),
+              h('label', { style: { ...labelStyle, flex: '1 1 130px' } },
+                '末行引导字：',
+                h('input', {
+                  style: inputStyle,
+                  value: config?.postSettings?.format?.closingPrefix ?? '尔',
+                  onChange: e => setPostFormat('closingPrefix', e.target.value),
+                }))),
+            h('label', { style: { display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginTop: 10 } },
+              h('input', {
+                type: 'checkbox',
+                checked: config?.postSettings?.format?.requireClosingQuestion !== false,
+                onChange: e => setPostFormat('requireClosingQuestion', e.target.checked),
+              }),
+              '末行必须以引导字开头并以问号结尾'),
+            h('label', { style: { ...labelStyle, marginTop: 10 } }, '首行禁用的软铺垫词（逗号分隔）：'),
+            h('input', {
+              style: inputStyle,
+              value: (config?.postSettings?.format?.softOpeners || []).join('、'),
+              onChange: e => setPostFormat('softOpeners', e.target.value.split(/[,，、\s]+/).map(x => x.trim()).filter(Boolean)),
+            }),
+            h('label', { style: { ...labelStyle, marginTop: 8 } }, '作废句式（逗号分隔）：'),
+            h('input', {
+              style: inputStyle,
+              value: (config?.postSettings?.format?.bannedPatterns || []).join('、'),
+              onChange: e => setPostFormat('bannedPatterns', e.target.value.split(/[,，、\s]+/).map(x => x.trim()).filter(Boolean)),
+            }),
+            h('label', { style: { ...labelStyle, marginTop: 8 } }, '白话虚词（逗号分隔，命中即重写）：'),
+            h('input', {
+              style: inputStyle,
+              value: (config?.postSettings?.format?.forbidColloquial || []).join('、'),
+              onChange: e => setPostFormat('forbidColloquial', e.target.value.split(/[,，、\s]+/).map(x => x.trim()).filter(Boolean)),
+            }),
+            h('label', { style: { ...labelStyle, marginTop: 8 } }, '硬底线（任何题材都不放松）：'),
+            h('textarea', {
+              style: { ...inputStyle, minHeight: 60, fontSize: 12 },
+              value: config?.postSettings?.format?.hardBottomLines || '',
+              onChange: e => setPostFormat('hardBottomLines', e.target.value),
+            }),
+            h('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 12, paddingTop: 10, borderTop: `1px solid ${C.border}` } },
+              h('label', { style: { ...labelStyle, flex: '1 1 150px' } },
+                '重复字数上限（与已发比）：',
+                h('input', {
+                  type: 'number', min: 0, max: 100, style: inputStyle,
+                  value: config?.postSettings?.dedupe?.maxOverlapChars ?? 8,
+                  onChange: e => setPostDedupe('maxOverlapChars', e.target.value === '' ? 0 : Number(e.target.value)),
+                })),
+              h('label', { style: { ...labelStyle, flex: '1 1 150px' } },
+                '比对最近多少条：',
+                h('input', {
+                  type: 'number', min: 1, max: 500, style: inputStyle,
+                  value: config?.postSettings?.dedupe?.recentPosts ?? 50,
+                  onChange: e => setPostDedupe('recentPosts', e.target.value === '' ? 50 : Number(e.target.value)),
+                })),
+              h('label', { style: { ...labelStyle, flex: '1 1 150px' } },
+                '同骨架冷却（小时）：',
+                h('input', {
+                  type: 'number', min: 0, max: 720, style: inputStyle,
+                  value: config?.postSettings?.dedupe?.skeletonCooldownHours ?? 48,
+                  onChange: e => setPostDedupe('skeletonCooldownHours', e.target.value === '' ? 0 : Number(e.target.value)),
+                }))),
+            h('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 10 } },
+              h('label', { style: { ...labelStyle, flex: '1 1 130px' } },
+                '政治每日上限：',
+                h('input', {
+                  type: 'number', min: 0, max: 50, style: inputStyle,
+                  value: config?.postSettings?.politicalCap?.dailyMax ?? 3,
+                  onChange: e => setPostCap('dailyMax', e.target.value === '' ? 0 : Number(e.target.value)),
+                })),
+              h('label', { style: { ...labelStyle, flex: '1 1 130px' } },
+                '同一事件上限：',
+                h('input', {
+                  type: 'number', min: 0, max: 50, style: inputStyle,
+                  value: config?.postSettings?.politicalCap?.perEventMax ?? 1,
+                  onChange: e => setPostCap('perEventMax', e.target.value === '' ? 0 : Number(e.target.value)),
+                })),
+              h('label', { style: { ...labelStyle, flex: '1 1 160px' } },
+                '每批热点占比下限（%）：',
+                h('input', {
+                  type: 'number', min: 0, max: 100, style: inputStyle,
+                  value: config?.postSettings?.hotTopicShareMinPercent ?? 33,
+                  onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), hotTopicShareMinPercent: e.target.value === '' ? 0 : Number(e.target.value) } })),
+                }))),
+            h('div', { style: { marginTop: 12, paddingTop: 10, borderTop: `1px solid ${C.border}` } },
+              h('button', {
+                type: 'button',
+                style: { ...buttonStyle(true), padding: '7px 14px', fontSize: 12 },
+                onClick: () => {
+                  const preset = [
+                    { id: 'hook_xy', label: '香艳', weight: 60, prompt: '古典艳诗/宫体诗气质，写虚构成年女子，称卿、佳人、娘子。闺房双关、调情、暧昧动作，用一句双关收束。不写琴、月、帘、花之类氛围小品。' },
+                    { id: 'hook_pp', label: '批判', weight: 20, prompt: '骂一件具体的事（热点、制度动作、平台坑、看客、伪君子），要有具体人物/动作/数字。' },
+                    { id: 'hook_gn', label: '搞女人', weight: 20, prompt: '成年人自愿的暧昧、男女博弈、相亲彩礼、渣男渣女、嘴上装身体诚实。' },
+                  ];
+                  updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), topicMix: preset } }));
+                  setNotice('已套用文档配比：香艳 60% / 批判 20% / 搞女人 20%，记得保存。');
+                },
+              }, '⚡ 套用文档配比（香艳60/批判20/搞女人20）'),
+              h('small', { style: { display: 'block', marginTop: 6, fontSize: 11, color: C.faint } },
+                '替换当前「主题配比」。楚辞占比可在主题里单独加一条，或在时段文风里控制。')),
+          ),
 
           // 格式硬性要求
           h('section', { style: cardStyle },
