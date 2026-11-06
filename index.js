@@ -33,6 +33,7 @@ export const LEARNINGS_PATH = join(APP_HOME, 'Library/Application Support/XBotOp
 export const POST_METRICS_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/post_metrics.json');
 export const LEARN_TRIGGER_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/learn_now.trigger');
 export const CRUISE_HISTORY_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/profile_cruise_history.json');
+export const TRENDS_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/trends.json');
 export const CONFIG_BACKUP_DIR = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/config-history');
 const MAX_CONFIG_BACKUPS = 20;
 
@@ -94,6 +95,7 @@ export const FIELD_SIDE = Object.freeze({
   'postSettings.intervalMinSeconds': 'post',
   'postSettings.intervalMaxSeconds': 'post',
   'postSettings.oneSentencePerLine': 'post',
+  'postSettings.hotTopicPerBatch': 'post',
   'postSettings.restEveryPosts': 'post',
   'postSettings.restMinutes': 'post',
   'postSettings.learningInfluence': 'post',
@@ -122,6 +124,7 @@ export const FIELD_SIDE = Object.freeze({
   'learningSettings.maxSamples': 'post',
   'learningSettings.injectIntoPost': 'post',
   'learningSettings.model': 'post',
+  'learningSettings.trendSources': 'post',
 });
 
 export function resolveDshPnpm() {
@@ -364,6 +367,95 @@ export function listConfigBackups(backupDir = CONFIG_BACKUP_DIR) {
   } catch {
     return [];
   }
+}
+
+// Pull headline candidates out of whatever a board returns (JSON or HTML).
+export function extractTrendTopics(body) {
+  const text = String(body || '');
+  const topics = new Set();
+  const push = value => {
+    const title = String(value || '').replace(/\s+/g, ' ').trim();
+    if (title.length >= 4 && title.length <= 80) topics.add(title);
+  };
+  try {
+    const parsed = JSON.parse(text);
+    const walk = node => {
+      if (Array.isArray(node)) { node.forEach(walk); return; }
+      if (isRecord(node)) {
+        for (const key of ['query', 'Title', 'title', 'word', 'name', 'note']) {
+          if (typeof node[key] === 'string') push(node[key]);
+        }
+        Object.values(node).forEach(walk);
+      }
+    };
+    walk(parsed);
+  } catch { /* not JSON; fall through to regex */ }
+  if (!topics.size) {
+    for (const pattern of [/"Title":"([^"]{4,80})"/g, /"query":"([^"]{4,80})"/g, /"word":"([^"]{4,80})"/g, /<title>([^<]{4,80})<\/title>/g]) {
+      let match;
+      while ((match = pattern.exec(text)) !== null) push(match[1]);
+    }
+  }
+  return [...topics].slice(0, 50);
+}
+
+export function readTrends(trendsPath = TRENDS_PATH) {
+  try {
+    if (existsSync(trendsPath)) {
+      const data = JSON.parse(readFileSync(trendsPath, 'utf8'));
+      if (isRecord(data) && Array.isArray(data.topics)) return data;
+    }
+  } catch { /* fall through */ }
+  return { fetchedAt: null, topics: [], sources: [] };
+}
+
+export function writeTrends(data, trendsPath = TRENDS_PATH) {
+  const dir = dirname(trendsPath);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  const payload = {
+    fetchedAt: new Date().toISOString(),
+    topics: [...new Set((Array.isArray(data.topics) ? data.topics : []).map(String))].slice(0, 200),
+    sources: (Array.isArray(data.sources) ? data.sources : []).slice(0, 20),
+  };
+  const tempPath = `${trendsPath}.tmp.${Date.now()}`;
+  writeFileSync(tempPath, JSON.stringify(payload, null, 2), { mode: 0o600 });
+  renameSync(tempPath, trendsPath);
+  return payload;
+}
+
+// Fetch every enabled board. Failures are reported per source instead of aborting.
+export async function fetchAllTrends(sources, { timeoutMs = 12000 } = {}) {
+  const results = [];
+  const topics = [];
+  for (const source of Array.isArray(sources) ? sources : []) {
+    if (!isRecord(source) || source.enabled === false) continue;
+    const url = String(source.url || '');
+    if (!/^https?:\/\//i.test(url)) { results.push({ id: source.id, label: source.label, ok: false, count: 0, error: '地址无效' }); continue; }
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      let body = '';
+      try {
+        const response = await fetch(url, {
+          signal: controller.signal,
+          headers: {
+            'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36',
+            accept: 'application/json,text/html,*/*',
+          },
+        });
+        body = await response.text();
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      } finally {
+        clearTimeout(timer);
+      }
+      const list = extractTrendTopics(body);
+      topics.push(...list);
+      results.push({ id: source.id, label: source.label, ok: list.length > 0, count: list.length, error: list.length ? '' : '未提取到话题' });
+    } catch (error) {
+      results.push({ id: source.id, label: source.label, ok: false, count: 0, error: String(error?.message || error).slice(0, 120) });
+    }
+  }
+  return { results, topics: [...new Set(topics)] };
 }
 
 export function readLearnings(learningsPath = LEARNINGS_PATH) {
@@ -802,6 +894,8 @@ const DEFAULT_CONFIG = Object.freeze({
     queueLowThreshold: 3,
     queueAutoRefill: true,
     queueMaxSize: 100,
+    // How many drafts of each batch are rewrites of a trending topic (0 = off).
+    hotTopicPerBatch: 2,
     // Hard format rule: one sentence per line, never a single block of text.
     oneSentencePerLine: true,
     // Take a break after this many posts (0 disables the counter-based rest).
@@ -846,6 +940,14 @@ const DEFAULT_CONFIG = Object.freeze({
     injectIntoPost: true,
     benchmarkUrl: 'https://xbangdan.com/posts/',
     model: '',
+    // Hot-search boards mined for trending topics.
+    trendSources: [
+      { id: 'baidu', label: '百度热搜', url: 'https://top.baidu.com/board?tab=realtime', enabled: true },
+      { id: 'toutiao', label: '头条热榜', url: 'https://www.toutiao.com/hot-event/hot-board/?origin=toutiao_pc', enabled: true },
+      { id: 'weibo', label: '微博热搜（需登录态，默认关）', url: 'https://weibo.com/ajax/side/hotSearch', enabled: false },
+      { id: 'zhihu', label: '知乎热榜（需登录态，默认关）', url: 'https://www.zhihu.com/api/v3/feed/topstory/hot-lists/total?limit=20', enabled: false },
+      { id: 'douyin', label: '抖音热榜（需签名，默认关）', url: 'https://www.douyin.com/aweme/v1/web/hot/search/list/', enabled: false },
+    ],
   },
 });
 
@@ -1081,6 +1183,11 @@ function validateConfig(input) {
     }
     if (copy.postSettings.queueAutoRefill !== undefined && typeof copy.postSettings.queueAutoRefill !== 'boolean') throw new TypeError('自动补仓开关无效');
     if (copy.postSettings.oneSentencePerLine !== undefined && typeof copy.postSettings.oneSentencePerLine !== 'boolean') throw new TypeError('一句一行开关无效');
+    if (copy.postSettings.hotTopicPerBatch !== undefined) {
+      const hot = Number(copy.postSettings.hotTopicPerBatch);
+      if (!Number.isInteger(hot) || hot < 0 || hot > 20) throw new TypeError('每批热榜条数需为 0~20 的整数');
+      copy.postSettings.hotTopicPerBatch = hot;
+    }
     if (copy.postSettings.restEveryPosts !== undefined) {
       const every = Number(copy.postSettings.restEveryPosts);
       if (!Number.isInteger(every) || every < 0 || every > 100) throw new TypeError('发帖批次数需为 0~100 的整数（0 表示不按条数休息）');
@@ -1184,6 +1291,18 @@ function validateConfig(input) {
       if (ls[key] !== undefined && typeof ls[key] !== 'boolean') throw new TypeError('发帖学习开关无效');
     }
     if (ls.model !== undefined && typeof ls.model !== 'string') throw new TypeError('学习模型设置无效');
+    if (ls.trendSources !== undefined) {
+      if (!Array.isArray(ls.trendSources) || ls.trendSources.length > 20) throw new TypeError('热榜来源最多 20 个');
+      const seen = new Set();
+      for (const source of ls.trendSources) {
+        if (!isRecord(source)) throw new TypeError('热榜来源条目无效');
+        if (typeof source.id !== 'string' || !source.id || seen.has(source.id)) throw new TypeError('热榜来源编号缺失或重复');
+        seen.add(source.id);
+        if (typeof source.label !== 'string' || !source.label.trim() || source.label.length > 60) throw new TypeError('热榜来源名称需为 1~60 字');
+        if (typeof source.url !== 'string' || !/^https?:\/\//i.test(source.url) || source.url.length > 500) throw new TypeError('热榜来源地址必须是 http(s) 链接');
+        if (typeof source.enabled !== 'boolean') throw new TypeError('热榜来源启用状态无效');
+      }
+    }
     if (ls.benchmarkUrl !== undefined) {
       if (typeof ls.benchmarkUrl !== 'string' || ls.benchmarkUrl.length > 500 || (ls.benchmarkUrl && !/^https?:\/\//i.test(ls.benchmarkUrl))) throw new TypeError('榜单地址必须是 http(s) 链接');
     }
@@ -1299,6 +1418,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       postQueue: postQueue.queue,
       postHistory: postHistory.slice(-20),
       learnings: readLearnings(activeLearningsPath),
+      trends: readTrends(),
       cruiseSweep: readCruiseSweep(),
       replyDiagnostics: readReplyDiagnostics(items.reply ? items.reply.stateDir : null),
       configBackups: listConfigBackups(activeBackupDir),
@@ -1412,7 +1532,15 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       const generated = [];
       const failures = [];
       const themePlan = planThemeBatch(postCfg.topicMix, count);
+      const hotQuota = Math.max(0, Math.min(Number(postCfg.hotTopicPerBatch) || 0, count));
+      const trendPool = hotQuota > 0 ? [...(readTrends().topics || [])] : [];
+      for (let k = trendPool.length - 1; k > 0; k -= 1) {
+        const j = Math.floor(Math.random() * (k + 1));
+        [trendPool[k], trendPool[j]] = [trendPool[j], trendPool[k]];
+      }
+      const hotTopics = trendPool.slice(0, Math.min(hotQuota, trendPool.length));
       for (let i = 0; i < count; i++) {
+        const hotTopic = i < hotTopics.length ? hotTopics[i] : '';
         const topic = pool[Math.floor(Math.random() * pool.length)];
         const theme = themePlan[i] || pickTopicTheme(postCfg.topicMix);
         // When a weighted theme is active it owns the content direction; a random
@@ -1420,8 +1548,11 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         const themeBlock = theme
           ? `\n\n【本条主题方向：${theme.label}】（约占 ${theme.weight}%）${theme.prompt ? ` ${theme.prompt}` : ''}`
           : '';
+        const hotBlock = hotTopic
+          ? `\n\n【今日热点话题】${hotTopic}\n请借这个话题的热度写一条原创推文：可以评论、反讽、借题发挥或抒发感想，但必须保持上面的文风与人设，不要照搬新闻标题，不要写成新闻播报。`
+          : '';
         const topicHint = theme ? `\n（请紧扣「${theme.label}」这个主题方向，不要跑题）` : `\n（当前话题灵感参考：${topic}）`;
-        const prompt = basePrompt + themeBlock + learningBlock + topicHint + formatRule;
+        const prompt = basePrompt + themeBlock + hotBlock + learningBlock + topicHint + formatRule;
         try {
           const rawDraft = await generateTweetViaLmh(prompt, { model, port });
           const draftText = onePerLine ? enforceOneSentencePerLine(rawDraft) : rawDraft;
@@ -1432,6 +1563,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
               topic,
               sig: postSettingsSignature(postCfg),
               theme: theme ? theme.label : '',
+              hotTopic: hotTopic || '',
               source: oneOffPrompt ? 'ai_draft_custom' : 'ai_draft',
               urgent: false,
               createdAt: new Date().toISOString(),
@@ -1491,6 +1623,23 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         action: 'backup-config-now',
         backups: listConfigBackups(activeBackupDir),
         note: file ? '已为当前配置创建一份快照。' : '当前没有可备份的配置文件。',
+      };
+    }
+    if (request.action === 'fetch-trends') {
+      const sharedCfg = getConfig();
+      const sources = (sharedCfg.learningSettings || {}).trendSources
+        || DEFAULT_CONFIG.learningSettings.trendSources;
+      const enabled = sources.filter(source => source.enabled !== false);
+      if (!enabled.length) throw new Error('没有启用任何热榜来源');
+      const { results, topics } = await fetchAllTrends(enabled);
+      const payload = writeTrends({ topics, sources: results });
+      const okCount = results.filter(item => item.ok).length;
+      return {
+        ok: true,
+        action: 'fetch-trends',
+        trends: payload,
+        results,
+        note: `已抓取 ${okCount}/${results.length} 个榜单，合并去重后 ${payload.topics.length} 条话题。`,
       };
     }
     if (request.action === 'learn-manual') {

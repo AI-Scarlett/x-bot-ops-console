@@ -1160,6 +1160,46 @@ test('batch theme plan hits the exact quota and interleaves themes', async () =>
   assert.deepEqual(planThemeBatch(mix, 0), []);
 });
 
+test('trend sources are configurable and topics are extracted from boards', async () => {
+  const { extractTrendTopics, DEFAULT_CONFIG: defaults } = await import('../index.js');
+  const sources = defaults.learningSettings.trendSources;
+  assert.ok(sources.length >= 2);
+  assert.ok(sources.some(item => item.id === 'baidu' && item.enabled));
+  assert.ok(sources.some(item => item.id === 'toutiao' && item.enabled));
+
+  const config = clone(DEFAULT_CONFIG);
+  config.learningSettings.trendSources = [
+    { id: 'a', label: '百度热搜', url: 'https://example.com/hot', enabled: true },
+    { id: 'b', label: '自定义榜', url: 'http://example.org/list', enabled: false },
+  ];
+  const ok = validateConfig(config);
+  assert.equal(ok.learningSettings.trendSources.length, 2);
+
+  const badUrl = clone(DEFAULT_CONFIG);
+  badUrl.learningSettings.trendSources = [{ id: 'x', label: 'X', url: 'javascript:alert(1)', enabled: true }];
+  assert.throws(() => validateConfig(badUrl), /热榜来源地址/);
+
+  // Extraction works for both JSON payloads and plain HTML.
+  assert.deepEqual(
+    extractTrendTopics('{"data":[{"query":"第一个热词"},{"Title":"Second trending headline"}]}').sort(),
+    ['Second trending headline', '第一个热词'].sort(),
+  );
+  assert.deepEqual(extractTrendTopics('<html><title>页面标题足够长</title></html>'), ['页面标题足够长']);
+  assert.deepEqual(extractTrendTopics('short'), []);
+
+  // Per-batch hot quota is bounded.
+  const hot = clone(DEFAULT_CONFIG);
+  hot.postSettings.hotTopicPerBatch = 3;
+  assert.equal(validateConfig(hot).postSettings.hotTopicPerBatch, 3);
+  const badHot = clone(DEFAULT_CONFIG);
+  badHot.postSettings.hotTopicPerBatch = 21;
+  assert.throws(() => validateConfig(badHot), /每批热榜条数/);
+
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.match(source, /热榜话题源/);
+  assert.match(source, /立即抓取热榜/);
+});
+
 test('save rebases onto disk so untouched prompts are never wiped', async () => {
   const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
 

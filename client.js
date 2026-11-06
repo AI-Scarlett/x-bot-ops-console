@@ -453,7 +453,7 @@ window.__ModuleLoader__.load({
               t('title')),
             h('p', { style: { margin: '4px 0 0', fontSize: 13, color: C.muted } }, t('subtitle'))),
           h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.13.1'),
+            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.14.0'),
             h('button', {
               type: 'button',
               disabled: busy || updating,
@@ -1659,6 +1659,80 @@ window.__ModuleLoader__.load({
             ) : h('div', { style: { marginTop: 10, padding: '12px', background: C.layerTwo, borderRadius: 8, fontSize: 12, color: C.faint } },
               '还没有学习记录。点击右上角「🚀 立即学习一次」开始。')
           ),
+
+          // 热榜话题源
+          h('section', { style: cardStyle },
+            h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 } },
+              h('div', null,
+                h('h2', { style: { margin: 0, fontSize: 15 } }, '🔥 热榜话题源'),
+                h('p', { style: { margin: '4px 0 0', fontSize: 12, color: C.faint, lineHeight: 1.6 } },
+                  '发帖时读取这些榜单的话题，按「每批热榜条数」插入几条借热度的原创改写。需登录态的源会被自动跳过。')),
+              h('button', {
+                type: 'button',
+                disabled: busy,
+                style: { ...buttonStyle(true), padding: '6px 14px', fontSize: 12 },
+                onClick: async () => {
+                  try {
+                    const res = await act('fetch-trends');
+                    setNotice(res?.note || '热榜已刷新。');
+                  } catch (err) { setError(`抓取失败：${err.message || String(err)}`); }
+                }
+              }, '🔄 立即抓取热榜')),
+            h('label', { style: { ...labelStyle, marginTop: 10 } }, '每批生成中插入几条热榜改写（0=不插入）：', h(SideBadge, { side: 'post' })),
+            h('input', {
+              type: 'number', min: 0, max: 20, style: inputStyle,
+              value: config?.postSettings?.hotTopicPerBatch ?? 2,
+              onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), hotTopicPerBatch: e.target.value === '' ? 0 : Number(e.target.value) } })),
+            }),
+            (() => {
+              const trends = state?.trends;
+              if (!trends || !(trends.topics || []).length) {
+                return h('div', { style: { marginTop: 10, padding: '10px', background: C.layerTwo, borderRadius: 8, fontSize: 12, color: C.faint } },
+                  '还没有热榜数据。点右上角「🔄 立即抓取热榜」或等 Worker 自动抓取。');
+              }
+              return h('div', { style: { marginTop: 10 } },
+                h('div', { style: { fontSize: 12, color: C.muted, marginBottom: 6 } },
+                  `上次抓取：${trends.fetchedAt || '-'} · 共 ${trends.topics.length} 条 · ` +
+                  (trends.sources || []).map(x => `${x.label}${x.ok ? '✓' : '✗'}`).join(' ')),
+                h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 120, overflowY: 'auto' } },
+                  ...trends.topics.slice(0, 24).map(topic => h('span', {
+                    key: topic,
+                    style: { fontSize: 11, padding: '3px 8px', borderRadius: 999, background: C.layerTwo, border: `1px solid ${C.border}`, color: C.text }
+                  }, topic))));
+            })(),
+            h('div', { style: { marginTop: 12 } },
+              h('div', { style: { fontSize: 13, fontWeight: '600', marginBottom: 6 } }, '来源列表（可开关 / 改名 / 换地址）'),
+              h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
+                ...((config?.learningSettings?.trendSources) || []).map(source => h('div', {
+                  key: source.id,
+                  style: { display: 'flex', gap: 8, alignItems: 'center', padding: '6px 10px', background: C.layerTwo, borderRadius: 6, border: `1px solid ${C.border}` }
+                },
+                  h('input', {
+                    type: 'checkbox', checked: source.enabled !== false,
+                    onChange: e => updateConfig(c => ({
+                      ...c,
+                      learningSettings: {
+                        ...(c.learningSettings || {}),
+                        trendSources: (c.learningSettings?.trendSources || []).map(item => (item.id === source.id ? { ...item, enabled: e.target.checked } : item)),
+                      },
+                    })),
+                  }),
+                  h('input', {
+                    style: { ...inputStyle, flex: '0 0 150px', margin: 0, fontSize: 12 },
+                    value: source.label,
+                    onChange: e => updateConfig(c => ({
+                      ...c,
+                      learningSettings: { ...(c.learningSettings || {}), trendSources: (c.learningSettings?.trendSources || []).map(item => (item.id === source.id ? { ...item, label: e.target.value } : item)) },
+                    })),
+                  }),
+                  h('input', {
+                    style: { ...inputStyle, flex: '1 1 300px', margin: 0, fontSize: 12 },
+                    value: source.url,
+                    onChange: e => updateConfig(c => ({
+                      ...c,
+                      learningSettings: { ...(c.learningSettings || {}), trendSources: (c.learningSettings?.trendSources || []).map(item => (item.id === source.id ? { ...item, url: e.target.value } : item)) },
+                    })),
+                  })))))),
 
           // 2. X 榜单拆解
           h('section', { style: cardStyle },
