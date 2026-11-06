@@ -1948,6 +1948,8 @@ test('fetch-trends drops rule-rejected headlines before they are cached', async 
       ...(config.postSettings.hotFilter || {}),
       excludeKeywords: ['美股'],
       excludedTopics: ['某明星深夜聚餐'],
+      // No model call in the offline test: the AI pass has its own coverage.
+      aiScreen: false,
       minLength: 4,
       maxLength: 50,
     };
@@ -1969,7 +1971,7 @@ test('fetch-trends drops rule-rejected headlines before they are cached', async 
     // set is four headlines and two of those are rejected by the rules.
     assert.equal(result.trends.rawCount, 4);
     assert.equal(result.trends.droppedCount, 2);
-    assert.match(result.note, /按规则剔除 2 条/);
+    assert.match(result.note, /剔除 2 条/);
     const reasons = result.trends.droppedSamples.map(item => item.reason).sort();
     assert.deepEqual(reasons, ['手动剔除', '含敏感词「美股」'].sort());
 
@@ -2143,4 +2145,42 @@ test('login status and sync-login fail cleanly when nothing is reachable', async
     assert.ok(status.results.every(item => item.ok === false && /连不上|没有可操作|超时/.test(item.error)));
     await assert.rejects(service.action({ action: 'sync-login' }), /都没有可用的 X 登录态/);
   } finally { f.cleanup(); }
+});
+
+test('AI hot-board screening prompt and verdicts behave like the worker', async () => {
+  const { buildHotScreenPrompt, applyHotScreenVerdict, HOT_AI_DEFAULT_INSTRUCTION, validateConfig, DEFAULT_CONFIG } = await import('../index.js');
+  const prompt = buildHotScreenPrompt(['某顶流塌房了', '存款利率拐点'], {
+    excludeKeywords: ['娱乐圈', '明星'],
+    bannedTopics: ['政治'],
+  });
+  assert.match(prompt, /娱乐圈、明星/);
+  assert.match(prompt, /政治/);
+  assert.match(prompt, /1\. 某顶流塌房了/);
+  assert.match(prompt, /2\. 存款利率拐点/);
+  assert.match(prompt, /\{"keep":\[编号\]/);
+  // An editable instruction replaces the built-in one but keeps the placeholders.
+  const custom = buildHotScreenPrompt(['话题A'], { aiScreenInstruction: '只留科技，剔除：{keywords}\n{topics}' });
+  assert.match(custom, /只留科技/);
+  assert.match(custom, /1\. 话题A/);
+  assert.ok(!custom.includes('{topics}'));
+  assert.match(HOT_AI_DEFAULT_INSTRUCTION, /\{keywords\}/);
+
+  // Whitelist mode: anything unlisted is dropped, rejects carry a reason.
+  const whitelist = applyHotScreenVerdict(['明星A', '存款B', '裁员C'], { keep: [2], reject: [{ id: 1, why: '明星娱乐' }] });
+  assert.deepEqual(whitelist.usable, ['存款B']);
+  assert.deepEqual(whitelist.rejected, [{ topic: '明星A', reason: 'AI：明星娱乐' }]);
+  // Blacklist mode: an all-reject reply keeps the rest instead of emptying the board.
+  const blacklist = applyHotScreenVerdict(['明星A', '存款B'], { reject: [{ id: 1, why: '明星娱乐' }] });
+  assert.deepEqual(blacklist.usable, ['存款B']);
+  // Garbage ids never crash or drop everything.
+  assert.deepEqual(applyHotScreenVerdict(['A', 'B'], { keep: ['x'] }), { usable: ['A', 'B'], rejected: [] });
+  assert.deepEqual(applyHotScreenVerdict(['A', 'B'], {}).usable, ['A', 'B']);
+
+  const config = structuredClone(DEFAULT_CONFIG);
+  assert.equal(config.postSettings.hotFilter.aiScreen, true);
+  config.postSettings.hotFilter.aiScreenMaxTopics = 3;
+  assert.throws(() => validateConfig(config), /5~300/);
+  config.postSettings.hotFilter.aiScreenMaxTopics = 40;
+  config.postSettings.hotFilter.aiScreenInstruction = 'x'.repeat(3001);
+  assert.throws(() => validateConfig(config), /3000 字/);
 });

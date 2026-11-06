@@ -486,6 +486,10 @@ export function writeTrends(data, trendsPath = TRENDS_PATH) {
   if (Number.isFinite(Number(data.rawCount))) payload.rawCount = Number(data.rawCount);
   if (Number.isFinite(Number(data.droppedCount))) payload.droppedCount = Number(data.droppedCount);
   if (Array.isArray(data.droppedSamples)) payload.droppedSamples = data.droppedSamples.slice(0, 20);
+  for (const key of ['aiScreened', 'aiRejected']) {
+    if (Number.isFinite(Number(data[key]))) payload[key] = Number(data[key]);
+  }
+  if (typeof data.aiError === 'string' && data.aiError) payload.aiError = data.aiError.slice(0, 200);
   const tempPath = `${trendsPath}.tmp.${Date.now()}`;
   writeFileSync(tempPath, JSON.stringify(payload, null, 2), { mode: 0o600 });
   renameSync(tempPath, trendsPath);
@@ -1009,7 +1013,9 @@ export function mutatePostQueue(mutator, queuePath = POST_QUEUE_PATH, { maxSize 
   }, queuePath);
 }
 
-export async function generateTweetViaLmh(prompt, { model = 'gpt-6-luna', port = 3040 } = {}) {
+// Generic local-model chat call: one prompt in, raw text out. Kept separate from
+// the tweet generator so screening can ask for JSON without quote stripping.
+export async function localModelChat(prompt, { model = 'gpt-6-luna', port = 3040, temperature = 0.2, maxTokens = null, timeoutMs = 30000 } = {}) {
   const configPath = join(APP_HOME, 'Library/Application Support/LocalModelHub/data/config.json');
   let apiKey = 'local-key';
   let targetPort = port;
@@ -1020,13 +1026,11 @@ export async function generateTweetViaLmh(prompt, { model = 'gpt-6-luna', port =
       const key = cfg.clientKeys?.['business-default'] || cfg.clientKeys?.local;
       if (key) apiKey = key;
     }
-  } catch {}
+  } catch { /* defaults are fine */ }
 
-  const postData = JSON.stringify({
-    model: model || 'gpt-6-luna',
-    messages: [{ role: 'user', content: prompt }],
-    temperature: 0.75,
-  });
+  const payload = { model: model || 'gpt-6-luna', messages: [{ role: 'user', content: prompt }], temperature };
+  if (Number.isInteger(maxTokens) && maxTokens > 0) payload.max_tokens = maxTokens;
+  const postData = JSON.stringify(payload);
 
   return new Promise((resolve, reject) => {
     const { request } = http;
@@ -1040,7 +1044,7 @@ export async function generateTweetViaLmh(prompt, { model = 'gpt-6-luna', port =
         'content-length': Buffer.byteLength(postData),
         'authorization': `Bearer ${apiKey}`,
       },
-      timeout: 30000,
+      timeout: timeoutMs,
     }, res => {
       let data = '';
       res.on('data', chunk => { data += chunk; });
@@ -1048,24 +1052,134 @@ export async function generateTweetViaLmh(prompt, { model = 'gpt-6-luna', port =
         try {
           const parsed = JSON.parse(data);
           const reply = parsed?.choices?.[0]?.message?.content?.trim();
-          if (reply) {
-            resolve(reply.replace(/^["'“”‘’]+|["'“”‘’]+$/g, ''));
-          } else {
-            reject(new Error(parsed?.error?.message || '大模型未返回推文正文'));
-          }
+          if (reply) resolve(reply);
+          else reject(new Error(parsed?.error?.message || '大模型未返回内容'));
         } catch (e) {
           reject(new Error(`解析大模型响应失败: ${e.message}`));
         }
       });
     });
-    req.on('timeout', () => {
-      req.destroy();
-      reject(new Error('调用本地大模型超时 (30s)'));
-    });
+    req.on('timeout', () => { req.destroy(); reject(new Error(`调用本地大模型超时 (${timeoutMs}ms)`)); });
     req.on('error', err => reject(err));
     req.write(postData);
     req.end();
   });
+}
+
+// ---- semantic screening of the hot board ------------------------------------
+// Keyword matching only removes headlines that literally contain a banned word,
+// so "娱乐圈" never matches "某顶流塌房". This asks the configured model to judge
+// every headline against the operator's intent before anything is cached.
+export const HOT_AI_DEFAULT_INSTRUCTION = [
+  '你是热榜选题审核员。下面是从各平台抓来的候选话题，要为「古典文言短帖」账号挑出能用的选题。',
+  '',
+  '# 必须剔除（命中任意一条就剔除，判断语义而不是只看字面）',
+  '1. 属于这些被禁用领域或其同义说法：{keywords}',
+  '2. 命中这些避写话题：{banned}',
+  '3. 时政官场、领导人、外交军事、灾难事故、犯罪案件、色情性暗示、疾病健康、宗教民族、明星娱乐八卦、体育赛事战报、纯带货广告',
+  '4. 指向具体个人隐私、需要站队表态的争议',
+  '',
+  '# 优先保留',
+  '生活观察、社会怪象、职场、消费与钱、科技与 AI、文化传统、教育、城市交通、饮食',
+  '',
+  '# 待审话题',
+  '{topics}',
+  '',
+  '只输出 JSON，不要解释、不要代码块：{"keep":[编号],"reject":[{"id":编号,"why":"简短原因"}]}',
+].join('\n');
+
+export function buildHotScreenPrompt(topics, filter = {}) {
+  const instruction = String(filter.aiScreenInstruction || '').trim() || HOT_AI_DEFAULT_INSTRUCTION;
+  const keywords = (Array.isArray(filter.excludeKeywords) ? filter.excludeKeywords : []).slice(0, 200).join('、') || '（无）';
+  const banned = (Array.isArray(filter.bannedTopics) ? filter.bannedTopics : []).slice(0, 100).join('、') || '（无）';
+  const list = topics.map((topic, index) => `${index + 1}. ${topic}`).join('\n');
+  return instruction
+    .replaceAll('{keywords}', keywords)
+    .replaceAll('{banned}', banned)
+    .replaceAll('{topics}', list);
+}
+
+export function applyHotScreenVerdict(topics, verdict) {
+  const list = Array.isArray(topics) ? topics : [];
+  const keep = new Set();
+  const rejected = [];
+  const indexOf = value => {
+    const index = Number(value) - 1;
+    return Number.isInteger(index) && index >= 0 && index < list.length ? index : -1;
+  };
+  const keeps = Array.isArray(verdict?.keep) ? verdict.keep : [];
+  const rejects = Array.isArray(verdict?.reject) ? verdict.reject : [];
+  for (const value of keeps) {
+    const index = indexOf(value);
+    if (index >= 0) keep.add(index);
+  }
+  for (const item of rejects) {
+    const index = indexOf(item && item.id);
+    if (index < 0) continue;
+    rejected.push({ topic: list[index], reason: `AI：${String(item.why || '不符合选题方向').slice(0, 40)}` });
+  }
+  const rejectedTopics = new Set(rejected.map(item => item.topic));
+  // Whitelist when the model listed anything to keep, blacklist when it only
+  // reported rejects (an all-reject reply must not empty the board by accident).
+  // Only a *valid* keep id switches to whitelist mode; a hallucinated id must not
+  // wipe the whole board.
+  const whitelist = keep.size > 0;
+  const usable = [];
+  for (let index = 0; index < list.length; index += 1) {
+    const topic = list[index];
+    if (rejectedTopics.has(topic)) continue;
+    if (whitelist && !keep.has(index)) continue;
+    usable.push(topic);
+  }
+  return { usable, rejected };
+}
+
+export async function aiScreenHotTopics(topics, filter = {}, { model = 'gpt-6-luna', port = 3040, batchSize = 20, maxTopics = 80, timeoutMs = 60000, concurrency = 3 } = {}) {
+  const source = Array.isArray(topics) ? topics.slice() : [];
+  if (!source.length) return { usable: [], rejected: [], screened: 0, skipped: 0, error: '', batches: 0 };
+  const screenLimit = Math.max(1, Number(maxTopics) || 80);
+  const size = Math.max(5, Math.min(60, Number(batchSize) || 20));
+  const screened = source.slice(0, screenLimit);
+  const passthrough = source.slice(screened.length);
+  const batches = [];
+  for (let start = 0; start < screened.length; start += size) batches.push(screened.slice(start, start + size));
+  const usable = [];
+  const rejected = [];
+  const errors = [];
+  // Batches run in parallel: a 20-headline judgement takes ~15s, and a single
+  // fetch can need several, so serialising them would stall the UI for minutes.
+  const lanes = new Array(Math.max(1, Math.min(6, Number(concurrency) || 3))).fill(0).map(() => []);
+  batches.forEach((batch, index) => lanes[index % lanes.length].push(batch));
+  const runBatch = async batch => {
+    try {
+      const reply = await localModelChat(buildHotScreenPrompt(batch, filter), {
+        model, port, temperature: 0.1, maxTokens: 900, timeoutMs,
+      });
+      const verdict = extractJsonObject(reply);
+      if (!verdict) throw new Error('模型没有返回 JSON');
+      const applied = applyHotScreenVerdict(batch, verdict);
+      usable.push(...applied.usable);
+      rejected.push(...applied.rejected);
+    } catch (err) {
+      // Never block a fetch: this batch keeps the keyword result.
+      errors.push(String(err?.message || err).slice(0, 120));
+      usable.push(...batch);
+    }
+  };
+  await Promise.all(lanes.map(async lane => { for (const batch of lane) await runBatch(batch); }));
+  return {
+    usable: [...usable, ...passthrough],
+    rejected,
+    screened: screened.length,
+    skipped: passthrough.length,
+    error: errors.length ? `${errors.length}/${batches.length} 批失败：${errors[0]}` : '',
+    batches: batches.length,
+  };
+}
+
+export async function generateTweetViaLmh(prompt, { model = 'gpt-6-luna', port = 3040 } = {}) {
+  const reply = await localModelChat(prompt, { model, port, temperature: 0.75 });
+  return reply.replace(/^["'“”‘’]+|["'“”‘’]+$/g, '');
 }
 
 export function readDshModels() {
@@ -1196,6 +1310,13 @@ const DEFAULT_CONFIG = Object.freeze({
       // Operator-removed headlines: they come back on every fetch, so the skip
       // list lives in config and survives re-fetching.
       excludedTopics: [],
+      // Semantic screening before the cache is written: keyword matching only
+      // catches literal words, so a model judges each headline against intent.
+      aiScreen: true,
+      aiScreenModel: '',
+      aiScreenMaxTopics: 160,
+      aiScreenInstruction: '',
+      aiScreenBatchSize: 20,
       minLength: 4,
       maxLength: 50,
       excludeKeywords: [
@@ -1780,6 +1901,19 @@ function validateConfig(input) {
     if (copy.postSettings.hotFilter !== undefined) {
       const filter = copy.postSettings.hotFilter;
       if (!isRecord(filter)) throw new TypeError('热榜筛选规则无效');
+      if (filter.aiScreen !== undefined && typeof filter.aiScreen !== 'boolean') throw new TypeError('热榜 AI 筛选开关无效');
+      if (filter.aiScreenModel !== undefined) {
+        if (typeof filter.aiScreenModel !== 'string' || filter.aiScreenModel.length > 100) throw new TypeError('热榜 AI 筛选模型无效');
+      }
+      if (filter.aiScreenInstruction !== undefined) {
+        if (typeof filter.aiScreenInstruction !== 'string' || filter.aiScreenInstruction.length > 3000) throw new TypeError('热榜 AI 审核指令不能超过 3000 字');
+      }
+      for (const key of ['aiScreenMaxTopics', 'aiScreenBatchSize']) {
+        if (filter[key] === undefined) continue;
+        const value = Number(filter[key]);
+        if (!Number.isInteger(value) || value < 5 || value > 300) throw new TypeError('热榜 AI 筛选条数需为 5~300 的整数');
+        filter[key] = value;
+      }
       if (filter.excludedTopics !== undefined) {
         if (!Array.isArray(filter.excludedTopics) || filter.excludedTopics.length > 300) throw new TypeError('手动剔除的热榜话题名单无效');
         filter.excludedTopics = [...new Set(filter.excludedTopics.map(item => String(item || '').replace(/\s+/g, ' ').trim()).filter(Boolean))];
@@ -2505,13 +2639,41 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       // Screen before caching: headlines the rules already reject must never reach
       // the board list, otherwise the operator has to strike them out by hand.
       const filterCfg = effectiveHotFilter(sharedCfg.postSettings, readLearnings(activeLearningsPath));
-      const { usable, dropped } = screenHotTopics(topics, filterCfg);
+      const keywordPass = screenHotTopics(topics, filterCfg);
+      let usable = keywordPass.usable;
+      const dropped = keywordPass.dropped.slice();
+      const aiEnabled = filterCfg.aiScreen !== false;
+      let aiInfo = { screened: 0, skipped: 0, error: '', rejected: 0 };
+      if (aiEnabled && usable.length) {
+        const shared = getConfig();
+        const model = filterCfg.aiScreenModel || shared.postSettings?.model || shared.model?.name || 'gpt-6-luna';
+        const port = shared.model?.endpointPort || 3040;
+        const ai = await aiScreenHotTopics(usable, {
+          ...filterCfg,
+          bannedTopics: mergeBannedTopics(readLearnings(activeLearningsPath), shared.postSettings),
+        }, {
+          model, port,
+          maxTopics: filterCfg.aiScreenMaxTopics || 160,
+          batchSize: filterCfg.aiScreenBatchSize || 20,
+          timeoutMs: 60000,
+        });
+        usable = ai.usable;
+        dropped.push(...ai.rejected);
+        aiInfo = { screened: ai.screened, skipped: ai.skipped, error: ai.error, rejected: ai.rejected.length };
+      }
       const payload = writeTrends({
         topics: usable,
         sources: results,
         rawCount: topics.length,
         droppedCount: dropped.length,
-        droppedSamples: dropped.slice(0, 20),
+        // Lead with the semantic rejects: that is what the operator wants to audit.
+        droppedSamples: [
+          ...dropped.filter(item => String(item.reason).startsWith('AI')),
+          ...dropped.filter(item => !String(item.reason).startsWith('AI')),
+        ].slice(0, 20),
+        aiScreened: aiInfo.screened,
+        aiRejected: aiInfo.rejected,
+        aiError: aiInfo.error,
       }, activeTrendsPath);
       const okCount = results.filter(item => item.ok).length;
       return {
@@ -2519,7 +2681,10 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         action: 'fetch-trends',
         trends: payload,
         results,
-        note: `已抓取 ${okCount}/${results.length} 个榜单，共 ${topics.length} 条话题：按规则剔除 ${dropped.length} 条，入库 ${payload.topics.length} 条。`,
+        note: `已抓取 ${okCount}/${results.length} 个榜单，共 ${topics.length} 条话题：剔除 ${dropped.length} 条`
+          + (aiInfo.screened ? `（其中大模型语义筛掉 ${aiInfo.rejected} 条）` : '')
+          + `，入库 ${payload.topics.length} 条。`
+          + (aiInfo.error ? ` AI 筛选部分失败：${aiInfo.error}（已保留关键词结果）` : ''),
       };
     }
     if (request.action === 'learn-manual') {
