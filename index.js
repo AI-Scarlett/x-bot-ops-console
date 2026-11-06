@@ -36,6 +36,7 @@ export const CRUISE_HISTORY_PATH = join(APP_HOME, 'Library/Application Support/X
 export const TRENDS_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/trends.json');
 export const COOKIE_SET_SENTINEL = '__COOKIE_SET__';
 export const CACHE_CLEANUP_STATE = join(homedir(), 'Library/Application Support/XBotOpsConsole/cache_cleanup.json');
+export const SAVE_LOG_PATH = join(homedir(), 'Library/Application Support/XBotOpsConsole/save-log.json');
 export const CONFIG_BACKUP_DIR = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/config-history');
 const MAX_CONFIG_BACKUPS = 20;
 
@@ -120,6 +121,7 @@ export const FIELD_SIDE = Object.freeze({
   'cruiseSettings.interactionCooldownHours': 'profile',
   'cruiseSettings.tierSweepHours': 'profile',
   'cruiseSettings.commentsPerProfile': 'profile',
+  'cruiseSettings.likesPerProfile': 'profile',
   'cruiseSettings.autoVisitInvited': 'profile',
   'cruiseSettings.model': 'profile',
   'cruiseSettings.customPrompt': 'profile',
@@ -465,6 +467,15 @@ export function maskTrendCookies(config) {
   };
 }
 
+export function readSaveLog(saveLogPath = SAVE_LOG_PATH) {
+  try {
+    const parsed = JSON.parse(readFileSync(saveLogPath, 'utf8'));
+    return { last: parsed.last || null, history: Array.isArray(parsed.history) ? parsed.history.slice(0, 10) : [] };
+  } catch {
+    return { last: null, history: [] };
+  }
+}
+
 export function readTrends(trendsPath = TRENDS_PATH) {
   try {
     if (existsSync(trendsPath)) {
@@ -638,6 +649,31 @@ export function mutateLearnings(mutator, learningsPath = LEARNINGS_PATH) {
   }, `${learningsPath}.lock`, '发帖学习记录');
 }
 
+// The active style window, in Beijing time. The plugin used to ignore this
+// entirely, so a manual "generate 10 drafts" always produced the global style
+// even while the English window was active.
+export function beijingHour(now = Date.now()) {
+  return new Date(now + 8 * 3600 * 1000).getUTCHours();
+}
+
+export function styleSlotFor(postCfg, hour = beijingHour()) {
+  const slots = Array.isArray(postCfg?.styleSchedule) ? postCfg.styleSchedule : [];
+  for (const slot of slots) {
+    if (!isRecord(slot)) continue;
+    const start = Number(slot.startHour);
+    const end = Number(slot.endHour);
+    if (!Number.isInteger(start) || !Number.isInteger(end)) continue;
+    if (start <= hour && hour < end) return slot;
+  }
+  return null;
+}
+
+export function stylePromptFor(postCfg, hour = beijingHour()) {
+  const slot = styleSlotFor(postCfg, hour);
+  if (!slot) return { prompt: '', label: '' };
+  return { prompt: String(slot.prompt || '').trim(), label: String(slot.label || '').trim() };
+}
+
 // Must match post_worker.py's post_settings_signature byte for byte, so a draft
 // made here is recognised as current (or stale) by the worker.
 export function postSettingsSignature(postCfg) {
@@ -696,31 +732,53 @@ export function enforceOneSentencePerLine(text) {
 export const ONE_SENTENCE_RULE = '【格式硬性要求】每一句话必须单独占一行，句与句之间必须换行；禁止把多句连成一整段，禁止使用空行。';
 
 // The prompt's structural section, assembled from editable fragments.
-export function buildStructureBlock(format = {}, style = {}) {
+// `language` switches to the English rules: the Chinese ones demand a Han
+// character count and a closing「尔」, which would fight the English window.
+export function buildStructureBlock(format = {}, style = {}, language = 'chinese') {
   const fmt = { ...(format || {}) };
   const st = { ...(style || {}) };
+  const english = String(language || '').toLowerCase().startsWith('en') || language === '英文';
   const fill = template => String(template || '')
     .replace(/\{prefix\}/g, String(fmt.closingPrefix ?? '尔'))
     .replace(/\{lines\}/g, String(fmt.lineCount ?? 3))
     .replace(/\{min\}/g, String(fmt.minChars ?? 30))
     .replace(/\{max\}/g, String(fmt.maxChars ?? 60));
   const autoLines = Number(fmt.lineCount) === 0;
-  const lines = [
-    autoLines
-      ? `【结构】行数按内容自然安排，不硬性规定。汉字 ${fmt.minChars ?? 30}-${fmt.maxChars ?? 60} 个，务必不超过上限。`
-      : `【硬性结构】共 ${fmt.lineCount ?? 3} 行，不多不少。汉字 ${fmt.minChars ?? 30}-${fmt.maxChars ?? 60} 个，务必不超过上限。`,
-    autoLines ? '' : (st.line1Rule ? fill(st.line1Rule) : ''),
-    autoLines ? '' : (st.line2Rule ? fill(st.line2Rule) : ''),
-    autoLines ? (st.autoLineRule ? fill(st.autoLineRule) : '') : (st.line3Rule ? fill(st.line3Rule) : ''),
-    st.languageRule ? fill(st.languageRule) : '',
-    Array.isArray(fmt.softOpeners) && fmt.softOpeners.length ? `禁在首行使用：${fmt.softOpeners.join('、')}。` : '',
-    Array.isArray(fmt.bannedPatterns) && fmt.bannedPatterns.length ? `禁用作废句式：${fmt.bannedPatterns.join('、')}。` : '',
-    Array.isArray(fmt.forbidColloquial) && fmt.forbidColloquial.length ? `禁用白话虚词：${fmt.forbidColloquial.join('、')}。` : '',
-    st.extraRules ? fill(st.extraRules) : '',
-    '禁链接、@、话题标签。',
-    fmt.hardBottomLines ? `【硬底线】${fill(fmt.hardBottomLines)}` : '',
-  ].filter(Boolean);
-  return `\n\n${lines.join('\n')}`;
+  const min = fmt.minChars ?? 30;
+  const max = fmt.maxChars ?? 60;
+  let lines;
+  if (english) {
+    const count = autoLines
+      ? `Write one sentence per line; the number of lines follows the content. Keep it between ${min} and ${max} characters.`
+      : `Write exactly ${fmt.lineCount ?? 3} lines, no more and no less. Keep it between ${min} and ${max} characters.`;
+    lines = [
+      `【Structure】${count}`,
+      autoLines ? '' : 'Line 1: open with the conflict or desire, concretely.',
+      autoLines ? '' : 'Line 2: turn it over; put the tension in the open.',
+      autoLines ? '' : `Line ${fmt.lineCount ?? 3}: end with a direct question that ends in a question mark.`,
+      'Write in English only. Do not include any Chinese characters.',
+      st.extraRules ? fill(st.extraRules) : '',
+      'No links, no @mentions, no hashtags.',
+      fmt.hardBottomLines ? `【Hard limits】${fill(fmt.hardBottomLines)}` : '',
+    ];
+  } else {
+    lines = [
+      autoLines
+        ? `【结构】行数按内容自然安排，不硬性规定。汉字 ${min}-${max} 个，务必不超过上限。`
+        : `【硬性结构】共 ${fmt.lineCount ?? 3} 行，不多不少。汉字 ${min}-${max} 个，务必不超过上限。`,
+      autoLines ? '' : (st.line1Rule ? fill(st.line1Rule) : ''),
+      autoLines ? '' : (st.line2Rule ? fill(st.line2Rule) : ''),
+      autoLines ? (st.autoLineRule ? fill(st.autoLineRule) : '') : (st.line3Rule ? fill(st.line3Rule) : ''),
+      st.languageRule ? fill(st.languageRule) : '',
+      Array.isArray(fmt.softOpeners) && fmt.softOpeners.length ? `禁在首行使用：${fmt.softOpeners.join('、')}。` : '',
+      Array.isArray(fmt.bannedPatterns) && fmt.bannedPatterns.length ? `禁用作废句式：${fmt.bannedPatterns.join('、')}。` : '',
+      Array.isArray(fmt.forbidColloquial) && fmt.forbidColloquial.length ? `禁用白话虚词：${fmt.forbidColloquial.join('、')}。` : '',
+      st.extraRules ? fill(st.extraRules) : '',
+      '禁链接、@、话题标签。',
+      fmt.hardBottomLines ? `【硬底线】${fill(fmt.hardBottomLines)}` : '',
+    ];
+  }
+  return `\n\n${lines.filter(Boolean).join('\n')}`;
 }
 
 // Enforce the writer rules: fixed line count, length, an addressing question at
@@ -755,22 +813,31 @@ export function checkPostDraft(text, format = {}, recentTexts = [], skeletonText
     reasons.push('自动分行模式下至少要分成两行，不能写成一段');
   }
   const hanCount = (body.match(/[\u4e00-\u9fff]/g) || []).length;
-  if (hanCount < minChars || hanCount > maxChars) reasons.push(`汉字 ${hanCount} 个，应在 ${minChars}-${maxChars}`);
+  // Length is measured in the language of the draft: an English post has no
+  // Han characters at all, so counting only Han characters rejected every
+  // English draft ("汉字 0 个，应在 30-120").
+  const englishDraft = hanCount === 0 && /[A-Za-z]/.test(body);
+  const charCount = englishDraft ? (body.replace(/\s+/g, '').length) : hanCount;
+  const unit = englishDraft ? '字符' : '汉字';
+  if (charCount < minChars || charCount > maxChars) reasons.push(`${unit} ${charCount} 个，应在 ${minChars}-${maxChars}`);
 
   if (fmt.requireClosingQuestion !== false && lines.length) {
     const last = lines[lines.length - 1];
-    if (!last.startsWith(closingPrefix)) reasons.push(`末行应以「${closingPrefix}」开头`);
+    // The Chinese closing prefix ("尔") only applies to Chinese drafts.
+    if (!englishDraft && !last.startsWith(closingPrefix)) reasons.push(`末行应以「${closingPrefix}」开头`);
     if (!/[？?]$/.test(last)) reasons.push('末行应以问号结尾');
   }
 
-  const openers = Array.isArray(fmt.softOpeners) ? fmt.softOpeners : [];
+  const openers = englishDraft ? [] : (Array.isArray(fmt.softOpeners) ? fmt.softOpeners : []);
   if (lines.length && openers.some(word => word && lines[0].includes(word))) reasons.push('首行使用了软铺垫词');
 
-  const banned = Array.isArray(fmt.bannedPatterns) ? fmt.bannedPatterns : [];
+  const banned = englishDraft ? [] : (Array.isArray(fmt.bannedPatterns) ? fmt.bannedPatterns : []);
   const hitBanned = banned.find(word => word && body.includes(word));
   if (hitBanned) reasons.push(`含作废句式「${hitBanned}」`);
 
-  const colloquial = Array.isArray(fmt.forbidColloquial) ? fmt.forbidColloquial : [];
+  // Soft openers, banned patterns and colloquial fillers are Chinese-only
+  // rules; they cannot match an English draft.
+  const colloquial = englishDraft ? [] : (Array.isArray(fmt.forbidColloquial) ? fmt.forbidColloquial : []);
   const hitColloquial = colloquial.find(word => word && body.includes(word));
   if (hitColloquial) reasons.push(`含白话虚词「${hitColloquial}」`);
 
@@ -798,7 +865,7 @@ export function checkPostDraft(text, format = {}, recentTexts = [], skeletonText
       if (clash) reasons.push(`结构骨架与 ${Math.round(cooldown)} 小时内的旧帖重复（${clash.slice(0, 12)}…）`);
     }
   }
-  return { ok: reasons.length === 0, reasons, hanCount, lineCount: lines.length };
+  return { ok: reasons.length === 0, reasons, hanCount, charCount, english: englishDraft, lineCount: lines.length };
 }
 
 // Learned bans plus the operator's own list; either one vetoes a topic.
@@ -1371,6 +1438,8 @@ const DEFAULT_CONFIG = Object.freeze({
     interactionCooldownHours: 48,
     tierSweepHours: 6,
     commentsPerProfile: 1,
+    // How many posts of a visited profile to like. 0 disables liking.
+    likesPerProfile: 0,
     autoVisitInvited: true,
     model: '',
     customPrompt: '你在推特(X)上用周天子姬霸的人设回复好友主页的最新推文。\n要求：用文言文或微言大义轻幽默回应对方的话题，亲切称呼对方，不要任何问句，不要现代粗俗脏话，字数在12到30字之间。直接输出纯文本。',
@@ -2011,6 +2080,11 @@ function validateConfig(input) {
       if (!Number.isInteger(per) || per < 0 || per > 10) throw new TypeError('每次巡航评论条数需为 0~10 之间的整数（0 表示只浏览不评论）');
       copy.cruiseSettings.commentsPerProfile = per;
     }
+    if (copy.cruiseSettings.likesPerProfile !== undefined) {
+      const likes = Number(copy.cruiseSettings.likesPerProfile);
+      if (!Number.isInteger(likes) || likes < 0 || likes > 20) throw new TypeError('每个主页点赞条数需为 0~20 之间的整数（0 表示不点赞）');
+      copy.cruiseSettings.likesPerProfile = likes;
+    }
     if (copy.cruiseSettings.crawlFollowing !== undefined && typeof copy.cruiseSettings.crawlFollowing !== 'boolean') throw new TypeError('巡航关注列表开关无效');
     if (copy.cruiseSettings.crawlFollowers !== undefined && typeof copy.cruiseSettings.crawlFollowers !== 'boolean') throw new TypeError('巡航粉丝列表开关无效');
     if (copy.cruiseSettings.autoVisitInvited !== undefined && typeof copy.cruiseSettings.autoVisitInvited !== 'boolean') throw new TypeError('自动优先消费回踩邀请开关无效');
@@ -2140,11 +2214,34 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
     };
   };
 
+  // Every rejected save is recorded so the operator can see *why* the page
+  // refused the change instead of only seeing "unsaved changes" on screen.
+  const saveFailures = [];
+  const recordSaveFailure = (reason, detail) => {
+    const entry = { at: new Date().toISOString(), reason: String(reason || '').slice(0, 200), detail: String(detail || '').slice(0, 400) };
+    saveFailures.unshift(entry);
+    saveFailures.length = Math.min(saveFailures.length, 20);
+    try {
+      writeFileSync(SAVE_LOG_PATH, `${JSON.stringify({ last: entry, history: saveFailures }, null, 2)}\n`, { mode: 0o600 });
+    } catch { /* logging must never block a save */ }
+  };
   const saveConfig = (value, expectedHash) => {
-    const validated = validateConfig(restoreTrendCookies(value));
+    let validated;
+    try {
+      validated = validateConfig(restoreTrendCookies(value));
+    } catch (error) {
+      recordSaveFailure('配置校验未通过', error?.message);
+      throw error;
+    }
     const currentHash = hashCurrentConfig();
-    if (expectedHash === undefined) throw new Error('缺少配置版本标识；请刷新状态后再保存');
-    if (expectedHash !== currentHash) throw new Error('共享配置已被其他进程修改；请刷新状态并重新检查后再保存');
+    if (expectedHash === undefined) {
+      recordSaveFailure('缺少配置版本标识', 'expectedConfigHash 未随请求发送');
+      throw new Error('缺少配置版本标识；请刷新状态后再保存');
+    }
+    if (expectedHash !== currentHash) {
+      recordSaveFailure('配置版本不一致', `页面 hash=${String(expectedHash).slice(0, 12)} 磁盘 hash=${String(currentHash).slice(0, 12)}`);
+      throw new Error('共享配置已被其他进程修改；请刷新状态并重新检查后再保存');
+    }
     backupConfigFile(activeConfigPath, activeBackupDir);
     mkdirSync(dirname(activeConfigPath), { recursive: true, mode: 0o700 });
     const tmp = `${activeConfigPath}.${process.pid}.tmp`;
@@ -2155,6 +2252,9 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       try { unlinkSync(tmp); } catch { /* preserve original error */ }
       throw error;
     }
+    try {
+      writeFileSync(SAVE_LOG_PATH, `${JSON.stringify({ last: null, history: saveFailures }, null, 2)}\n`, { mode: 0o600 });
+    } catch { /* ignore */ }
     return { config: clone(validated), hash: hashCurrentConfig() };
   };
   const inspect = async () => {
@@ -2211,6 +2311,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       cruiseSweep: readCruiseSweep(),
       replyDiagnostics: readReplyDiagnostics(items.reply ? items.reply.stateDir : null),
       configBackups: listConfigBackups(activeBackupDir),
+      saveLog: readSaveLog(),
       learnTriggerPending: existsSync(LEARN_TRIGGER_PATH),
       workerAcceptance: workerAcceptance(shared.config), items, platform, checkedAt: new Date(clock()).toISOString(),
     };
@@ -2306,9 +2407,19 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       const dedupeCfg = { ...DEFAULT_CONFIG.postSettings.dedupe, ...(postCfg.dedupe || {}) };
       const capCfg = { ...DEFAULT_CONFIG.postSettings.politicalCap, ...(postCfg.politicalCap || {}) };
       const styleCfg = { ...DEFAULT_CONFIG.postSettings.style, ...(postCfg.style || {}) };
-      const structureBlock = buildStructureBlock(fmtCfg, styleCfg);
+      // The active time window decides the language of this batch.
+      const slot = stylePromptFor(postCfg);
+      const windowLanguage = /英文|english/i.test(slot.label || '') ? 'english' : 'chinese';
+      const structureBlock = buildStructureBlock(fmtCfg, styleCfg, windowLanguage);
       const formatRule = fmtCfg.lineCount > 0 ? structureBlock : (onePerLine ? `\n\n${ONE_SENTENCE_RULE}` : '');
-      const basePrompt = oneOffPrompt || postCfg.customPrompt || '你在推特(X)上用周天子姬霸的人设发一条原创推文。文风为幽默、古奥的文言文或诗词歌赋，自称周天子、姬霸或夫子，不要露骨，禁止提现代网络低俗梗，字数在30到90字之间。';
+      const globalPrompt = postCfg.customPrompt || '你在推特(X)上用周天子姬霸的人设发一条原创推文。文风为幽默、古奥的文言文或诗词歌赋，自称周天子、姬霸或夫子，不要露骨，禁止提现代网络低俗梗，字数在30到90字之间。';
+      // The active time window wins over the global prompt, exactly like the
+      // worker's compose_post_prompt does.
+      const slotPrompt = oneOffPrompt ? '' : slot.prompt;
+      const slotLabel = oneOffPrompt ? '' : slot.label;
+      const basePrompt = oneOffPrompt
+        ? oneOffPrompt
+        : (slotPrompt ? `${globalPrompt}\n\n【当前时段文风：${slotLabel || '分时文风'}】${slotPrompt}` : globalPrompt);
       // Learned patterns steer topic choice and structure; the writing style above stays authoritative.
       const rawLearnings = readLearnings(activeLearningsPath);
       const influence = Number(postCfg.learningInfluence ?? 100);
@@ -2408,6 +2519,19 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
             continue;
           }
           if (draftText) {
+            // The model can ignore the window rule; such a draft must not enter
+            // the queue, or it would be published in the wrong language.
+            const han = (draftText.match(/[\u4e00-\u9fff]/g) || []).length;
+            const wantsEnglish = slotLabel.includes('英文') || slotLabel.toLowerCase().includes('english');
+            const wantsChinese = slotLabel.includes('文言') || slotLabel.includes('楚辞') || slotLabel.includes('中文');
+            if (wantsEnglish && han > 0) {
+              failures.push(`第 ${i + 1} 条未遵守「${slotLabel}」时段要求（仍含中文）`);
+              continue;
+            }
+            if (wantsChinese && han === 0) {
+              failures.push(`第 ${i + 1} 条未遵守「${slotLabel}」时段要求（没有中文）`);
+              continue;
+            }
             recentTexts.unshift(draftText);
             if (skeletonHours > 0) skeletonTexts.unshift(draftText);
             generated.push({
@@ -2415,6 +2539,9 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
               text: draftText,
               topic,
               sig: postSettingsSignature(postCfg),
+              // The worker uses this to keep English drafts out of the Chinese
+              // window and vice versa.
+              styleSlot: slotLabel,
               theme: theme ? theme.label : '',
               hotTopic: hotTopic || '',
               political: (capCfg.keywords || []).some(word => `${theme?.label || ''}${hotTopic}`.includes(word)),

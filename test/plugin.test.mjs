@@ -2184,3 +2184,108 @@ test('AI hot-board screening prompt and verdicts behave like the worker', async 
   config.postSettings.hotFilter.aiScreenInstruction = 'x'.repeat(3001);
   assert.throws(() => validateConfig(config), /3000 字/);
 });
+
+test('the manual draft generator follows the active time window', async () => {
+  const { styleSlotFor, stylePromptFor, beijingHour, postSettingsSignature } = await import('../index.js');
+  const postCfg = {
+    customPrompt: '全局提示词',
+    styleSchedule: [
+      { label: '英文', startHour: 0, endHour: 6, prompt: '用英文发帖，不要中文字符' },
+      { label: '文言文', startHour: 6, endHour: 24, prompt: '用文言文/楚辞' },
+    ],
+  };
+  // Window boundaries are [start, end) in Beijing time.
+  assert.equal(styleSlotFor(postCfg, 0).label, '英文');
+  assert.equal(styleSlotFor(postCfg, 5).label, '英文');
+  assert.equal(styleSlotFor(postCfg, 6).label, '文言文');
+  assert.equal(styleSlotFor(postCfg, 23).label, '文言文');
+  assert.equal(styleSlotFor(postCfg, 24), null);
+  assert.equal(styleSlotFor({ styleSchedule: [] }, 3), null);
+  assert.equal(styleSlotFor({}, 3), null);
+  // Malformed slots are ignored instead of breaking generation.
+  assert.equal(styleSlotFor({ styleSchedule: [{ label: 'x', startHour: 'a', endHour: 'b' }] }, 3), null);
+
+  assert.match(stylePromptFor(postCfg, 2).prompt, /英文/);
+  assert.equal(stylePromptFor(postCfg, 2).label, '英文');
+  assert.equal(stylePromptFor(postCfg, 13).label, '文言文');
+  assert.equal(stylePromptFor({}, 13).label, '');
+
+  // Beijing time, not local time: the worker uses the same offset.
+  const hour = beijingHour(Date.UTC(2026, 10, 6, 16, 30));
+  assert.equal(hour, 0, '16:30 UTC is 00:30 the next day in Beijing');
+  assert.equal(beijingHour(Date.UTC(2026, 10, 6, 3, 0)), 11);
+
+  // The schedule is part of the signature, so drafts made under one window are
+  // recognised as stale after the settings change.
+  const a = postSettingsSignature({ ...postCfg, topics: [] });
+  const b = postSettingsSignature({ ...postCfg, topics: [], styleSchedule: postCfg.styleSchedule.map(s => ({ ...s, prompt: s.prompt + 'x' })) });
+  assert.notEqual(a, b);
+});
+
+test('the format check accepts English drafts and ignores Chinese-only rules', async () => {
+  const { checkPostDraft, buildStructureBlock } = await import('../index.js');
+  const fmt = {
+    lineCount: 3, minChars: 30, maxChars: 120, closingPrefix: '尔', requireClosingQuestion: true,
+    forbidColloquial: ['的', '了'], softOpeners: ['茶'], bannedPatterns: ['君不见'],
+  };
+  const english = [
+    'You still owe me that answer, do not you?',
+    'I have waited through every season since?',
+    'So tell me plainly, is your heart the same?',
+  ].join('\n');
+  const verdict = checkPostDraft(english, fmt);
+  assert.equal(verdict.ok, true, verdict.reasons.join(';'));
+  assert.equal(verdict.english, true);
+  // The length is counted in characters for an English draft.
+  assert.ok(verdict.charCount >= 30);
+  assert.equal(verdict.hanCount, 0);
+
+  // The Chinese rules still apply to a Chinese draft.
+  const chinese = '卿可愿再晤于春深时？\n去年之诺，卿可还记得分明？\n余心在此，卿且直道来答。';
+  const zh = checkPostDraft(chinese, fmt);
+  assert.equal(zh.english, false);
+  assert.ok(zh.reasons.some(reason => /「尔」/.test(reason)), 'the Chinese closing prefix is still required');
+
+  // An English draft never trips the Chinese-only rule lists.
+  const withChineseWords = 'Tea and lamp are props, not the point?\nWhat do you want tonight?\nSay it plainly?';
+  const mixed = checkPostDraft(withChineseWords, fmt);
+  assert.ok(!mixed.reasons.some(reason => /软铺垫|作废句式|白话虚词/.test(reason)), mixed.reasons.join(';'));
+
+  // The English structure block asks for English rules.
+  const enBlock = buildStructureBlock(fmt, {}, 'english');
+  assert.match(enBlock, /Write in English only/);
+  assert.match(enBlock, /characters/);
+  assert.doesNotMatch(enBlock, /汉字/);
+  const zhBlock = buildStructureBlock(fmt, { line1Rule: '第 1 行：冲突' }, 'chinese');
+  assert.match(zhBlock, /汉字/);
+  assert.doesNotMatch(zhBlock, /Write in English/);
+});
+
+test('the cruise like budget is configurable and validated', async () => {
+  const { validateConfig, DEFAULT_CONFIG } = await import('../index.js');
+  const config = structuredClone(DEFAULT_CONFIG);
+  assert.equal(config.cruiseSettings.likesPerProfile, 0, 'liking is off by default');
+  config.cruiseSettings.likesPerProfile = 3;
+  assert.equal(validateConfig(config).cruiseSettings.likesPerProfile, 3);
+
+  const zero = structuredClone(DEFAULT_CONFIG);
+  zero.cruiseSettings.likesPerProfile = 0;
+  assert.equal(validateConfig(zero).cruiseSettings.likesPerProfile, 0);
+
+  const tooMany = structuredClone(DEFAULT_CONFIG);
+  tooMany.cruiseSettings.likesPerProfile = 21;
+  assert.throws(() => validateConfig(tooMany), /点赞条数需为 0~20/);
+  const negative = structuredClone(DEFAULT_CONFIG);
+  negative.cruiseSettings.likesPerProfile = -1;
+  assert.throws(() => validateConfig(negative), /点赞条数需为 0~20/);
+  const broken = structuredClone(DEFAULT_CONFIG);
+  broken.cruiseSettings.likesPerProfile = 2.5;
+  assert.throws(() => validateConfig(broken), /点赞条数需为 0~20/);
+});
+
+test('the profile tab exposes the like budget next to the comment budget', async () => {
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.match(source, /每次巡览对该主页点赞几条/);
+  assert.match(source, /likesPerProfile/);
+  assert.match(source, /未点赞过/);
+});

@@ -2673,8 +2673,18 @@ window.__ModuleLoader__.load({
                     updateConfig(c => ({ ...c, cruiseSettings: { ...(c.cruiseSettings || {}), commentsPerProfile: val } }));
                   }
                 })),
+              h('label', { style: { ...labelStyle, flex: '1 1 260px', margin: 0 } },
+                '每次巡览对该主页点赞几条「未点赞过」的帖子（0=不点赞）：', h(SideBadge, { side: 'profile' }),
+                h('input', {
+                  type: 'number', min: 0, max: 20, style: inputStyle,
+                  value: config?.cruiseSettings?.likesPerProfile ?? 0,
+                  onChange: e => {
+                    const val = e.target.value === '' ? '' : Number(e.target.value);
+                    updateConfig(c => ({ ...c, cruiseSettings: { ...(c.cruiseSettings || {}), likesPerProfile: val } }));
+                  }
+                })),
               h('div', { style: { flex: '1 1 260px', fontSize: 12, color: C.faint, lineHeight: 1.6, paddingTop: 22 } },
-                'Worker 会记住已评论过的帖子 ID，重复拜访同一个人时自动往下找没评过的，不会重复刷同一条。')),
+                'Worker 会记住已评论/已点赞的帖子 ID，重复拜访同一个人时自动往下找没处理过的，不会重复刷同一条。点赞在评论之前执行，两者额度互相独立。')),
             (() => {
               const sweep = state?.cruiseSweep;
               const every = config?.cruiseSettings?.tierSweepHours ?? 6;
@@ -2696,6 +2706,10 @@ window.__ModuleLoader__.load({
 
         // 统一保存按钮栏
         h('footer', { style: { display: 'flex', gap: 12, alignItems: 'center', marginTop: 12, padding: '12px 0', borderTop: `1px solid ${C.border}`, flexWrap: 'wrap' } },
+          error ? h('p', { role: 'alert', style: { flex: '1 1 100%', margin: 0, padding: '8px 10px', borderRadius: 8, background: C.raised, color: C.error, fontSize: 12, lineHeight: 1.6 } },
+            `保存未成功：${error.replace(/^[^：]*：/, '')}`) : null,
+          state?.saveLog?.last ? h('p', { style: { flex: '1 1 100%', margin: 0, fontSize: 11, color: C.faint } },
+            `上一次被拒绝的保存：${state.saveLog.last.reason}${state.saveLog.last.detail ? ' — ' + state.saveLog.last.detail : ''}`) : null,
           h('button', {
             disabled: busy || !state?.ok || state?.configSource === 'invalid',
             onClick: async () => {
@@ -2755,7 +2769,13 @@ window.__ModuleLoader__.load({
                 }
               } catch { /* offline: fall back to the last snapshot */ }
               const saveConfig = composeSaveConfig(current, serverSnapshot.current, freshConfig);
-              await act('save-config', undefined, { config: saveConfig, expectedConfigHash: expectedHash });
+              const outcome = await act('save-config', undefined, { config: saveConfig, expectedConfigHash: expectedHash });
+              // `act` swallows the error into the banner at the top of the page.
+              // Repeat it right here so a failed save is impossible to miss.
+              if (outcome === undefined) {
+                const failed = state?.saveLog?.last;
+                setNotice(`保存没有成功：${failed?.reason || '服务器拒绝了这次保存'}${failed?.detail ? '（' + failed.detail + '）' : ''}`);
+              }
             },
             style: { ...buttonStyle(true), padding: '8px 20px', fontSize: 14 }
           }, t('save')),
