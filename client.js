@@ -453,7 +453,7 @@ window.__ModuleLoader__.load({
               t('title')),
             h('p', { style: { margin: '4px 0 0', fontSize: 13, color: C.muted } }, t('subtitle'))),
           h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.9.1'),
+            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.10.0'),
             h('button', {
               type: 'button',
               disabled: busy || updating,
@@ -1084,8 +1084,24 @@ window.__ModuleLoader__.load({
               label: '📝 自动发帖专用大模型：'
             }),
             h('div', { style: { display: 'flex', gap: 16, marginTop: 10, flexWrap: 'wrap' } },
+              h('label', { style: { ...labelStyle, flex: '1 1 170px' } },
+                '随机间隔下限（秒，0=用固定值）：', h(SideBadge, { side: 'post' }),
+                h('input', {
+                  type: 'number', min: 0, max: 86400, style: inputStyle,
+                  placeholder: '例如 300',
+                  value: config?.postSettings?.intervalMinSeconds ?? 0,
+                  onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), intervalMinSeconds: e.target.value === '' ? 0 : Number(e.target.value) } })),
+                })),
+              h('label', { style: { ...labelStyle, flex: '1 1 170px' } },
+                '随机间隔上限（秒，0=用固定值）：', h(SideBadge, { side: 'post' }),
+                h('input', {
+                  type: 'number', min: 0, max: 86400, style: inputStyle,
+                  placeholder: '例如 600',
+                  value: config?.postSettings?.intervalMaxSeconds ?? 0,
+                  onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), intervalMaxSeconds: e.target.value === '' ? 0 : Number(e.target.value) } })),
+                })),
               h('label', { style: { ...labelStyle, flex: '1 1 200px' } },
-                '发帖间隔（秒数）：', h(SideBadge, { side: 'post' }),
+                '固定发帖间隔（秒数，随机范围未启用时生效）：', h(SideBadge, { side: 'post' }),
                 h('input', {
                   type: 'number',
                   min: 30,
@@ -1107,9 +1123,19 @@ window.__ModuleLoader__.load({
                 })
               ),
               h('label', { style: { ...labelStyle, flex: '1 1 200px' } },
-                '折合分钟参考：',
-                h('div', { style: { ...inputStyle, background: C.raised, color: C.muted, display: 'flex', alignItems: 'center' } },
-                  `约 ${Math.round((config?.postSettings?.intervalSeconds ?? 180) / 60 * 10) / 10} 分钟`
+                '当前实际节奏：',
+                h('div', { style: { ...inputStyle, background: C.raised, color: C.muted, display: 'flex', alignItems: 'center', fontSize: 12 } },
+                  (() => {
+                    const lo = Number(config?.postSettings?.intervalMinSeconds) || 0;
+                    const hi = Number(config?.postSettings?.intervalMaxSeconds) || 0;
+                    if (lo > 0 || hi > 0) {
+                      const from = lo > 0 ? lo : 30;
+                      const to = hi > 0 ? hi : from;
+                      return `每 ${from}~${to} 秒随机（约 ${Math.round(from / 6) / 10}~${Math.round(to / 6) / 10} 分钟）`;
+                    }
+                    const fixed = Number(config?.postSettings?.intervalSeconds) || 180;
+                    return `固定 ${fixed} 秒（约 ${Math.round(fixed / 6) / 10} 分钟）`;
+                  })()
                 )
               )
             ),

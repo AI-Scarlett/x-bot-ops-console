@@ -949,6 +949,42 @@ test('one-sentence rule is on by default and can be turned off', async () => {
   assert.match(source, /强制「一句一行」/);
 });
 
+test('random post interval range validates and beats the fixed value', async () => {
+  const config = clone(DEFAULT_CONFIG);
+  assert.equal(config.postSettings.intervalMinSeconds, 0);
+  assert.equal(config.postSettings.intervalMaxSeconds, 0);
+  assert.equal(validateConfig(config).postSettings.intervalMinSeconds, 0);
+
+  const ranged = clone(DEFAULT_CONFIG);
+  ranged.postSettings.intervalMinSeconds = 300;
+  ranged.postSettings.intervalMaxSeconds = 600;
+  const ok = validateConfig(ranged);
+  assert.equal(ok.postSettings.intervalMinSeconds, 300);
+  assert.equal(ok.postSettings.intervalMaxSeconds, 600);
+
+  const inverted = clone(DEFAULT_CONFIG);
+  inverted.postSettings.intervalMinSeconds = 600;
+  inverted.postSettings.intervalMaxSeconds = 300;
+  assert.throws(() => validateConfig(inverted), /随机间隔上限必须大于或等于下限/);
+
+  const tooLow = clone(DEFAULT_CONFIG);
+  tooLow.postSettings.intervalMinSeconds = 10;
+  assert.throws(() => validateConfig(tooLow), /随机间隔下限至少 30 秒/);
+
+  const tooBig = clone(DEFAULT_CONFIG);
+  tooBig.postSettings.intervalMaxSeconds = 90000;
+  assert.throws(() => validateConfig(tooBig), /随机间隔上限/);
+
+  const { FIELD_SIDE } = await import('../index.js');
+  assert.equal(FIELD_SIDE['postSettings.intervalMinSeconds'], 'post');
+  assert.equal(FIELD_SIDE['postSettings.intervalMaxSeconds'], 'post');
+
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.match(source, /随机间隔下限/);
+  assert.match(source, /随机间隔上限/);
+  assert.match(source, /当前实际节奏/);
+});
+
 test('save rebases onto disk so untouched prompts are never wiped', async () => {
   const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
 

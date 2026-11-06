@@ -80,6 +80,8 @@ export const FIELD_SIDE = Object.freeze({
   'postSettings.queueAutoRefill': 'post',
   'postSettings.queueMaxSize': 'post',
   'postSettings.styleSchedule': 'post',
+  'postSettings.intervalMinSeconds': 'post',
+  'postSettings.intervalMaxSeconds': 'post',
   'postSettings.oneSentencePerLine': 'post',
   'postSettings.restEveryPosts': 'post',
   'postSettings.restMinutes': 'post',
@@ -701,6 +703,9 @@ const DEFAULT_CONFIG = Object.freeze({
     enabled: true,
     intervalMinutes: 180,
     intervalSeconds: 180,
+    // Random interval range in seconds (0 = use the fixed intervalSeconds).
+    intervalMinSeconds: 0,
+    intervalMaxSeconds: 0,
     queueBatchSize: 10,
     queueLowThreshold: 3,
     queueAutoRefill: true,
@@ -920,6 +925,20 @@ function validateConfig(input) {
     if (copy.postSettings.customPrompt !== undefined && typeof copy.postSettings.customPrompt !== 'string') throw new TypeError('发帖提示词无效');
     if (copy.postSettings.model !== undefined && typeof copy.postSettings.model !== 'string') throw new TypeError('发帖模型设置无效');
     if (copy.postSettings.topics !== undefined && !Array.isArray(copy.postSettings.topics)) throw new TypeError('发帖灵感池设置无效');
+    if (copy.postSettings.intervalMinSeconds !== undefined) {
+      const min = Number(copy.postSettings.intervalMinSeconds);
+      if (!Number.isInteger(min) || min < 0 || min > 86400) throw new TypeError('随机间隔下限需为 0~86400 秒');
+      copy.postSettings.intervalMinSeconds = min;
+    }
+    if (copy.postSettings.intervalMaxSeconds !== undefined) {
+      const max = Number(copy.postSettings.intervalMaxSeconds);
+      if (!Number.isInteger(max) || max < 0 || max > 86400) throw new TypeError('随机间隔上限需为 0~86400 秒');
+      copy.postSettings.intervalMaxSeconds = max;
+    }
+    const intMin = copy.postSettings.intervalMinSeconds ?? 0;
+    const intMax = copy.postSettings.intervalMaxSeconds ?? 0;
+    if ((intMin > 0 || intMax > 0) && intMin < 30) throw new TypeError('随机间隔下限至少 30 秒');
+    if (intMin > 0 && intMax > 0 && intMax < intMin) throw new TypeError('随机间隔上限必须大于或等于下限');
     if (copy.postSettings.queueBatchSize !== undefined) {
       const batch = Number(copy.postSettings.queueBatchSize);
       if (!Number.isInteger(batch) || batch < 1 || batch > 50) throw new TypeError('每批生成条数需为 1~50 之间的整数');
