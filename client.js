@@ -199,6 +199,64 @@ window.__ModuleLoader__.load({
       ['rateLimitLongMinutes', 1, 120, 'both', '连续第 4 次限流等待时长（分钟）'],
     ];
 
+    // A comma-separated list field must behave like a normal text box while you
+    // type. Parsing on every keystroke used to eat the trailing comma/space and
+    // rewrite the value, so the caret jumped and you could not keep typing after
+    // the last item. This keeps a local draft and only parses on blur / Enter.
+    class ListText extends React.Component {
+      constructor(props) {
+        super(props);
+        this.state = { draft: ListText.textOf(props), focused: false };
+        this.onFocus = this.onFocus.bind(this);
+        this.onChange = this.onChange.bind(this);
+        this.onBlur = this.onBlur.bind(this);
+        this.onKeyDown = this.onKeyDown.bind(this);
+      }
+      static textOf(props) {
+        const items = Array.isArray(props.value) ? props.value : [];
+        return items.join(props.join ?? ', ');
+      }
+      static parse(props, text) {
+        const split = typeof props.split === 'function'
+          ? props.split
+          : value => String(value || '').split(/[,，、\s]+/).map(item => item.trim()).filter(Boolean);
+        return split(text);
+      }
+      componentDidUpdate(prevProps) {
+        const before = (Array.isArray(prevProps.value) ? prevProps.value : []).join('\u0001');
+        const after = (Array.isArray(this.props.value) ? this.props.value : []).join('\u0001');
+        // Only adopt outside changes while the field is not being edited.
+        if (!this.state.focused && before !== after) this.setState({ draft: ListText.textOf(this.props) });
+      }
+      onFocus() { this.setState({ focused: true }); }
+      onChange(event) { this.setState({ draft: event.target.value }); }
+      onBlur() {
+        const next = ListText.parse(this.props, this.state.draft);
+        this.setState({ focused: false, draft: next.join(this.props.join ?? ', ') });
+        if (typeof this.props.onCommit === 'function') this.props.onCommit(next);
+      }
+      onKeyDown(event) {
+        if (!this.props.multiline && event.key === 'Enter') {
+          event.preventDefault();
+          if (event.currentTarget && typeof event.currentTarget.blur === 'function') event.currentTarget.blur();
+        }
+      }
+      render() {
+        const { style, placeholder, multiline, maxLength } = this.props;
+        const common = {
+          style: multiline ? { ...inputStyle, minHeight: 46, ...(style || {}) } : { ...inputStyle, ...(style || {}) },
+          placeholder: placeholder || '',
+          maxLength: maxLength || 6000,
+          value: this.state.draft,
+          onFocus: this.onFocus,
+          onChange: this.onChange,
+          onBlur: this.onBlur,
+          onKeyDown: this.onKeyDown,
+        };
+        return multiline ? h('textarea', common) : h('input', common);
+      }
+    }
+
     class SafeBoundary extends React.Component {
       constructor(props) {
         super(props);
@@ -1028,24 +1086,24 @@ window.__ModuleLoader__.load({
             h('div', { style: { marginTop: 14, padding: '10px 12px', borderRadius: 8, background: C.layerTwo, border: `1px solid ${C.border}` } },
               h('div', { style: { fontSize: 13, fontWeight: '600', marginBottom: 6 } }, '⚙️ 内置评论规则（原先写死在 Worker 里，现在可改）'),
               h('label', { style: { ...labelStyle, marginTop: 4 } }, '跳过关键词（逗号分隔，命中即整条跳过）：', h(SideBadge, { side: 'comment' })),
-              h('input', {
+              h(ListText, {
                 style: inputStyle,
                 placeholder: '例如：广告, 抽奖, 拼多多',
-                value: (config?.commentSettings?.skipKeywords || []).join(', '),
-                onChange: e => updateConfig(c => ({
+                value: (config?.commentSettings?.skipKeywords || []),
+                onCommit: items => updateConfig(c => ({
                   ...c,
                   commentSettings: {
                     ...(c.commentSettings || {}),
-                    skipKeywords: e.target.value.split(/[,，\s]+/).map(x => x.trim()).filter(Boolean),
+                    skipKeywords: items,
                   },
                 })),
               }),
               h('label', { style: { ...labelStyle, marginTop: 10 } }, '追加「财经类」判定关键词（内置词库之外，逗号分隔）：'),
-              h('input', {
+              h(ListText, {
                 style: inputStyle,
                 placeholder: '例如：黄金, 白银, 期货',
-                value: (config?.commentSettings?.extraFinanceKeywords || []).join(', '),
-                onChange: e => updateConfig(c => ({ ...c, commentSettings: { ...(c.commentSettings || {}), extraFinanceKeywords: e.target.value.split(/[,，\s]+/).map(x => x.trim()).filter(Boolean) } })),
+                value: (config?.commentSettings?.extraFinanceKeywords || []),
+                onCommit: items => updateConfig(c => ({ ...c, commentSettings: { ...(c.commentSettings || {}), extraFinanceKeywords: items } })),
               }),
               h('div', { style: { display: 'flex', gap: 16, marginTop: 10, flexWrap: 'wrap' } },
                 h('label', { style: { ...labelStyle, flex: '1 1 160px' } },
@@ -1170,11 +1228,11 @@ window.__ModuleLoader__.load({
                 onChange: e => updateConfig(c => ({ ...c, replySettings: { ...(c.replySettings || {}), cannedForbidden: e.target.value } })),
               }),
               h('label', { style: { ...labelStyle, marginTop: 10 } }, '追加「太空洞」判定词（逗号分隔，命中则不回复）：'),
-              h('input', {
+              h(ListText, {
                 style: inputStyle,
                 placeholder: '例如：好的, 收到, 谢谢',
-                value: (config?.replySettings?.thinReplyExtra || []).join(', '),
-                onChange: e => updateConfig(c => ({ ...c, replySettings: { ...(c.replySettings || {}), thinReplyExtra: e.target.value.split(/[,，\s]+/).map(x => x.trim()).filter(Boolean) } })),
+                value: (config?.replySettings?.thinReplyExtra || []),
+                onCommit: items => updateConfig(c => ({ ...c, replySettings: { ...(c.replySettings || {}), thinReplyExtra: items } })),
               }),
               h('label', { style: { ...labelStyle, marginTop: 10 } }, '人设覆盖（留空则用 Worker 内置人设描述）：'),
               h('textarea', {
@@ -1184,18 +1242,18 @@ window.__ModuleLoader__.load({
                 onChange: e => updateConfig(c => ({ ...c, replySettings: { ...(c.replySettings || {}), personaOverride: e.target.value } })),
               }),
               h('label', { style: { ...labelStyle, marginTop: 10 } }, '追加「对方不想继续」判定词（逗号分隔）：'),
-              h('input', {
+              h(ListText, {
                 style: inputStyle,
                 placeholder: '例如：别私信了, 到此为止吧',
-                value: (config?.replySettings?.stopKeywords || []).join(', '),
-                onChange: e => updateConfig(c => ({ ...c, replySettings: { ...(c.replySettings || {}), stopKeywords: e.target.value.split(/[,，\s]+/).map(x => x.trim()).filter(Boolean) } })),
+                value: (config?.replySettings?.stopKeywords || []),
+                onCommit: items => updateConfig(c => ({ ...c, replySettings: { ...(c.replySettings || {}), stopKeywords: items } })),
               }),
               h('label', { style: { ...labelStyle, marginTop: 10 } }, '回复中禁止出现的词（逗号分隔）：'),
-              h('input', {
+              h(ListText, {
                 style: inputStyle,
                 placeholder: '例如：亲, 宝子',
-                value: (config?.replySettings?.forbiddenPhrases || []).join(', '),
-                onChange: e => updateConfig(c => ({ ...c, replySettings: { ...(c.replySettings || {}), forbiddenPhrases: e.target.value.split(/[,，\s]+/).map(x => x.trim()).filter(Boolean) } })),
+                value: (config?.replySettings?.forbiddenPhrases || []),
+                onCommit: items => updateConfig(c => ({ ...c, replySettings: { ...(c.replySettings || {}), forbiddenPhrases: items } })),
               })),
             h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 14 } },
               ...timingFields.filter(([, , , side]) => side === 'reply' || side === 'send').map(([key, min, max, side, hint]) =>
@@ -1574,22 +1632,25 @@ window.__ModuleLoader__.load({
                 ...rows);
             })(),
             h('label', { style: { ...labelStyle, marginTop: 10 } }, '首行禁用的软铺垫词（逗号分隔）：'),
-            h('input', {
+            h(ListText, {
               style: inputStyle,
-              value: (config?.postSettings?.format?.softOpeners || []).join('、'),
-              onChange: e => setPostFormat('softOpeners', e.target.value.split(/[,，、\s]+/).map(x => x.trim()).filter(Boolean)),
+              value: (config?.postSettings?.format?.softOpeners || []),
+                join: '、',
+              onCommit: items => setPostFormat('softOpeners', items),
             }),
             h('label', { style: { ...labelStyle, marginTop: 8 } }, '作废句式（逗号分隔）：'),
-            h('input', {
+            h(ListText, {
               style: inputStyle,
-              value: (config?.postSettings?.format?.bannedPatterns || []).join('、'),
-              onChange: e => setPostFormat('bannedPatterns', e.target.value.split(/[,，、\s]+/).map(x => x.trim()).filter(Boolean)),
+              value: (config?.postSettings?.format?.bannedPatterns || []),
+                join: '、',
+              onCommit: items => setPostFormat('bannedPatterns', items),
             }),
             h('label', { style: { ...labelStyle, marginTop: 8 } }, '白话虚词（逗号分隔，命中即重写）：'),
-            h('input', {
+            h(ListText, {
               style: inputStyle,
-              value: (config?.postSettings?.format?.forbidColloquial || []).join('、'),
-              onChange: e => setPostFormat('forbidColloquial', e.target.value.split(/[,，、\s]+/).map(x => x.trim()).filter(Boolean)),
+              value: (config?.postSettings?.format?.forbidColloquial || []),
+                join: '、',
+              onCommit: items => setPostFormat('forbidColloquial', items),
             }),
             h('label', { style: { ...labelStyle, marginTop: 8 } }, '硬底线（任何题材都不放松）：'),
             h('textarea', {
@@ -2200,30 +2261,31 @@ window.__ModuleLoader__.load({
                 + '另外有一层内置安全底线（凶杀/性侵/战争/灾难/色情等 97 条）和政治词表始终生效、不可关闭，'
                 + '避免你把关键词列表整个换掉之后这类标题混进来。'),
               h('label', { style: { ...labelStyle, marginTop: 4 } }, '剔除关键词（命中即跳过，逗号分隔）：'),
-              h('textarea', {
+              h(ListText, {
+                multiline: true,
                 style: { ...inputStyle, minHeight: 62, fontSize: 12 },
-                value: (config?.postSettings?.hotFilter?.excludeKeywords || []).join(', '),
-                onChange: e => updateConfig(c => ({
+                value: (config?.postSettings?.hotFilter?.excludeKeywords || []),
+                onCommit: items => updateConfig(c => ({
                   ...c,
                   postSettings: {
                     ...(c.postSettings || {}),
                     hotFilter: {
                       ...(c.postSettings?.hotFilter || {}),
-                      excludeKeywords: e.target.value.split(/[,，\s]+/).map(x => x.trim()).filter(Boolean),
+                      excludeKeywords: items,
                     },
                   },
                 })),
               }),
               h('label', { style: { ...labelStyle, marginTop: 10 } }, '偏好关键词（命中的话题优先被选中，逗号分隔）：'),
-              h('input', {
+              h(ListText, {
                 style: inputStyle,
                 placeholder: '例如：感情, 职场, 生活, 影视',
-                value: (config?.postSettings?.hotFilter?.preferKeywords || []).join(', '),
-                onChange: e => updateConfig(c => ({
+                value: (config?.postSettings?.hotFilter?.preferKeywords || []),
+                onCommit: items => updateConfig(c => ({
                   ...c,
                   postSettings: {
                     ...(c.postSettings || {}),
-                    hotFilter: { ...(c.postSettings?.hotFilter || {}), preferKeywords: e.target.value.split(/[,，\s]+/).map(x => x.trim()).filter(Boolean) },
+                    hotFilter: { ...(c.postSettings?.hotFilter || {}), preferKeywords: items },
                   },
                 })),
               }),

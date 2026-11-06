@@ -288,3 +288,49 @@ test('ops panel wires the login probe and the cookie sync button', async () => {
     assert.ok(!app.requests.some(body => body.action === 'sync-login'), 'sync must wait for confirmation');
   } finally { app.close(); }
 });
+
+test('list fields keep exactly what you type and only parse on blur', () => {
+  const app = mount({ tab: 'learning' });
+  try {
+    const tree = app.render();
+    const fields = elements(tree).filter(node => typeof node.type === 'function' && node.type.name === 'ListText');
+    assert.ok(fields.length >= 2, 'learning tab should render list fields');
+    const multiline = fields.find(node => node.props.multiline) || fields[0];
+    const inst = new multiline.type(multiline.props);
+    inst.setState = patch => { inst.state = { ...inst.state, ...patch }; };
+
+    let field = inst.render();
+    // Type a separator plus a new item, then leave a trailing comma in place.
+    const typed = `${field.props.value}, 新词, `;
+    field.props.onFocus();
+    field.props.onChange({ target: { value: typed } });
+    field = inst.render();
+    // The trailing comma and space must survive while typing.
+    assert.equal(field.props.value, typed);
+    assert.match(field.props.value, /新词, $/);
+
+    let committed = null;
+    inst.props = { ...multiline.props, onCommit: items => { committed = items; } };
+    field.props.onBlur();
+    assert.ok(Array.isArray(committed));
+    assert.ok(committed.includes('新词'), 'item is committed on blur');
+    assert.ok(committed.every(item => item !== ''), 'no empty entries from the separator');
+    field = inst.render();
+    assert.equal(field.props.value, committed.join(', '), 'only normalised after blur');
+
+    // Single-line fields commit on Enter.
+    const single = fields.find(node => !node.props.multiline);
+    if (single) {
+      const inst2 = new single.type(single.props);
+      inst2.setState = patch => { inst2.state = { ...inst2.state, ...patch }; };
+      let field2 = inst2.render();
+      let blurred = false;
+      let prevented = false;
+      field2.props.onKeyDown({ key: 'Enter', preventDefault() { prevented = true; }, currentTarget: { blur() { blurred = true; } } });
+      assert.equal(prevented, true);
+      assert.equal(blurred, true);
+      field2.props.onKeyDown({ key: 'a', preventDefault() {}, currentTarget: { blur() {} } });
+      assert.equal(prevented, true, 'other keys are left alone');
+    }
+  } finally { app.close(); }
+});
