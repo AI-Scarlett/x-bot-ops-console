@@ -1453,6 +1453,52 @@ test('writer rule settings are editable and validated', async () => {
   assert.match(source, /套用文档配比/);
 });
 
+test('style prompt fragments are editable and drive the structure block', async () => {
+  const { buildStructureBlock, DEFAULT_CONFIG: defaults } = await import('../index.js');
+  const fmt = defaults.postSettings.format;
+  const style = defaults.postSettings.style;
+
+  assert.ok(style.persona.includes('余'));
+  assert.ok(style.line3Rule.includes('{prefix}'));
+  assert.equal(typeof style.hotRewriteRule, 'string');
+
+  const block = buildStructureBlock(fmt, style);
+  assert.ok(block.includes('共 3 行'));
+  assert.ok(block.includes('30-60'));
+  assert.ok(block.includes('以「尔」开头'), 'placeholder must be substituted');
+  assert.ok(!block.includes('{prefix}'), 'no raw placeholder should survive');
+
+  // Editing a fragment changes the prompt without touching code.
+  const edited = buildStructureBlock(fmt, { ...style, line1Rule: '第 1 行：直接开骂。', languageRule: '' });
+  assert.ok(edited.includes('第 1 行：直接开骂。'));
+  assert.ok(!edited.includes('软铺垫'), 'replaced fragment must not leak the old text');
+  assert.ok(!edited.includes('不写骈赋'), 'blank fragment must drop out');
+
+  // Placeholders follow the configured shape.
+  const custom = buildStructureBlock({ ...fmt, lineCount: 5, minChars: 10, maxChars: 20, closingPrefix: '君' }, style);
+  assert.ok(custom.includes('共 5 行'));
+  assert.ok(custom.includes('汉字 10-20 个'));
+  assert.ok(custom.includes('以「君」开头'));
+
+  const config = clone(DEFAULT_CONFIG);
+  config.postSettings.style.persona = '自定义人设';
+  assert.equal(validateConfig(config).postSettings.style.persona, '自定义人设');
+
+  const bad = clone(DEFAULT_CONFIG);
+  bad.postSettings.style.persona = 123;
+  assert.throws(() => validateConfig(bad), /文风片段/);
+
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.match(source, /文风片段/);
+  assert.match(source, /人设与立场/);
+  assert.match(source, /热点改写要求/);
+
+  // The worker reads the same fragments.
+  const worker = readFileSync('/Users/zhouxiaoming/Documents/Codex/tmp-84e0365a44937636/scripts/post_worker.py', 'utf8');
+  assert.match(worker, /def style_settings/);
+  assert.match(worker, /DEFAULT_STYLE = \{/);
+});
+
 test('save rebases onto disk so untouched prompts are never wiped', async () => {
   const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
 

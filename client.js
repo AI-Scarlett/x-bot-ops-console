@@ -480,7 +480,7 @@ window.__ModuleLoader__.load({
               t('title')),
             h('p', { style: { margin: '4px 0 0', fontSize: 13, color: C.muted } }, t('subtitle'))),
           h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.18.0'),
+            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.18.1'),
             h('button', {
               type: 'button',
               disabled: busy || updating,
@@ -1376,6 +1376,42 @@ window.__ModuleLoader__.load({
                 onChange: e => setPostFormat('requireClosingQuestion', e.target.checked),
               }),
               '末行必须以引导字开头并以问号结尾'),
+            (() => {
+              const fields = [
+                ['persona', '人设与立场', true],
+                ['line1Rule', '第 1 行要求', false],
+                ['line2Rule', '第 2 行要求', false],
+                ['line3Rule', '第 3 行要求（可用 {prefix}）', false],
+                ['languageRule', '语言与用词要求', false],
+                ['hotRewriteRule', '热点改写要求', true],
+                ['extraRules', '附加要求（可留空）', true],
+              ];
+              const update = (key, value) => updateConfig(c => ({
+                ...c,
+                postSettings: { ...(c.postSettings || {}), style: { ...(c.postSettings?.style || {}), [key]: value } },
+              }));
+              const rows = fields.map(([key, label, multiline]) => h('label', {
+                key,
+                style: { ...labelStyle, marginTop: 8, display: 'block' },
+              },
+                label,
+                multiline
+                  ? h('textarea', {
+                      style: { ...inputStyle, minHeight: 56, fontSize: 12 },
+                      value: config?.postSettings?.style?.[key] ?? '',
+                      onChange: e => update(key, e.target.value),
+                    })
+                  : h('input', {
+                      style: { ...inputStyle, fontSize: 12 },
+                      value: config?.postSettings?.style?.[key] ?? '',
+                      onChange: e => update(key, e.target.value),
+                    })));
+              return h('div', { style: { marginTop: 14, paddingTop: 10, borderTop: `1px solid ${C.border}` } },
+                h('div', { style: { fontSize: 13, fontWeight: '600', marginBottom: 6 } }, '✍️ 文风片段（每段都能改，生成时原样拼进提示词）'),
+                h('small', { style: { color: C.faint, fontSize: 11, display: 'block', marginBottom: 8 } },
+                  '可用占位符：{prefix} 末行引导字、{lines} 行数、{min} 字数下限、{max} 字数上限。'),
+                ...rows);
+            })(),
             h('label', { style: { ...labelStyle, marginTop: 10 } }, '首行禁用的软铺垫词（逗号分隔）：'),
             h('input', {
               style: inputStyle,

@@ -104,6 +104,7 @@ export const FIELD_SIDE = Object.freeze({
   'postSettings.politicalCap': 'post',
   'postSettings.dedupe': 'post',
   'postSettings.format': 'post',
+  'postSettings.style': 'post',
   'postSettings.restEveryPosts': 'post',
   'postSettings.restMinutes': 'post',
   'postSettings.learningInfluence': 'post',
@@ -683,6 +684,31 @@ export function enforceOneSentencePerLine(text) {
 
 export const ONE_SENTENCE_RULE = '【格式硬性要求】每一句话必须单独占一行，句与句之间必须换行；禁止把多句连成一整段，禁止使用空行。';
 
+// The prompt's structural section, assembled from editable fragments.
+export function buildStructureBlock(format = {}, style = {}) {
+  const fmt = { ...(format || {}) };
+  const st = { ...(style || {}) };
+  const fill = template => String(template || '')
+    .replace(/\{prefix\}/g, String(fmt.closingPrefix ?? '尔'))
+    .replace(/\{lines\}/g, String(fmt.lineCount ?? 3))
+    .replace(/\{min\}/g, String(fmt.minChars ?? 30))
+    .replace(/\{max\}/g, String(fmt.maxChars ?? 60));
+  const lines = [
+    `【硬性结构】共 ${fmt.lineCount ?? 3} 行，不多不少。汉字 ${fmt.minChars ?? 30}-${fmt.maxChars ?? 60} 个。`,
+    st.line1Rule ? fill(st.line1Rule) : '',
+    st.line2Rule ? fill(st.line2Rule) : '',
+    st.line3Rule ? fill(st.line3Rule) : '',
+    st.languageRule ? fill(st.languageRule) : '',
+    Array.isArray(fmt.softOpeners) && fmt.softOpeners.length ? `禁在首行使用：${fmt.softOpeners.join('、')}。` : '',
+    Array.isArray(fmt.bannedPatterns) && fmt.bannedPatterns.length ? `禁用作废句式：${fmt.bannedPatterns.join('、')}。` : '',
+    Array.isArray(fmt.forbidColloquial) && fmt.forbidColloquial.length ? `禁用白话虚词：${fmt.forbidColloquial.join('、')}。` : '',
+    st.extraRules ? fill(st.extraRules) : '',
+    '禁链接、@、话题标签。',
+    fmt.hardBottomLines ? `【硬底线】${fill(fmt.hardBottomLines)}` : '',
+  ].filter(Boolean);
+  return `\n\n${lines.join('\n')}`;
+}
+
 // Enforce the writer rules: fixed line count, length, an addressing question at
 // the end, no soft openers, no colloquial filler, no retired templates.
 export function checkPostDraft(text, format = {}, recentTexts = []) {
@@ -1080,6 +1106,16 @@ const DEFAULT_CONFIG = Object.freeze({
       bannedPatterns: ['君不见', '诸君', '敢问诸君', '君以为然', '敢问', '《X赋》', '赋体'],
       hardBottomLines: '只写虚构、自愿的成年人；不写未成年人、露骨性行为过程、生殖器、裸体细节；不写胁迫、偷拍、灌醉/下药；不违法、不仇恨、不歧视。',
     },
+    // Every wording fragment of the style prompt lives here so nothing is fixed.
+    style: {
+      persona: '用浅显文言写。自称余/吾，称对方君/卿/尔，不用我/你作主语。写虚构成年人之间自愿的暧昧、男女博弈、相亲彩礼、渣男渣女，或骂一件具体的事。',
+      line1Rule: '第 1 行：直接扔出冲突、欲望或暧昧，动作具体；禁止茶、灯、天气、衣物、眼神、走路之类软铺垫。',
+      line2Rule: '第 2 行：立刻揭底或反转，把矛盾推到明面。',
+      line3Rule: '第 3 行：以「{prefix}」开头的具体提问，并以问号结尾。',
+      languageRule: '浅显文言，陌生人一读就懂；不写骈赋、不堆僻字；多用曰/之/乎/也/矣/者/焉/何/乃/亦/其。',
+      hotRewriteRule: '借这个话题的热度写一条原创推文：可以评论、反讽、借题发挥或抒发感怀；不要照搬新闻标题，不要写成新闻播报。',
+      extraRules: '',
+    },
     // Reuse guard: no long verbatim run and no repeated skeleton.
     dedupe: { maxOverlapChars: 8, recentPosts: 50, skeletonCooldownHours: 48 },
     // Political topics are capped per day and per event.
@@ -1449,6 +1485,14 @@ function validateConfig(input) {
       }
       if (fmt.hardBottomLines !== undefined && (typeof fmt.hardBottomLines !== 'string' || fmt.hardBottomLines.length > 2000)) throw new TypeError('硬底线文本无效');
       if (fmt.requireClosingQuestion !== undefined && typeof fmt.requireClosingQuestion !== 'boolean') throw new TypeError('结尾提问开关无效');
+    }
+    if (copy.postSettings.style !== undefined) {
+      const style = copy.postSettings.style;
+      if (!isRecord(style)) throw new TypeError('文风设置无效');
+      for (const key of ['persona', 'line1Rule', 'line2Rule', 'line3Rule', 'languageRule', 'hotRewriteRule', 'extraRules']) {
+        if (style[key] === undefined) continue;
+        if (typeof style[key] !== 'string' || style[key].length > 4000) throw new TypeError(`文风片段 ${key} 无效`);
+      }
     }
     if (copy.postSettings.dedupe !== undefined) {
       const dedupe = copy.postSettings.dedupe;
@@ -1863,18 +1907,8 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       const fmtCfg = { ...DEFAULT_CONFIG.postSettings.format, ...(postCfg.format || {}) };
       const dedupeCfg = { ...DEFAULT_CONFIG.postSettings.dedupe, ...(postCfg.dedupe || {}) };
       const capCfg = { ...DEFAULT_CONFIG.postSettings.politicalCap, ...(postCfg.politicalCap || {}) };
-      const structureLines = [
-        `【硬性结构】共 ${fmtCfg.lineCount} 行，不多不少。汉字 ${fmtCfg.minChars}-${fmtCfg.maxChars} 个。`,
-        `第 1 行：直接扔出冲突、欲望或暧昧，禁止茶、灯、天气、衣物、眼神、走路之类软铺垫。`,
-        `第 2 行：立刻揭底或反转，动作具体。`,
-        `第 3 行：以「${fmtCfg.closingPrefix}」开头的具体提问，并以问号结尾。`,
-        fmtCfg.softOpeners?.length ? `禁在首行使用：${fmtCfg.softOpeners.join('、')}。` : '',
-        fmtCfg.bannedPatterns?.length ? `禁用作废句式：${fmtCfg.bannedPatterns.join('、')}。` : '',
-        fmtCfg.forbidColloquial?.length ? `禁用白话虚词：${fmtCfg.forbidColloquial.join('、')}。自称余/吾，称对方君/卿/尔。` : '',
-        '禁链接、@、话题标签。',
-        fmtCfg.hardBottomLines ? `【硬底线】${fmtCfg.hardBottomLines}` : '',
-      ].filter(Boolean);
-      const structureBlock = `\n\n${structureLines.join('\n')}`;
+      const styleCfg = { ...DEFAULT_CONFIG.postSettings.style, ...(postCfg.style || {}) };
+      const structureBlock = buildStructureBlock(fmtCfg, styleCfg);
       const formatRule = fmtCfg.lineCount > 0 ? structureBlock : (onePerLine ? `\n\n${ONE_SENTENCE_RULE}` : '');
       const basePrompt = oneOffPrompt || postCfg.customPrompt || '你在推特(X)上用周天子姬霸的人设发一条原创推文。文风为幽默、古奥的文言文或诗词歌赋，自称周天子、姬霸或夫子，不要露骨，禁止提现代网络低俗梗，字数在30到90字之间。';
       // Learned patterns steer topic choice and structure; the writing style above stays authoritative.
@@ -1943,7 +1977,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
           ? `\n\n【本条主题方向：${theme.label}】（约占 ${theme.weight}%）${theme.prompt ? ` ${theme.prompt}` : ''}`
           : '';
         const hotBlock = hotTopic
-          ? `\n\n【今日热点话题】${hotTopic}\n请借这个话题的热度写一条原创推文：可以评论、反讽、借题发挥或抒发感想，但必须保持上面的文风与人设，不要照搬新闻标题，不要写成新闻播报。`
+          ? `\n\n【今日热点话题】${hotTopic}\n${styleCfg.hotRewriteRule || ''}`
           : '';
         const topicHint = theme ? `\n（请紧扣「${theme.label}」这个主题方向，不要跑题）` : `\n（当前话题灵感参考：${topic}）`;
         const prompt = basePrompt + themeBlock + hotBlock + learningBlock + topicHint + formatRule;
