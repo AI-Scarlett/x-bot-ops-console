@@ -1361,6 +1361,27 @@ test('operator banned topics merge with learned ones and survive learning', asyn
   assert.match(worker, /manualBannedTopics/);
 });
 
+test('maintenance panel offers bulk restarts and manual cache cleanup', async () => {
+  const { diskFreeBytes, readCacheCleanupState } = await import('../index.js');
+  const free = diskFreeBytes();
+  assert.ok(free === null || (Number.isFinite(free) && free >= 0), 'disk free must be a number or null');
+  const state = readCacheCleanupState();
+  assert.ok(state === null || typeof state === 'object');
+
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.match(source, /运维操作/);
+  assert.match(source, /重启全部工作进程/);
+  assert.match(source, /重启全部看门狗/);
+  assert.match(source, /全量重启/);
+  assert.match(source, /立即清理缓存/);
+
+  const host = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
+  assert.match(host, /request\.action === 'clean-cache'/);
+  assert.match(host, /request\.action === 'restart-watchdog'/);
+  assert.match(host, /cache_cleanup\.py/);
+  assert.match(host, /maintenance: \{ diskFreeBytes/);
+});
+
 test('save rebases onto disk so untouched prompts are never wiped', async () => {
   const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
 

@@ -35,6 +35,7 @@ export const LEARN_TRIGGER_PATH = join(APP_HOME, 'Library/Application Support/XB
 export const CRUISE_HISTORY_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/profile_cruise_history.json');
 export const TRENDS_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/trends.json');
 export const COOKIE_SET_SENTINEL = '__COOKIE_SET__';
+export const CACHE_CLEANUP_STATE = join(homedir(), 'Library/Application Support/XBotOpsConsole/cache_cleanup.json');
 export const CONFIG_BACKUP_DIR = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/config-history');
 const MAX_CONFIG_BACKUPS = 20;
 
@@ -1150,6 +1151,27 @@ function processInfo(pid) {
   };
   return { stat: read('stat'), comm: read('comm'), command: read('command') };
 }
+// Free space on the volume that holds the workspace, in bytes.
+export function diskFreeBytes() {
+  try {
+    const out = execFileSync('/bin/df', ['-k', homedir()], { encoding: 'utf8', timeout: 5000 });
+    const line = out.trim().split('\n').pop() || '';
+    const columns = line.split(/\s+/);
+    const available = Number(columns[3]);
+    return Number.isFinite(available) ? available * 1024 : null;
+  } catch {
+    return null;
+  }
+}
+
+export function readCacheCleanupState() {
+  try {
+    return JSON.parse(readFileSync(CACHE_CLEANUP_STATE, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 function processState(pidPath, expectedScript, requiredArg = '', expectedArgvToken = expectedScript, interpreterToken = '') {
   let pid;
   try { pid = Number((readFileSync(pidPath, 'utf8') || '').trim()); } catch { return { running: false, pid: null, owned: false, detail: '未找到进程编号文件' }; }
@@ -1615,6 +1637,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       postHistory: postHistory.slice(-20),
       learnings: readLearnings(activeLearningsPath),
       trends: readTrends(),
+      maintenance: { diskFreeBytes: diskFreeBytes(), cacheCleanup: readCacheCleanupState() },
       cruiseSweep: readCruiseSweep(),
       replyDiagnostics: readReplyDiagnostics(items.reply ? items.reply.stateDir : null),
       configBackups: listConfigBackups(activeBackupDir),
@@ -1832,6 +1855,35 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         note: file ? '已为当前配置创建一份快照。' : '当前没有可备份的配置文件。',
       };
     }
+    if (request.action === 'clean-cache') {
+      const all = currentTargets() || {};
+      const reply = all.reply || {};
+      const post = all.post || {};
+      const script = (currentTargets() || {}).cacheCleanupScript
+        || join(dirname(String(post.worker || reply.worker || '')), 'cache_cleanup.py');
+      if (!script || !existsSync(script)) throw new Error(`未找到缓存清理脚本：${script}`);
+      const python = (currentTargets() || {}).cacheCleanupPython || resolvePython(post.python ? post : (reply.python ? reply : {})) || 'python3';
+      const before = diskFreeBytes();
+      let output = '';
+      try {
+        output = execFileSync(python, [script], { encoding: 'utf8', timeout: 180000 });
+      } catch (error) {
+        throw new Error(`清理脚本执行失败：${String(error?.message || error).split('\n')[0]}`);
+      }
+      const after = diskFreeBytes();
+      const reclaimed = before != null && after != null ? Math.max(0, after - before) : null;
+      const state = readCacheCleanupState();
+      return {
+        ok: true,
+        action: 'clean-cache',
+        output: String(output || '').trim(),
+        reclaimedBytes: state?.reclaimedBytes ?? reclaimed,
+        diskFreeBefore: before,
+        diskFreeAfter: after,
+        cacheCleanup: state,
+        note: `缓存已清理，释放约 ${reclaimed != null ? Math.round(reclaimed / (1024 * 1024)) : Math.round((state?.reclaimedBytes || 0) / (1024 * 1024))} MB。`,
+      };
+    }
     if (request.action === 'fetch-trends') {
       const sharedCfg = getConfig();
       const sources = (sharedCfg.learningSettings || {}).trendSources
@@ -1946,13 +1998,65 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       }, activeLearningsPath);
       return { ok: true, action: 'clear-learnings', learnings: payload, note: '学习成果已全部清空。' };
     }
-    if (!['pause', 'resume', 'start', 'stop', 'restart'].includes(request.action)) throw new TypeError('未知操作类型');
+    if (!['pause', 'resume', 'start', 'stop', 'restart', 'restart-watchdog'].includes(request.action)) throw new TypeError('未知操作类型');
     if (!['comment', 'reply', 'post', 'profile'].includes(request.target)) throw new TypeError('目标必须是评论或提及回复');
     if (platform !== 'darwin') throw new Error('进程控制仅支持 macOS');
     const target = currentTargets()[request.target];
     const watchdogFlag = request.target === 'comment' ? '--loop' : '--supervise';
     const watchdogStatus = processState(target.watchdogPid, target.watchdog, watchdogFlag, target.watchdogPidArgvToken || target.watchdog, target.interpreterPidArgvToken || '');
     const workerStatus = processState(target.pid, target.worker, '', target.workerPidArgvToken || target.worker, target.interpreterPidArgvToken || '');
+    if (request.action === 'restart-watchdog') {
+      // Recovers from the case where a full disk or a crash killed the watchdog:
+      // without it the console can no longer start, stop or restart the worker.
+      if (!existsSync(target.watchdog)) throw new Error('未找到监控脚本，请先在设置中核对脚本路径');
+      const python = resolvePython(target);
+      if (existsSync(target.stop)) unlinkSync(target.stop);
+
+      let killed = false;
+      if (watchdogStatus.running) {
+        if (!watchdogStatus.owned) throw new Error('发现同名但不属于本插件的监控进程，已拒绝操作');
+        try { process.kill(watchdogStatus.pid, 'SIGTERM'); killed = true; } catch { /* already gone */ }
+        const watchdogFlag = request.target === 'comment' ? '--loop' : '--supervise';
+        const check = () => processState(target.watchdogPid, target.watchdog, watchdogFlag, target.watchdogPidArgvToken || target.watchdog, target.interpreterPidArgvToken || '');
+        for (let i = 0; i < 40; i += 1) {
+          await new Promise(resolveWait => setTimeout(resolveWait, 250));
+          if (!check().running) break;
+        }
+        const stillRunning = check();
+        if (stillRunning.running) {
+          try { process.kill(stillRunning.pid, 'SIGKILL'); } catch { /* best effort */ }
+          await new Promise(resolveWait => setTimeout(resolveWait, 400));
+        }
+      }
+
+      const argv = request.target === 'comment'
+        ? [python, target.watchdog, '--loop']
+        : [python, target.watchdog, '--supervise'];
+      const logPath = request.target === 'comment' ? join(target.dir, 'watchdog.log') : join(target.dir, `${request.target}_watchdog.stdout.log`);
+      let pid = null;
+      let out;
+      try {
+        out = openSync(logPath, 'a');
+        const child = spawnProcess(argv[0], argv.slice(1), { cwd: target.dir, detached: true, stdio: ['ignore', out, out] });
+        if (child?.error) throw child.error;
+        if (typeof child?.unref === 'function') child.unref();
+        pid = child?.pid ?? null;
+        if (pid == null) throw new Error('系统未返回新进程编号');
+      } catch (error) {
+        throw new Error(`启动监控进程失败：${error.message}`);
+      } finally {
+        if (out !== undefined) { try { closeSync(out); } catch { /* ignore */ } }
+      }
+      return {
+        ok: true,
+        action: 'restart-watchdog',
+        killed,
+        pid,
+        note: killed
+          ? `已替换监控进程（旧 PID ${watchdogStatus.pid} → 新 PID ${pid}），稍后刷新即可看到它拉起工作进程。`
+          : `监控进程此前未运行，已启动（PID ${pid}），稍后刷新即可。`,
+      };
+    }
     if (request.action === 'start') {
       if (!watchdogStatus.running && !workerStatus.running && (!target.workerPidArgvToken || !target.watchdogPidArgvToken || !target.interpreterPidArgvToken || !target.python)) throw new Error('启动已停止的 worker 需要在 console-targets.json 配置 python、workerPidArgvToken、watchdogPidArgvToken 和 interpreterPidArgvToken');
       if (watchdogStatus.running && watchdogStatus.owned) return { started: false, note: '监控进程已在运行，已拒绝重复启动。' };
@@ -1979,13 +2083,13 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       return { started: null, launchRequested: true, pid, note: '启动请求已提交，尚未确认成功。监控进程会自行拉起工作进程，请刷新状态核对进程与心跳。' };
     }
     if (request.action === 'stop') {
-      if (!watchdogStatus.running || !watchdogStatus.owned) throw new Error('监控进程身份未验证，拒绝停止');
+      if (!watchdogStatus.running || !watchdogStatus.owned) throw new Error('监控进程身份未验证，拒绝停止；请先点「🛠 运维操作」里的「重启全部看门狗」。');
       if (workerStatus.running && !workerStatus.owned) throw new Error('工作进程身份未验证，拒绝停止');
       writeFileSync(target.stop, 'stop\n', { mode: 0o600 });
       return { stopping: true, pid: watchdogStatus.pid, note: '已请求协作式停止；监控进程将停止其托管的工作进程并退出。' };
     }
     if (request.action === 'restart') {
-      if (!watchdogStatus.running || !watchdogStatus.owned) throw new Error('监控进程身份未验证，拒绝重启');
+      if (!watchdogStatus.running || !watchdogStatus.owned) throw new Error('监控进程身份未验证，拒绝重启；请先点「🛠 运维操作」里的「重启全部看门狗」。');
       if (workerStatus.running && !workerStatus.owned) throw new Error('工作进程身份未验证，拒绝重启');
       if (!workerStatus.running) return { restarted: false, note: '工作进程当前未运行；现有监控进程将在下次检查时尝试启动。' };
       process.kill(workerStatus.pid, 'SIGTERM');

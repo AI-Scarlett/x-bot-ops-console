@@ -358,6 +358,7 @@ window.__ModuleLoader__.load({
       const setSkipHandles = value => updateConfig(current => ({ ...current, specialPersons: { ...current.specialPersons, skipReplyHandles: Array.isArray(value) ? value : splitList(value) } }));
 
       const askConfirm = (promptKey, onConfirm) => setConfirmModal({ prompt: t(promptKey), onConfirm });
+      const askConfirmText = (prompt, onConfirm) => setConfirmModal({ prompt, onConfirm });
 
       const SideBadge = ({ side }) => h('span', { style: badgeStyle(side) }, sideText(side));
       const StatusLine = ({ label, value, tone }) => h('div', { style: { display: 'flex', gap: 6, alignItems: 'baseline', flexWrap: 'wrap' } },
@@ -466,7 +467,7 @@ window.__ModuleLoader__.load({
               t('title')),
             h('p', { style: { margin: '4px 0 0', fontSize: 13, color: C.muted } }, t('subtitle'))),
           h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.16.0'),
+            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.17.0'),
             h('button', {
               type: 'button',
               disabled: busy || updating,
@@ -728,6 +729,71 @@ window.__ModuleLoader__.load({
               h('div', { style: { fontWeight: '600' } }, '这里只放「全局作息与风控」'),
               h('div', { style: { color: C.muted } },
                 '模型、提示词、发送间隔、窗口、轮次等任务专属参数已各自收拢到「💬 自动评论」「↩️ 提及回复」「📝 自动发帖」「🧭 主页巡航」「🧠 发帖学习」对应 Tab，本页不再重复出现。')),
+            (() => {
+              const m = state?.maintenance || {};
+              const freeGb = m.diskFreeBytes != null ? (m.diskFreeBytes / (1024 ** 3)).toFixed(1) : '未知';
+              const low = m.diskFreeBytes != null && m.diskFreeBytes < 3 * 1024 ** 3;
+              const cleanup = m.cacheCleanup || {};
+              const keys = ['comment', 'reply', 'post', 'profile'];
+              const labels = { comment: '评论', reply: '回复', post: '发帖', profile: '巡航' };
+              const bulk = async (label, fn) => {
+                const results = [];
+                for (const key of keys) {
+                  try { await fn(key); results.push(`${labels[key]}✓`); }
+                  catch (err) { results.push(`${labels[key]}✗`); }
+                }
+                setNotice(`${label}：${results.join(' ')}`);
+              };
+              return h('div', { style: { marginTop: 14, padding: '12px 14px', borderRadius: 10, background: C.layerTwo, border: `1px solid ${low ? C.error : C.border}` } },
+                h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 } },
+                  h('div', { style: { fontSize: 14, fontWeight: '600' } }, '🛠 运维操作'),
+                  h('div', { style: { fontSize: 12, color: low ? C.error : C.muted } },
+                    `磁盘可用 ${freeGb} GB${low ? '（空间偏低，建议清理缓存）' : ''}`)),
+                h('div', { style: { fontSize: 12, color: C.faint, marginTop: 6 } },
+                  cleanup.lastRunLocal
+                    ? `上次自动清理：${cleanup.lastRunLocal} · 释放 ${Math.round((cleanup.reclaimedBytes || 0) / (1024 * 1024))} MB · 共执行 ${cleanup.runs || 0} 次（每 6 小时自动一次）`
+                    : '尚未自动清理过（每个 Worker 每 6 小时自动清一次自己的缓存）'),
+                h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 } },
+                  h('button', {
+                    type: 'button', disabled: busy,
+                    style: { ...buttonStyle(false), padding: '7px 14px', fontSize: 12 },
+                    onClick: () => askConfirmText('重启全部工作进程？看门狗会立即把它们重新拉起来。', () => bulk('重启工作进程', key => act('restart', key))),
+                  }, '🔁 重启全部工作进程')),
+                h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 } },
+                  h('button', {
+                    type: 'button', disabled: busy,
+                    style: { ...buttonStyle(false), padding: '7px 14px', fontSize: 12 },
+                    onClick: () => askConfirmText('重启全部看门狗？用于看门狗崩溃后恢复控制能力。', () => bulk('重启看门狗', key => act('restart-watchdog', key))),
+                  }, '🐕 重启全部看门狗'),
+                  h('button', {
+                    type: 'button', disabled: busy,
+                    style: { ...buttonStyle(false), padding: '7px 14px', fontSize: 12 },
+                    onClick: () => askConfirmText('全量重启：先重启四个看门狗，再重启四个工作进程。', async () => {
+                      setNotice('正在重启看门狗…');
+                      await bulk('重启看门狗', key => act('restart-watchdog', key));
+                      await new Promise(r => setTimeout(r, 4000));
+                      await bulk('重启工作进程', key => act('restart', key));
+                    }),
+                  }, '⚡ 全量重启（看门狗 + Worker）'),
+                  h('button', {
+                    type: 'button', disabled: busy,
+                    style: { ...buttonStyle(true), padding: '7px 14px', fontSize: 12 },
+                    onClick: async () => {
+                      try {
+                        const res = await act('clean-cache');
+                        setNotice(res?.note || '缓存已清理。');
+                      } catch (err) { setError(`清理失败：${err.message || String(err)}`); }
+                    },
+                  }, '🧹 立即清理缓存'),
+                  h('button', {
+                    type: 'button', disabled: busy,
+                    style: { ...buttonStyle(false), padding: '7px 14px', fontSize: 12 },
+                    onClick: async () => { try { await refresh(); setNotice('状态已刷新。'); } catch (err) { setError(String(err.message || err)); } },
+                  }, '🔄 刷新状态')),
+                h('small', { style: { display: 'block', marginTop: 10, fontSize: 11, color: C.faint, lineHeight: 1.7 } },
+                  '看门狗挂了会表现为「点重启没反应 / 提示身份未验证」，先点「重启全部看门狗」即可恢复；磁盘满了会导致 Worker 静默崩溃，先点「立即清理缓存」。'),
+              );
+            })(),
             h('p', { style: { margin: '6px 0 0', fontSize: 13, color: sourceColor } }, sourceText),
             h('p', { style: { margin: '4px 0 0', fontSize: 12, color: C.faint, wordBreak: 'break-all' } }, `${t('configPath')}：${state?.configPath || ''}`),
             h('p', { style: { margin: '4px 0 0', fontSize: 12, color: C.faint } }, state?.configSource === 'shared' ? t('sourceShared') : state?.configSource === 'missing' ? t('sourceMissing') : t('configInvalid')),
