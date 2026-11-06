@@ -1135,14 +1135,18 @@ test('batch theme plan hits the exact quota and interleaves themes', async () =>
   const counts = plan10.reduce((acc, item) => { acc[item.label] = (acc[item.label] || 0) + 1; return acc; }, {});
   assert.deepEqual(counts, { 文言文: 3, 撩女人: 5, 谈生活: 2 });
 
-  // No theme should run for more than two consecutive slots.
-  let run = 1;
-  let worst = 1;
+  // No two neighbours may share a theme while a schedule exists.
   for (let i = 1; i < plan10.length; i += 1) {
-    run = plan10[i].label === plan10[i - 1].label ? run + 1 : 1;
-    worst = Math.max(worst, run);
+    assert.notEqual(plan10[i].label, plan10[i - 1].label,
+      `themes clustered at ${i}: ${plan10.map(t => t.label).join(',')}`);
   }
-  assert.ok(worst <= 2, `themes clustered ${worst} in a row: ${plan10.map(t => t.label).join(',')}`);
+
+  // The order must vary between batches, not follow a fixed pattern.
+  const orders = new Set();
+  for (let i = 0; i < 20; i += 1) {
+    orders.add(planThemeBatch(mix, 10).map(t => t.label).join(','));
+  }
+  assert.ok(orders.size > 1, 'the plan should be randomised between batches');
 
   // Odd batch sizes still sum to the requested count and keep ratios close.
   for (const size of [1, 3, 7, 13]) {

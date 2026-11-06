@@ -492,32 +492,41 @@ export const ONE_SENTENCE_RULE = '【格式硬性要求】每一句话必须单�
 // Weighted random per item clusters themes together (six "生活" posts in a row).
 // A batch of N instead gets an exact quota per theme (largest-remainder), then
 // the quotas are spread evenly across the batch so themes alternate.
-export function planThemeBatch(mix, count) {
+export function planThemeBatch(mix, count, random = Math.random) {
   const usable = (Array.isArray(mix) ? mix : [])
     .filter(item => isRecord(item) && Number(item.weight) > 0);
   const size = Math.max(0, Math.floor(Number(count) || 0));
   if (!usable.length || size === 0) return [];
 
+  // 1. Exact quota per theme (largest remainder).
   const total = usable.reduce((sum, item) => sum + Number(item.weight), 0);
   const exact = usable.map(item => (size * Number(item.weight)) / total);
   const counts = exact.map(value => Math.floor(value));
-  let left = size - counts.reduce((a, b) => a + b, 0);
+  const left = size - counts.reduce((a, b) => a + b, 0);
   exact
     .map((value, index) => ({ index, frac: value - Math.floor(value) }))
     .sort((a, b) => b.frac - a.frac)
     .slice(0, Math.max(0, left))
     .forEach(entry => { counts[entry.index] += 1; });
 
-  // Place each theme's slots on an even stride, then order by position.
-  const slots = [];
-  usable.forEach((item, index) => {
-    const n = counts[index];
-    if (!n) return;
-    const stride = size / n;
-    for (let k = 0; k < n; k += 1) slots.push({ theme: item, pos: (k + 0.5) * stride });
-  });
-  slots.sort((a, b) => a.pos - b.pos);
-  return slots.map(slot => slot.theme);
+  // 2. Optimal anti-adjacency schedule: always take the theme with the most
+  //    remaining slots that differs from the previous one. Ties are broken
+  //    randomly, so the order varies while the quota stays exact.
+  const pool = usable.map((item, index) => ({ theme: item, left: counts[index] }));
+  const plan = [];
+  let previous = null;
+  while (pool.some(entry => entry.left > 0)) {
+    const available = pool.filter(entry => entry.left > 0);
+    const fresh = available.filter(entry => entry.theme !== previous);
+    const candidates = fresh.length ? fresh : available;
+    const most = Math.max(...candidates.map(entry => entry.left));
+    const top = candidates.filter(entry => entry.left === most);
+    const chosen = top[Math.floor(random() * top.length)];
+    plan.push(chosen.theme);
+    chosen.left -= 1;
+    previous = chosen.theme;
+  }
+  return plan;
 }
 
 // Pick a content theme by weight, so the mix config drives what gets written about.
