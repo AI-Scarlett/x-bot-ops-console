@@ -1011,6 +1011,50 @@ test('interval mode is exclusive so fixed and random never fight', async () => {
   assert.equal(validateConfig(legacyFixed).postSettings.intervalMode, 'fixed');
 });
 
+test('post settings signature changes when content-shaping settings change', async () => {
+  const { postSettingsSignature } = await import('../index.js');
+  const base = clone(DEFAULT_CONFIG).postSettings;
+  const sig = postSettingsSignature(base);
+  assert.equal(typeof sig, 'string');
+  assert.equal(sig.length, 16);
+  assert.equal(postSettingsSignature(clone(base)), sig, 'stable for identical settings');
+
+  const themeChanged = clone(base);
+  themeChanged.topicMix = [{ id: 'a', label: '撩女人', weight: 100, prompt: '风趣' }];
+  assert.notEqual(postSettingsSignature(themeChanged), sig);
+
+  const weightChanged = clone(base);
+  weightChanged.topicMix = [{ id: 'a', label: '撩女人', weight: 50, prompt: '风趣' }];
+  assert.notEqual(postSettingsSignature(weightChanged), sig);
+
+  const slotChanged = clone(base);
+  slotChanged.styleSchedule = [{ id: 's', label: '英文', startHour: 0, endHour: 24, prompt: 'English' }];
+  assert.notEqual(postSettingsSignature(slotChanged), sig);
+
+  const influenceChanged = clone(base);
+  influenceChanged.learningInfluence = 10;
+  assert.notEqual(postSettingsSignature(influenceChanged), sig);
+
+  const formatChanged = clone(base);
+  formatChanged.oneSentencePerLine = false;
+  assert.notEqual(postSettingsSignature(formatChanged), sig);
+
+  // Cosmetic-only changes must not invalidate every queued draft.
+  const cosmetic = clone(base);
+  cosmetic.queueBatchSize = 99;
+  cosmetic.restEveryPosts = 3;
+  cosmetic.intervalMinSeconds = 120;
+  assert.equal(postSettingsSignature(cosmetic), sig);
+});
+
+test('queued drafts record the signature so stale ones are detectable', async () => {
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.match(source, /intervalMode/);
+  const indexSource = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
+  assert.match(indexSource, /export function postSettingsSignature/);
+  assert.match(indexSource, /sig: postSettingsSignature\(postCfg\)/);
+});
+
 test('save rebases onto disk so untouched prompts are never wiped', async () => {
   const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
 

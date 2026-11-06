@@ -420,6 +420,30 @@ export function mutateLearnings(mutator, learningsPath = LEARNINGS_PATH) {
   }, `${learningsPath}.lock`, '发帖学习记录');
 }
 
+// Must match post_worker.py's post_settings_signature byte for byte, so a draft
+// made here is recognised as current (or stale) by the worker.
+export function postSettingsSignature(postCfg) {
+  const pc = postCfg || {};
+  const slots = (Array.isArray(pc.styleSchedule) ? pc.styleSchedule : [])
+    .filter(item => isRecord(item))
+    .map(item => `${item.label}:${item.startHour}:${item.endHour}:${item.prompt || ''}`)
+    .join(';');
+  const mix = (Array.isArray(pc.topicMix) ? pc.topicMix : [])
+    .filter(item => isRecord(item))
+    .map(item => `${item.label}:${item.weight}:${item.prompt || ''}`)
+    .join(';');
+  const influence = pc.learningInfluence === undefined || pc.learningInfluence === null ? 100 : pc.learningInfluence;
+  const parts = [
+    pc.customPrompt || '',
+    slots,
+    mix,
+    String(influence),
+    pc.oneSentencePerLine === false ? '0' : '1',
+    (Array.isArray(pc.topics) ? pc.topics : []).map(String).join(','),
+  ];
+  return createHash('sha1').update(parts.join('|'), 'utf8').digest('hex').slice(0, 16);
+}
+
 // Hard format rule: every sentence gets its own line, never one solid paragraph.
 // Applied after generation so the model cannot ignore it.
 export function enforceOneSentencePerLine(text) {
@@ -1310,6 +1334,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
               id: `post_ai_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 6)}`,
               text: draftText,
               topic,
+              sig: postSettingsSignature(postCfg),
               source: oneOffPrompt ? 'ai_draft_custom' : 'ai_draft',
               urgent: false,
               createdAt: new Date().toISOString(),
