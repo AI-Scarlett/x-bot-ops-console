@@ -2105,13 +2105,16 @@ window.__ModuleLoader__.load({
               }, label);
               return h('div', { style: { marginTop: 10 } },
                 h('div', { style: { fontSize: 12, color: C.muted, marginBottom: 6 } },
-                  `上次抓取：${trends.fetchedAt || '-'} · 共 ${all.length} 条 · ` +
-                  (trends.sources || []).map(x => `${x.label}${x.ok ? '✓' : '✗'}`).join(' ')),
+                  `上次抓取：${trends.fetchedAt || '-'} · 入库 ${all.length} 条` +
+                  (Number.isFinite(Number(trends.rawCount))
+                    ? `（抓取 ${trends.rawCount} 条，抓取时已按规则剔除 ${Number(trends.droppedCount) || 0} 条）`
+                    : '') +
+                  ' · ' + (trends.sources || []).map(x => `${x.label}${x.ok ? '✓' : '✗'}`).join(' ')),
                 h('div', { style: { fontSize: 12, marginBottom: 6 } },
                   h('span', { style: { color: C.success, fontWeight: '600' } }, `可用 ${usable.length} 条`),
                   h('span', { style: { color: C.faint, margin: '0 8px' } }, '/'),
                   h('span', { style: { color: C.error } }, `已剔除 ${dropped.length} 条`),
-                  h('span', { style: { color: C.faint, marginLeft: 8 } }, '（带删除线的会被自动跳过，悬停可看原因）')),
+                  h('span', { style: { color: C.faint, marginLeft: 8 } }, '（关键词命中的话题在抓取时就被丢掉了，不会入库；这里残留的通常是抓取之后才新增的规则）')),
                 h('div', { style: { fontSize: 12, fontWeight: '600', margin: '8px 0 4px', color: C.text } }, `✅ 会被采用的（点 ✕ 从热榜里剔除）`),
                 h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 5, maxHeight: 140, overflowY: 'auto' } },
                   ...(usable.length

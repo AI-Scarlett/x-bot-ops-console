@@ -1919,3 +1919,101 @@ test('state reports the installed plugin version and the UI no longer hardcodes 
   assert.match(client, /state\?\.pluginVersion/);
   assert.doesNotMatch(client, /'v0\.19\.0'/);
 });
+
+test('fetch-trends drops rule-rejected headlines before they are cached', async () => {
+  const http = await import('node:http');
+  const board = {
+    data: [
+      { word: '央行宣布降准' },
+      { word: '某明星深夜聚餐' },
+      { word: '美股暴跌引发恐慌' },
+      { word: '短' },
+      { word: '某地暴雨致列车停运' },
+    ],
+  };
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(board));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  const f = fixture();
+  try {
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.learningSettings = {
+      ...(config.learningSettings || {}),
+      trendSources: [{ id: 'fake', label: '测试榜', url: `http://127.0.0.1:${port}/hot`, enabled: true }],
+    };
+    config.postSettings.hotFilter = {
+      ...(config.postSettings.hotFilter || {}),
+      excludeKeywords: ['美股'],
+      excludedTopics: ['某明星深夜聚餐'],
+      minLength: 4,
+      maxLength: 50,
+    };
+    writeFileSync(join(f.dir, 'config.json'), JSON.stringify(config));
+
+    const trendsPath = join(f.dir, 'trends.json');
+    const service = createService({
+      paths: f.paths,
+      configPath: join(f.dir, 'config.json'),
+      learningsPath: join(f.dir, 'learnings.json'),
+      trendsPath,
+      platform: 'darwin',
+    });
+    const result = await service.action({ action: 'fetch-trends' });
+    assert.equal(result.ok, true);
+    // Only the two clean headlines survive; the others never reach the cache.
+    assert.deepEqual(result.trends.topics.sort(), ['央行宣布降准', '某地暴雨致列车停运'].sort());
+    // Extraction already drops titles shorter than four characters, so the raw
+    // set is four headlines and two of those are rejected by the rules.
+    assert.equal(result.trends.rawCount, 4);
+    assert.equal(result.trends.droppedCount, 2);
+    assert.match(result.note, /按规则剔除 2 条/);
+    const reasons = result.trends.droppedSamples.map(item => item.reason).sort();
+    assert.deepEqual(reasons, ['手动剔除', '含敏感词「美股」'].sort());
+
+    // What the worker reads back is already clean.
+    const onDisk = JSON.parse(readFileSync(trendsPath, 'utf8'));
+    assert.deepEqual(onDisk.topics.sort(), result.trends.topics.sort());
+    const state = await service.action({ action: 'state' });
+    assert.equal(state.trends.topics.length, 2);
+  } finally {
+    f.cleanup();
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('fetch-trends keeps the previous cache when every board comes back empty', async () => {
+  const http = await import('node:http');
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end('{}');
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  const f = fixture();
+  try {
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.learningSettings = {
+      ...(config.learningSettings || {}),
+      trendSources: [{ id: 'empty', label: '空榜', url: `http://127.0.0.1:${port}/hot`, enabled: true }],
+    };
+    writeFileSync(join(f.dir, 'config.json'), JSON.stringify(config));
+    const trendsPath = join(f.dir, 'trends.json');
+    writeFileSync(trendsPath, JSON.stringify({ fetchedAt: '2026-11-06T08:00:00.000Z', topics: ['旧的可用话题'], sources: [] }));
+
+    const service = createService({
+      paths: f.paths, configPath: join(f.dir, 'config.json'),
+      learningsPath: join(f.dir, 'learnings.json'), trendsPath, platform: 'darwin',
+    });
+    const result = await service.action({ action: 'fetch-trends' });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.trends.topics, ['旧的可用话题']);
+    assert.match(result.note, /保留上一次的缓存/);
+    assert.deepEqual(JSON.parse(readFileSync(trendsPath, 'utf8')).topics, ['旧的可用话题']);
+  } finally {
+    f.cleanup();
+    await new Promise(resolve => server.close(resolve));
+  }
+});

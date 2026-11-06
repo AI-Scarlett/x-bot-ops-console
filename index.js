@@ -483,6 +483,9 @@ export function writeTrends(data, trendsPath = TRENDS_PATH) {
     topics: [...new Set((Array.isArray(data.topics) ? data.topics : []).map(String))].slice(0, 200),
     sources: (Array.isArray(data.sources) ? data.sources : []).slice(0, 20),
   };
+  if (Number.isFinite(Number(data.rawCount))) payload.rawCount = Number(data.rawCount);
+  if (Number.isFinite(Number(data.droppedCount))) payload.droppedCount = Number(data.droppedCount);
+  if (Array.isArray(data.droppedSamples)) payload.droppedSamples = data.droppedSamples.slice(0, 20);
   const tempPath = `${trendsPath}.tmp.${Date.now()}`;
   writeFileSync(tempPath, JSON.stringify(payload, null, 2), { mode: 0o600 });
   renameSync(tempPath, trendsPath);
@@ -1787,10 +1790,11 @@ export function readPluginVersion(packageUrl = new URL('./package.json', import.
   }
 }
 
-export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGETS, configPath = CONFIG_PATH, targetsPath = null, platform = process.platform, spawnProcess = spawn, queuePath = POST_QUEUE_PATH, learningsPath = LEARNINGS_PATH, backupDir = CONFIG_BACKUP_DIR } = {}) {
+export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGETS, configPath = CONFIG_PATH, targetsPath = null, platform = process.platform, spawnProcess = spawn, queuePath = POST_QUEUE_PATH, learningsPath = LEARNINGS_PATH, backupDir = CONFIG_BACKUP_DIR, trendsPath = TRENDS_PATH } = {}) {
   let activeConfigPath = configPath;
   const activeQueuePath = queuePath;
   const activeLearningsPath = learningsPath;
+  const activeTrendsPath = trendsPath;
   const activeBackupDir = backupDir;
   const currentTargets = () => (targetsPath ? resolveTargets(paths, targetsPath) : paths);
   const readSharedConfig = () => {
@@ -1904,7 +1908,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       postQueue: postQueue.queue,
       postHistory: postHistory.slice(-20),
       learnings: readLearnings(activeLearningsPath),
-      trends: readTrends(),
+      trends: readTrends(activeTrendsPath),
       maintenance: { diskFreeBytes: diskFreeBytes(), cacheCleanup: readCacheCleanupState() },
       cruiseSweep: readCruiseSweep(),
       replyDiagnostics: readReplyDiagnostics(items.reply ? items.reply.stateDir : null),
@@ -2059,7 +2063,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
           .filter(Boolean)
         : [];
       const trendPool = hotQuota > 0
-        ? screenHotTopics(readTrends().topics, {
+        ? screenHotTopics(readTrends(activeTrendsPath).topics, {
             ...(postCfg.hotFilter || DEFAULT_CONFIG.postSettings.hotFilter),
             excludeKeywords: [
               ...((postCfg.hotFilter || DEFAULT_CONFIG.postSettings.hotFilter).excludeKeywords || []),
@@ -2218,14 +2222,40 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       const enabled = sources.filter(source => source.enabled !== false);
       if (!enabled.length) throw new Error('没有启用任何热榜来源');
       const { results, topics } = await fetchAllTrends(enabled);
-      const payload = writeTrends({ topics, sources: results });
+      if (!topics.length) {
+        // Never wipe a usable cache just because every board answered empty today.
+        return {
+          ok: true,
+          action: 'fetch-trends',
+          trends: readTrends(activeTrendsPath),
+          results,
+          note: '本次所有榜单都没有抓到话题，已保留上一次的缓存。',
+        };
+      }
+      // Screen before caching: headlines the rules already reject must never reach
+      // the board list, otherwise the operator has to strike them out by hand.
+      const filterCfg = {
+        ...(sharedCfg.postSettings?.hotFilter || DEFAULT_CONFIG.postSettings.hotFilter),
+        excludeKeywords: [
+          ...((sharedCfg.postSettings?.hotFilter || DEFAULT_CONFIG.postSettings.hotFilter).excludeKeywords || []),
+          ...mergeBannedTopics(readLearnings(activeLearningsPath), sharedCfg.postSettings),
+        ],
+      };
+      const { usable, dropped } = screenHotTopics(topics, filterCfg);
+      const payload = writeTrends({
+        topics: usable,
+        sources: results,
+        rawCount: topics.length,
+        droppedCount: dropped.length,
+        droppedSamples: dropped.slice(0, 20),
+      }, activeTrendsPath);
       const okCount = results.filter(item => item.ok).length;
       return {
         ok: true,
         action: 'fetch-trends',
         trends: payload,
         results,
-        note: `已抓取 ${okCount}/${results.length} 个榜单，合并去重后 ${payload.topics.length} 条话题。`,
+        note: `已抓取 ${okCount}/${results.length} 个榜单，共 ${topics.length} 条话题：按规则剔除 ${dropped.length} 条，入库 ${payload.topics.length} 条。`,
       };
     }
     if (request.action === 'learn-manual') {
