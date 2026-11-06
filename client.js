@@ -2041,7 +2041,30 @@ window.__ModuleLoader__.load({
               const maxLength = Number(filter.maxLength) || 50;
               const excludes = (filter.excludeKeywords || []).map(w => String(w).toLowerCase());
               const prefers = (filter.preferKeywords || []).map(w => String(w).toLowerCase());
+              // Manually removed headlines: they return on every fetch, so the skip
+              // list is stored in config and can be undone from the same panel.
+              const excludedTopics = Array.isArray(filter.excludedTopics) ? filter.excludedTopics : [];
+              const excludedSet = new Set(excludedTopics.map(w => String(w).replace(/\s+/g, ' ').trim().toLowerCase()));
+              const setExcludedTopics = next => updateConfig(c => ({
+                ...c,
+                postSettings: {
+                  ...(c.postSettings || {}),
+                  hotFilter: { ...(c.postSettings?.hotFilter || {}), excludedTopics: next },
+                },
+              }));
+              const excludeTopic = topic => {
+                const value = String(topic || '').replace(/\s+/g, ' ').trim();
+                if (!value) return;
+                setExcludedTopics([...new Set([...excludedTopics, value])].slice(0, 300));
+                setNotice(`已剔除「${value}」，保存后长期生效。`);
+              };
+              const restoreTopic = topic => {
+                setExcludedTopics(excludedTopics.filter(item => item !== topic));
+                setNotice(`已恢复「${topic}」，保存后长期生效。`);
+              };
               const judge = topic => {
+                const normalized = String(topic).replace(/\s+/g, ' ').trim();
+                if (excludedSet.has(normalized.toLowerCase())) return { ok: false, reason: '手动剔除' };
                 if (topic.length < minLength) return { ok: false, reason: '太短' };
                 if (topic.length > maxLength) return { ok: false, reason: '太长' };
                 const lower = topic.toLowerCase();
@@ -2058,18 +2081,25 @@ window.__ModuleLoader__.load({
               const judged = all.map(topic => ({ topic, ...judge(topic) }));
               const usable = judged.filter(x => x.ok);
               const dropped = judged.filter(x => !x.ok);
-              const chip = (item, index) => h('div', {
+              const chip = (item, index, action) => h('div', {
                 key: index + '-' + item.topic,
                 title: item.reason,
                 style: {
+                  display: 'flex', alignItems: 'center', gap: 5,
                   fontSize: 11, padding: '3px 8px', borderRadius: 6,
                   background: item.ok ? C.layerTwo : 'rgba(220,80,80,0.10)',
                   border: `1px solid ${item.ok ? C.border : 'rgba(220,80,80,0.35)'}`,
                   color: item.ok ? C.text : C.faint,
                   textDecoration: item.ok ? 'none' : 'line-through',
-                  maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  maxWidth: 280, overflow: 'hidden', whiteSpace: 'nowrap',
                 },
-              }, item.topic);
+              },
+                h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis' } }, item.topic),
+                action || null);
+              const chipAction = (label, title, onClick, color) => h('button', {
+                type: 'button', title, onClick,
+                style: { border: 'none', background: 'transparent', color, cursor: 'pointer', fontSize: 12, padding: 0, lineHeight: 1, flex: '0 0 auto' },
+              }, label);
               return h('div', { style: { marginTop: 10 } },
                 h('div', { style: { fontSize: 12, color: C.muted, marginBottom: 6 } },
                   `上次抓取：${trends.fetchedAt || '-'} · 共 ${all.length} 条 · ` +
@@ -2079,12 +2109,19 @@ window.__ModuleLoader__.load({
                   h('span', { style: { color: C.faint, margin: '0 8px' } }, '/'),
                   h('span', { style: { color: C.error } }, `已剔除 ${dropped.length} 条`),
                   h('span', { style: { color: C.faint, marginLeft: 8 } }, '（带删除线的会被自动跳过，悬停可看原因）')),
-                h('div', { style: { fontSize: 12, fontWeight: '600', margin: '8px 0 4px', color: C.text } }, '✅ 会被采用的'),
-                h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 5, maxHeight: 120, overflowY: 'auto' } },
-                  ...(usable.length ? usable.map(chip) : [h('span', { style: { fontSize: 12, color: C.faint } }, '（无，全部被过滤——请检查筛选规则是否过严）')])),
+                h('div', { style: { fontSize: 12, fontWeight: '600', margin: '8px 0 4px', color: C.text } }, `✅ 会被采用的（点 ✕ 从热榜里剔除）`),
+                h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 5, maxHeight: 140, overflowY: 'auto' } },
+                  ...(usable.length
+                    ? usable.map((item, index) => chip(item, index, chipAction('✕', '手动剔除，不再采用', () => excludeTopic(item.topic), C.error)))
+                    : [h('span', { style: { fontSize: 12, color: C.faint } }, '（无，全部被过滤——请检查筛选规则是否过严）')])),
                 h('div', { style: { fontSize: 12, fontWeight: '600', margin: '10px 0 4px', color: C.text } }, '🚫 被剔除的'),
                 h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 5, maxHeight: 110, overflowY: 'auto' } },
-                  ...(dropped.length ? dropped.map(chip) : [h('span', { style: { fontSize: 12, color: C.faint } }, '（无）')])));
+                  ...(dropped.length ? dropped.map(chip) : [h('span', { style: { fontSize: 12, color: C.faint } }, '（无）')])),
+                h('div', { style: { fontSize: 12, fontWeight: '600', margin: '10px 0 4px', color: C.text } }, `🚫 手动剔除的话题（${excludedTopics.length} 条，点 ↩ 恢复）`),
+                h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 5, maxHeight: 110, overflowY: 'auto' } },
+                  ...(excludedTopics.length
+                    ? excludedTopics.map((topic, index) => chip({ topic, ok: false, reason: '手动剔除，点 ↩ 恢复' }, index, chipAction('↩', '恢复采用', () => restoreTopic(topic), C.accent)))
+                    : [h('span', { style: { fontSize: 12, color: C.faint } }, '（无。在上面的「会被采用的」里点 ✕ 就能剔除任意热榜话题）')])));
             })(),
             h('div', { style: { marginTop: 14, padding: '10px 12px', borderRadius: 8, background: C.layerTwo, border: `1px solid ${C.border}` } },
               h('div', { style: { fontSize: 13, fontWeight: '600', marginBottom: 6 } }, '🎯 热榜挑选规则'),

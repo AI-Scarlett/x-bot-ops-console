@@ -27,7 +27,11 @@ const sampleState = {
   ok: true, configSource: 'shared', platform: 'darwin', checkedAt: new Date().toISOString(),
   items: { comment: { priorityHandles: {} } }, dshModels: ['gpt-6-luna'], postQueue: [],
   postHistory: [], learnings: { patterns: [], bannedTopics: [], styleGuide: '', samples: [] },
-  trends: { boards: [] }, maintenance: {}, cruiseSweep: null, replyDiagnostics: null,
+  trends: {
+    fetchedAt: '2026-11-06 16:00:00', topics: ['某地暴雨致列车停运', '某明星深夜聚餐', '央行宣布降准'],
+    sources: [{ label: '微博', ok: true }], boards: [],
+  },
+  maintenance: {}, cruiseSweep: null, replyDiagnostics: null,
   configBackups: [], fieldSide: {}, workerAcceptance: {}, configHash: 'hash-1',
 };
 
@@ -51,7 +55,7 @@ function elements(node, out = []) {
   return out;
 }
 
-function mount({ config = sampleConfig(), state = sampleState } = {}) {
+function mount({ config = sampleConfig(), state = sampleState, tab = 'tiers' } = {}) {
   const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
   const body = source.replace(/^window\.__ModuleLoader__\.load\(\{/, 'const __plugin = {').replace(/\}\);\s*$/, '};');
 
@@ -79,7 +83,7 @@ function mount({ config = sampleConfig(), state = sampleState } = {}) {
     // 4 updating, 5 config, 6 configHash, 7 draftDirty, 8 activeTab.
     __seed: undefined,
   };
-  const seed = { 0: state, 5: config, 6: 'hash-1', 8: 'tiers' };
+  const seed = { 0: state, 5: config, 6: 'hash-1', 8: tab };
   for (const [index, value] of Object.entries(seed)) hooks[Number(index)] = value;
 
   const locale = { register() {}, bind() { return key => key; } };
@@ -199,5 +203,33 @@ test('add, edit, reorder and delete all mutate the config that gets saved', asyn
     assert.equal(posted.config.specialPersons.apex.replyStyle, '聊两性，撩骚');
     // The deleted legacy person must stop injecting rules.
     assert.equal(posted.config.specialPersons.yijing.replyStyle, '');
+  } finally { app.close(); }
+});
+
+test('hot board adopted list lets the operator strike a topic out, and undo it', async () => {
+  const app = mount({ tab: 'learning' });
+  try {
+    let tree = app.render();
+    assert.match(flatText(tree), /会被采用的/);
+    assert.match(flatText(tree), /某地暴雨致列车停运/);
+    assert.match(flatText(tree), /手动剔除的话题（0 条/);
+
+    // Strike the first adopted headline out.
+    const strikes = elements(tree).filter(node => node.type === 'button' && node.props?.title === '手动剔除，不再采用');
+    assert.equal(strikes.length, 3, 'every adopted topic owns a strike button');
+    await strikes[0].props.onClick({ preventDefault() {}, target: {} });
+    tree = app.render();
+    assert.deepEqual(app.config().postSettings.hotFilter.excludedTopics, ['某地暴雨致列车停运']);
+    assert.match(flatText(tree), /手动剔除的话题（1 条/);
+    // The struck headline left the adopted bucket and is marked as removed.
+    assert.match(flatText(tree), /手动剔除/);
+
+    // Undo from the manual list.
+    const restores = elements(tree).filter(node => node.type === 'button' && node.props?.title === '恢复采用');
+    assert.equal(restores.length, 1);
+    await restores[0].props.onClick({ preventDefault() {}, target: {} });
+    tree = app.render();
+    assert.deepEqual(app.config().postSettings.hotFilter.excludedTopics, []);
+    assert.match(flatText(tree), /手动剔除的话题（0 条/);
   } finally { app.close(); }
 });

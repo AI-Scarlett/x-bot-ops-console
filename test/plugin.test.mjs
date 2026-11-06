@@ -1873,3 +1873,31 @@ test('post skeleton fingerprint is stable and drives the 48h cooldown', async ()
   // 0 disables the cooldown entirely.
   assert.equal(checkPostDraft(a, format, [], [b], 0).ok, true);
 });
+
+test('manually excluded hot topics are skipped and stay excluded', async () => {
+  const { screenHotTopics, validateConfig, DEFAULT_CONFIG } = await import('../index.js');
+  const topics = ['某地暴雨致列车停运', '某明星深夜聚餐', '央行宣布降准'];
+  const first = screenHotTopics(topics, { minLength: 4, maxLength: 50, excludeKeywords: [] });
+  assert.deepEqual(first.usable, topics);
+
+  const filtered = screenHotTopics(topics, { minLength: 4, maxLength: 50, excludeKeywords: [], excludedTopics: ['某明星深夜聚餐'] });
+  assert.deepEqual(filtered.usable, ['某地暴雨致列车停运', '央行宣布降准']);
+  assert.deepEqual(filtered.dropped, [{ topic: '某明星深夜聚餐', reason: '手动剔除' }]);
+
+  // Matching ignores case and stray whitespace, so a re-fetch still skips it.
+  const messy = screenHotTopics(['Some Star  Gossip'], { excludedTopics: ['some star gossip'], excludeKeywords: [] });
+  assert.deepEqual(messy.usable, []);
+  assert.equal(messy.dropped[0].reason, '手动剔除');
+
+  const config = structuredClone(DEFAULT_CONFIG);
+  config.postSettings.hotFilter.excludedTopics = ['  某明星深夜聚餐  ', '某明星深夜聚餐', ''];
+  const validated = validateConfig(config);
+  assert.deepEqual(validated.postSettings.hotFilter.excludedTopics, ['某明星深夜聚餐']);
+
+  const tooMany = structuredClone(DEFAULT_CONFIG);
+  tooMany.postSettings.hotFilter.excludedTopics = Array.from({ length: 301 }, (_, i) => `话题 ${i}`);
+  assert.throws(() => validateConfig(tooMany), /手动剔除的热榜话题名单无效/);
+  const tooLong = structuredClone(DEFAULT_CONFIG);
+  tooLong.postSettings.hotFilter.excludedTopics = ['x'.repeat(81)];
+  assert.throws(() => validateConfig(tooLong), /不能超过 80 字/);
+});

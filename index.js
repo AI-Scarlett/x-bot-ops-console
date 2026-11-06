@@ -496,6 +496,8 @@ export function screenHotTopics(topics, filter = {}) {
   const maxLength = Number(filter.maxLength) || 50;
   const exclude = (Array.isArray(filter.excludeKeywords) ? filter.excludeKeywords : []).map(item => String(item).toLowerCase());
   const prefer = (Array.isArray(filter.preferKeywords) ? filter.preferKeywords : []).map(item => String(item).toLowerCase());
+  // Manually removed headlines are matched exactly (case-insensitive).
+  const bannedTopics = new Set((Array.isArray(filter.excludedTopics) ? filter.excludedTopics : []).map(item => String(item).replace(/\s+/g, ' ').trim().toLowerCase()));
   const kept = [];
   const dropped = [];
   for (const raw of Array.isArray(topics) ? topics : []) {
@@ -504,6 +506,7 @@ export function screenHotTopics(topics, filter = {}) {
     const lower = topic.toLowerCase();
     if (topic.length < minLength) { dropped.push({ topic, reason: '太短' }); continue; }
     if (topic.length > maxLength) { dropped.push({ topic, reason: '太长' }); continue; }
+    if (bannedTopics.has(lower)) { dropped.push({ topic, reason: '手动剔除' }); continue; }
     const hit = exclude.find(word => word && lower.includes(word));
     if (hit) { dropped.push({ topic, reason: `含敏感词「${hit}」` }); continue; }
     const bonus = prefer.some(word => word && lower.includes(word)) ? 1 : 0;
@@ -1168,6 +1171,9 @@ const DEFAULT_CONFIG = Object.freeze({
     manualBannedTopics: [],
     // Rules that decide which trending topics are safe and on-brand to reuse.
     hotFilter: {
+      // Operator-removed headlines: they come back on every fetch, so the skip
+      // list lives in config and survives re-fetching.
+      excludedTopics: [],
       minLength: 4,
       maxLength: 50,
       excludeKeywords: [
@@ -1609,6 +1615,11 @@ function validateConfig(input) {
     if (copy.postSettings.hotFilter !== undefined) {
       const filter = copy.postSettings.hotFilter;
       if (!isRecord(filter)) throw new TypeError('热榜筛选规则无效');
+      if (filter.excludedTopics !== undefined) {
+        if (!Array.isArray(filter.excludedTopics) || filter.excludedTopics.length > 300) throw new TypeError('手动剔除的热榜话题名单无效');
+        filter.excludedTopics = [...new Set(filter.excludedTopics.map(item => String(item || '').replace(/\s+/g, ' ').trim()).filter(Boolean))];
+        for (const item of filter.excludedTopics) if (item.length > 80) throw new TypeError('单条手动剔除的热榜话题不能超过 80 字');
+      }
       for (const key of ['excludeKeywords', 'preferKeywords']) {
         if (filter[key] === undefined) continue;
         if (!Array.isArray(filter[key]) || filter[key].length > 300) throw new TypeError('热榜筛选关键词名单无效');
