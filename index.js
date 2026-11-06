@@ -97,6 +97,7 @@ export const FIELD_SIDE = Object.freeze({
   'postSettings.intervalMaxSeconds': 'post',
   'postSettings.oneSentencePerLine': 'post',
   'postSettings.hotTopicPerBatch': 'post',
+  'postSettings.hotFilter': 'post',
   'postSettings.restEveryPosts': 'post',
   'postSettings.restMinutes': 'post',
   'postSettings.learningInfluence': 'post',
@@ -478,6 +479,31 @@ export function writeTrends(data, trendsPath = TRENDS_PATH) {
   writeFileSync(tempPath, JSON.stringify(payload, null, 2), { mode: 0o600 });
   renameSync(tempPath, trendsPath);
   return payload;
+}
+
+// Decide what happens to each trending topic. Sensitive news is dropped, and
+// off-brand topics are ranked down rather than silently used.
+export function screenHotTopics(topics, filter = {}) {
+  const minLength = Number(filter.minLength) || 4;
+  const maxLength = Number(filter.maxLength) || 50;
+  const exclude = (Array.isArray(filter.excludeKeywords) ? filter.excludeKeywords : []).map(item => String(item).toLowerCase());
+  const prefer = (Array.isArray(filter.preferKeywords) ? filter.preferKeywords : []).map(item => String(item).toLowerCase());
+  const kept = [];
+  const dropped = [];
+  for (const raw of Array.isArray(topics) ? topics : []) {
+    const topic = String(raw || '').replace(/\s+/g, ' ').trim();
+    if (!topic) continue;
+    const lower = topic.toLowerCase();
+    if (topic.length < minLength) { dropped.push({ topic, reason: '太短' }); continue; }
+    if (topic.length > maxLength) { dropped.push({ topic, reason: '太长' }); continue; }
+    const hit = exclude.find(word => word && lower.includes(word));
+    if (hit) { dropped.push({ topic, reason: `含敏感词「${hit}」` }); continue; }
+    const bonus = prefer.some(word => word && lower.includes(word)) ? 1 : 0;
+    kept.push({ topic, bonus });
+  }
+  // Preferred topics float to the front; the rest keep their board order.
+  kept.sort((a, b) => b.bonus - a.bonus);
+  return { usable: kept.map(item => item.topic), dropped };
 }
 
 // Fetch every enabled board. Failures are reported per source instead of aborting.
@@ -966,6 +992,29 @@ const DEFAULT_CONFIG = Object.freeze({
     queueLowThreshold: 3,
     queueAutoRefill: true,
     queueMaxSize: 100,
+    // Rules that decide which trending topics are safe and on-brand to reuse.
+    hotFilter: {
+      minLength: 4,
+      maxLength: 50,
+      excludeKeywords: [
+        // 伤亡与灾祸
+        '死', '尸', '凶', '杀', '命案', '碎尸', '遇难', '身亡', '去世', '病逝', '猝死',
+        '坠', '车祸', '事故', '地震', '洪水', '火灾', '台风', '伤亡', '失踪', '自杀', '抑郁',
+        '爆炸', '爆雷', '投毒', '中毒', '枪击', '枪', '炸',
+        // 法纪与政务
+        '被查', '落马', '投案', '纪委', '反腐', '违纪', '正风肃纪', '巡视', '双开',
+        '逮捕', '判刑', '入狱', '警方', '通报', '谣言', '维权', '抗议', '讨薪', '信访',
+        // 疾病与医疗
+        '癌', '确诊', '疫情', '病例', '传染',
+        // 成人内容
+        '色情', '裸', '性侵', '强奸', '约炮',
+        // 战争与国际冲突
+        '战争', '袭击', '制裁', '冲突',
+        // English
+        'dead', 'death', 'kill', 'murder', 'crash', 'war', 'attack', 'sanction', 'suicide',
+      ],
+      preferKeywords: [],
+    },
     // How many drafts of each batch are rewrites of a trending topic (0 = off).
     hotTopicPerBatch: 2,
     // Hard format rule: one sentence per line, never a single block of text.
@@ -1256,6 +1305,22 @@ function validateConfig(input) {
     }
     if (copy.postSettings.queueAutoRefill !== undefined && typeof copy.postSettings.queueAutoRefill !== 'boolean') throw new TypeError('自动补仓开关无效');
     if (copy.postSettings.oneSentencePerLine !== undefined && typeof copy.postSettings.oneSentencePerLine !== 'boolean') throw new TypeError('一句一行开关无效');
+    if (copy.postSettings.hotFilter !== undefined) {
+      const filter = copy.postSettings.hotFilter;
+      if (!isRecord(filter)) throw new TypeError('热榜筛选规则无效');
+      for (const key of ['excludeKeywords', 'preferKeywords']) {
+        if (filter[key] === undefined) continue;
+        if (!Array.isArray(filter[key]) || filter[key].length > 300) throw new TypeError('热榜筛选关键词名单无效');
+        filter[key] = [...new Set(filter[key].map(item => String(item || '').trim()).filter(Boolean))];
+      }
+      for (const key of ['minLength', 'maxLength']) {
+        if (filter[key] === undefined) continue;
+        const value = Number(filter[key]);
+        if (!Number.isInteger(value) || value < 1 || value > 200) throw new TypeError('热榜话题长度需为 1~200 的整数');
+        filter[key] = value;
+      }
+      if (filter.minLength > filter.maxLength) throw new TypeError('热榜话题最短长度不能大于最长长度');
+    }
     if (copy.postSettings.hotTopicPerBatch !== undefined) {
       const hot = Number(copy.postSettings.hotTopicPerBatch);
       if (!Number.isInteger(hot) || hot < 0 || hot > 20) throw new TypeError('每批热榜条数需为 0~20 的整数');
@@ -1631,7 +1696,9 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       const failures = [];
       const themePlan = planThemeBatch(postCfg.topicMix, count);
       const hotQuota = Math.max(0, Math.min(Number(postCfg.hotTopicPerBatch) || 0, count));
-      const trendPool = hotQuota > 0 ? [...(readTrends().topics || [])] : [];
+      const trendPool = hotQuota > 0
+        ? screenHotTopics(readTrends().topics, postCfg.hotFilter || DEFAULT_CONFIG.postSettings.hotFilter).usable
+        : [];
       for (let k = trendPool.length - 1; k > 0; k -= 1) {
         const j = Math.floor(Math.random() * (k + 1));
         [trendPool[k], trendPool[j]] = [trendPool[j], trendPool[k]];

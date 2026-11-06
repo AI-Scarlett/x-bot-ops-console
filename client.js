@@ -453,7 +453,7 @@ window.__ModuleLoader__.load({
               t('title')),
             h('p', { style: { margin: '4px 0 0', fontSize: 13, color: C.muted } }, t('subtitle'))),
           h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.14.2'),
+            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.15.0'),
             h('button', {
               type: 'button',
               disabled: busy || updating,
@@ -1125,6 +1125,7 @@ window.__ModuleLoader__.load({
                       item.topic ? h('span', { style: { fontSize: 11, color: C.faint } }, `话题：${item.topic}`) : null,
                       item.createdAt ? h('span', { style: { fontSize: 11, color: C.faint } }, new Date(item.createdAt).toLocaleTimeString()) : null
                     ),
+                    item.hotTopic ? h('div', { style: { fontSize: 11, color: '#c07a00', marginBottom: 4, fontWeight: '600' } }, `🔥 借热点：${item.hotTopic}`) : null,
                     h('p', { style: { margin: 0, fontSize: 13, color: C.text, lineHeight: 1.5, whiteSpace: 'pre-wrap' } }, item.text)
                   ),
                   h('div', { style: { display: 'flex', gap: 6, flexShrink: 0 } },
@@ -1686,20 +1687,101 @@ window.__ModuleLoader__.load({
             }),
             (() => {
               const trends = state?.trends;
-              if (!trends || !(trends.topics || []).length) {
+              const filter = config?.postSettings?.hotFilter || {};
+              const minLength = Number(filter.minLength) || 4;
+              const maxLength = Number(filter.maxLength) || 50;
+              const excludes = (filter.excludeKeywords || []).map(w => String(w).toLowerCase());
+              const prefers = (filter.preferKeywords || []).map(w => String(w).toLowerCase());
+              const judge = topic => {
+                if (topic.length < minLength) return { ok: false, reason: '太短' };
+                if (topic.length > maxLength) return { ok: false, reason: '太长' };
+                const lower = topic.toLowerCase();
+                const hit = excludes.find(w => w && lower.includes(w));
+                if (hit) return { ok: false, reason: `敏感词「${hit}」` };
+                const preferred = prefers.some(w => w && lower.includes(w));
+                return { ok: true, reason: preferred ? '偏好优先' : '可用' };
+              };
+              const all = (trends?.topics || []);
+              if (!all.length) {
                 return h('div', { style: { marginTop: 10, padding: '10px', background: C.layerTwo, borderRadius: 8, fontSize: 12, color: C.faint } },
                   '还没有热榜数据。点右上角「🔄 立即抓取热榜」或等 Worker 自动抓取。');
               }
+              const judged = all.map(topic => ({ topic, ...judge(topic) }));
+              const usable = judged.filter(x => x.ok);
+              const dropped = judged.filter(x => !x.ok);
+              const chip = (item, index) => h('div', {
+                key: index + '-' + item.topic,
+                title: item.reason,
+                style: {
+                  fontSize: 11, padding: '3px 8px', borderRadius: 6,
+                  background: item.ok ? C.layerTwo : 'rgba(220,80,80,0.10)',
+                  border: `1px solid ${item.ok ? C.border : 'rgba(220,80,80,0.35)'}`,
+                  color: item.ok ? C.text : C.faint,
+                  textDecoration: item.ok ? 'none' : 'line-through',
+                  maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                },
+              }, item.topic);
               return h('div', { style: { marginTop: 10 } },
                 h('div', { style: { fontSize: 12, color: C.muted, marginBottom: 6 } },
-                  `上次抓取：${trends.fetchedAt || '-'} · 共 ${trends.topics.length} 条 · ` +
+                  `上次抓取：${trends.fetchedAt || '-'} · 共 ${all.length} 条 · ` +
                   (trends.sources || []).map(x => `${x.label}${x.ok ? '✓' : '✗'}`).join(' ')),
-                h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 120, overflowY: 'auto' } },
-                  ...trends.topics.slice(0, 24).map(topic => h('span', {
-                    key: topic,
-                    style: { fontSize: 11, padding: '3px 8px', borderRadius: 999, background: C.layerTwo, border: `1px solid ${C.border}`, color: C.text }
-                  }, topic))));
+                h('div', { style: { fontSize: 12, marginBottom: 6 } },
+                  h('span', { style: { color: C.success, fontWeight: '600' } }, `可用 ${usable.length} 条`),
+                  h('span', { style: { color: C.faint, margin: '0 8px' } }, '/'),
+                  h('span', { style: { color: C.error } }, `已剔除 ${dropped.length} 条`),
+                  h('span', { style: { color: C.faint, marginLeft: 8 } }, '（带删除线的会被自动跳过，悬停可看原因）')),
+                h('div', { style: { fontSize: 12, fontWeight: '600', margin: '8px 0 4px', color: C.text } }, '✅ 会被采用的'),
+                h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 5, maxHeight: 120, overflowY: 'auto' } },
+                  ...(usable.length ? usable.map(chip) : [h('span', { style: { fontSize: 12, color: C.faint } }, '（无，全部被过滤——请检查筛选规则是否过严）')])),
+                h('div', { style: { fontSize: 12, fontWeight: '600', margin: '10px 0 4px', color: C.text } }, '🚫 被剔除的'),
+                h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 5, maxHeight: 110, overflowY: 'auto' } },
+                  ...(dropped.length ? dropped.map(chip) : [h('span', { style: { fontSize: 12, color: C.faint } }, '（无）')])));
             })(),
+            h('div', { style: { marginTop: 14, padding: '10px 12px', borderRadius: 8, background: C.layerTwo, border: `1px solid ${C.border}` } },
+              h('div', { style: { fontSize: 13, fontWeight: '600', marginBottom: 6 } }, '🎯 热榜挑选规则'),
+              h('label', { style: { ...labelStyle, marginTop: 4 } }, '剔除关键词（命中即跳过，逗号分隔）：'),
+              h('textarea', {
+                style: { ...inputStyle, minHeight: 62, fontSize: 12 },
+                value: (config?.postSettings?.hotFilter?.excludeKeywords || []).join(', '),
+                onChange: e => updateConfig(c => ({
+                  ...c,
+                  postSettings: {
+                    ...(c.postSettings || {}),
+                    hotFilter: {
+                      ...(c.postSettings?.hotFilter || {}),
+                      excludeKeywords: e.target.value.split(/[,，\s]+/).map(x => x.trim()).filter(Boolean),
+                    },
+                  },
+                })),
+              }),
+              h('label', { style: { ...labelStyle, marginTop: 10 } }, '偏好关键词（命中的话题优先被选中，逗号分隔）：'),
+              h('input', {
+                style: inputStyle,
+                placeholder: '例如：感情, 职场, 生活, 影视',
+                value: (config?.postSettings?.hotFilter?.preferKeywords || []).join(', '),
+                onChange: e => updateConfig(c => ({
+                  ...c,
+                  postSettings: {
+                    ...(c.postSettings || {}),
+                    hotFilter: { ...(c.postSettings?.hotFilter || {}), preferKeywords: e.target.value.split(/[,，\s]+/).map(x => x.trim()).filter(Boolean) },
+                  },
+                })),
+              }),
+              h('div', { style: { display: 'flex', gap: 16, marginTop: 10, flexWrap: 'wrap' } },
+                h('label', { style: { ...labelStyle, flex: '1 1 150px' } },
+                  '话题最短字数：',
+                  h('input', {
+                    type: 'number', min: 1, max: 200, style: inputStyle,
+                    value: config?.postSettings?.hotFilter?.minLength ?? 4,
+                    onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), hotFilter: { ...(c.postSettings?.hotFilter || {}), minLength: e.target.value === '' ? '' : Number(e.target.value) } } })),
+                  })),
+                h('label', { style: { ...labelStyle, flex: '1 1 150px' } },
+                  '话题最长字数：',
+                  h('input', {
+                    type: 'number', min: 1, max: 200, style: inputStyle,
+                    value: config?.postSettings?.hotFilter?.maxLength ?? 50,
+                    onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), hotFilter: { ...(c.postSettings?.hotFilter || {}), maxLength: e.target.value === '' ? '' : Number(e.target.value) } } })),
+                  })))),
             h('div', { style: { marginTop: 12 } },
               h('div', { style: { fontSize: 13, fontWeight: '600', marginBottom: 6 } }, '来源列表（可开关 / 改名 / 换地址）'),
               h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },

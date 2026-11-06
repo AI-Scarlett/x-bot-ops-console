@@ -1281,6 +1281,48 @@ test('cookies pasted as a DevTools table are converted to a request header', asy
   assert.deepEqual(originReferer('not a url'), {});
 });
 
+test('trending topics are screened by rule before reuse', async () => {
+  const { screenHotTopics, DEFAULT_CONFIG: defaults } = await import('../index.js');
+  const filter = defaults.postSettings.hotFilter;
+  assert.ok(filter.excludeKeywords.includes('死'));
+  assert.ok(filter.excludeKeywords.includes('被查'));
+
+  const topics = [
+    '蔡天凤遭碎尸案死因查明',   // sensitive
+    '余艳红被查',               // politics
+    '手机越来越卷 凭什么阔直板火了', // fine
+    '明日立冬',                 // fine (4 chars)
+    '美国男子遭警察连开至少12枪击毙', // sensitive
+    '这是一个明显超过五十个字长度限制而且没有任何意义的特别长的话题标题用来测试长度过滤规则是否真的会生效并且不会误判正常话题',
+  ];
+  const { usable, dropped } = screenHotTopics(topics, filter);
+  assert.ok(usable.includes('手机越来越卷 凭什么阔直板火了'));
+  assert.ok(usable.includes('明日立冬'));
+  assert.ok(!usable.some(topic => topic.includes('碎尸')));
+  assert.ok(!usable.some(topic => topic.includes('被查')));
+  assert.ok(!usable.some(topic => topic.includes('枪击')));
+  assert.ok(dropped.some(item => item.reason.includes('死')));
+  assert.ok(dropped.some(item => item.reason === '太长'));
+
+  // Preference keywords float matching topics to the front.
+  const ranked = screenHotTopics(['随便一个话题', '聊聊感情里的边界感'], { ...filter, preferKeywords: ['感情'] });
+  assert.equal(ranked.usable[0], '聊聊感情里的边界感');
+
+  // Over-strict rules must not silently produce nonsense.
+  const strict = screenHotTopics(topics, { ...filter, minLength: 30, maxLength: 31 });
+  assert.equal(strict.usable.length, 0);
+
+  const config = clone(DEFAULT_CONFIG);
+  config.postSettings.hotFilter.minLength = 200;
+  config.postSettings.hotFilter.maxLength = 10;
+  assert.throws(() => validateConfig(config), /最短长度不能大于最长长度/);
+
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.match(source, /热榜挑选规则/);
+  assert.match(source, /会被采用的/);
+  assert.match(source, /被剔除的/);
+});
+
 test('save rebases onto disk so untouched prompts are never wiped', async () => {
   const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
 
