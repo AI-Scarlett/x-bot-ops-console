@@ -263,6 +263,7 @@ window.__ModuleLoader__.load({
       const [learnPasteText, setLearnPasteText] = React.useState('');
       const [learnBusy, setLearnBusy] = React.useState(false);
       const [styleGuideDraft, setStyleGuideDraft] = React.useState('');
+      const [bannedDraft, setBannedDraft] = React.useState('');
       const saveLock = React.useRef(false);
       const latestSaveHash = React.useRef(null);
       const serverSnapshot = React.useRef(null);
@@ -340,6 +341,18 @@ window.__ModuleLoader__.load({
           return { ...tier, [key]: value };
         }),
       }));
+      const addBanned = () => {
+        const items = bannedDraft.split(/[,，\n]+/).map(item => item.trim()).filter(Boolean);
+        if (!items.length) return;
+        updateConfig(current => {
+          const existing = current.postSettings?.manualBannedTopics || [];
+          const merged = [...new Set([...existing, ...items])].slice(0, 200);
+          return { ...current, postSettings: { ...(current.postSettings || {}), manualBannedTopics: merged } };
+        });
+        setBannedDraft('');
+        setNotice(`已加入 ${items.length} 个避写话题，记得点保存。`);
+      };
+
       const setTiming = (key, value) => updateConfig(current => ({ ...current, timing: { ...current.timing, [key]: value } }));
       const setSpecialPerson = (key, field, value) => updateConfig(current => ({ ...current, specialPersons: { ...current.specialPersons, [key]: { ...current.specialPersons[key], [field]: value } } }));
       const setSkipHandles = value => updateConfig(current => ({ ...current, specialPersons: { ...current.specialPersons, skipReplyHandles: Array.isArray(value) ? value : splitList(value) } }));
@@ -453,7 +466,7 @@ window.__ModuleLoader__.load({
               t('title')),
             h('p', { style: { margin: '4px 0 0', fontSize: 13, color: C.muted } }, t('subtitle'))),
           h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.15.1'),
+            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.16.0'),
             h('button', {
               type: 'button',
               disabled: busy || updating,
@@ -1971,19 +1984,58 @@ window.__ModuleLoader__.load({
                 : h('small', { style: { color: C.faint } }, '暂无。学习达标后会出现在这里。')),
 
             h('div', { style: { marginTop: 12 } },
-              h('div', { style: { fontSize: 13, fontWeight: '600', marginBottom: 6 } }, `🚫 避写话题（${(state?.learnings?.bannedTopics || []).length}）`),
-              (state?.learnings?.bannedTopics || []).length
-                ? h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
-                    ...(state.learnings.bannedTopics).map(topic => h('span', {
-                      key: topic,
-                      style: { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 8px', borderRadius: 999, background: C.raised, border: `1px solid ${C.error}`, fontSize: 12, color: C.error }
-                    }, topic,
-                      h('button', {
-                        type: 'button', title: '解除避写',
-                        style: { border: 'none', background: 'none', color: C.muted, cursor: 'pointer', fontSize: 12, padding: 0 },
-                        onClick: () => void act('remove-learning', undefined, { kind: 'banned', id: topic })
-                      }, '✕'))))
-                : h('small', { style: { color: C.faint } }, '暂无。历史表现差的话题会自动加入。')),
+              h('div', { style: { fontSize: 13, fontWeight: '600', marginBottom: 6 } },
+                `🚫 避写话题（手动 ${(config?.postSettings?.manualBannedTopics || []).length} · 学习 ${(state?.learnings?.bannedTopics || []).length}）`),
+              h('div', { style: { display: 'flex', gap: 8, marginBottom: 8 } },
+                h('input', {
+                  style: { ...inputStyle, margin: 0, flex: 1 },
+                  placeholder: '输入要避开的话题，如：政治, 明星八卦, 股市（回车或点添加）',
+                  value: bannedDraft,
+                  onChange: e => setBannedDraft(e.target.value),
+                  onKeyDown: e => { if (e.key === 'Enter') addBanned(); },
+                }),
+                h('button', {
+                  type: 'button', style: { ...buttonStyle(true), padding: '7px 14px', fontSize: 12, whiteSpace: 'nowrap' },
+                  onClick: addBanned,
+                }, '＋ 添加')),
+              h('small', { style: { color: C.faint, fontSize: 11, display: 'block', marginBottom: 8 } },
+                '手动添加的不会被「重新学习」覆盖；生成时优先避开，热榜话题命中也会被跳过。'),
+              (() => {
+                const manual = config?.postSettings?.manualBannedTopics || [];
+                const learned = state?.learnings?.bannedTopics || [];
+                const learnedOnly = learned.filter(t => !manual.some(m => m.toLowerCase() === String(t).toLowerCase()));
+                const chip = (topic, isManual) => h('span', {
+                  key: (isManual ? 'm-' : 'l-') + topic,
+                  style: {
+                    display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 8px', borderRadius: 999,
+                    background: C.raised, border: `1px solid ${isManual ? C.accent : C.error}`,
+                    fontSize: 12, color: isManual ? C.text : C.error,
+                  },
+                }, (isManual ? '手动 · ' : '学习 · ') + topic,
+                  h('button', {
+                    type: 'button', title: isManual ? '移出手动避写' : '解除避写',
+                    style: { border: 'none', background: 'none', color: C.muted, cursor: 'pointer', fontSize: 12, padding: 0 },
+                    onClick: () => {
+                      if (isManual) {
+                        updateConfig(c => ({
+                          ...c,
+                          postSettings: {
+                            ...(c.postSettings || {}),
+                            manualBannedTopics: (c.postSettings?.manualBannedTopics || []).filter(x => x !== topic),
+                          },
+                        }));
+                      } else {
+                        void act('remove-learning', undefined, { kind: 'banned', id: topic });
+                      }
+                    },
+                  }, '✕'));
+                if (!manual.length && !learnedOnly.length) {
+                  return h('small', { style: { color: C.faint } }, '暂无。可在上面输入框自行添加，或等历史表现差的话题被自动加入。');
+                }
+                return h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
+                  ...manual.map(topic => chip(topic, true)),
+                  ...learnedOnly.map(topic => chip(topic, false)));
+              })()),
 
             h('div', { style: { marginTop: 12 } },
               h('div', { style: { fontSize: 13, fontWeight: '600', marginBottom: 6 } }, `🧩 已提炼套路（${(state?.learnings?.patterns || []).length}）`),

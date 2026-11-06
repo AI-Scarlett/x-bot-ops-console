@@ -98,6 +98,7 @@ export const FIELD_SIDE = Object.freeze({
   'postSettings.oneSentencePerLine': 'post',
   'postSettings.hotTopicPerBatch': 'post',
   'postSettings.hotFilter': 'post',
+  'postSettings.manualBannedTopics': 'post',
   'postSettings.restEveryPosts': 'post',
   'postSettings.restMinutes': 'post',
   'postSettings.learningInfluence': 'post',
@@ -677,6 +678,23 @@ export function enforceOneSentencePerLine(text) {
 
 export const ONE_SENTENCE_RULE = '【格式硬性要求】每一句话必须单独占一行，句与句之间必须换行；禁止把多句连成一整段，禁止使用空行。';
 
+// Learned bans plus the operator's own list; either one vetoes a topic.
+export function mergeBannedTopics(learnings, postCfg) {
+  const learned = Array.isArray(learnings?.bannedTopics) ? learnings.bannedTopics : [];
+  const manual = Array.isArray(postCfg?.manualBannedTopics) ? postCfg.manualBannedTopics : [];
+  const seen = new Set();
+  const merged = [];
+  for (const raw of [...manual, ...learned]) {
+    const item = String(raw || '').trim();
+    if (!item) continue;
+    const key = item.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(item);
+  }
+  return merged;
+}
+
 // Build an exact, interleaved theme plan for a whole batch.
 //
 // Weighted random per item clusters themes together (six "生活" posts in a row).
@@ -992,6 +1010,8 @@ const DEFAULT_CONFIG = Object.freeze({
     queueLowThreshold: 3,
     queueAutoRefill: true,
     queueMaxSize: 100,
+    // Topics the operator never wants posted about, regardless of learning.
+    manualBannedTopics: [],
     // Rules that decide which trending topics are safe and on-brand to reuse.
     hotFilter: {
       minLength: 4,
@@ -1309,6 +1329,15 @@ function validateConfig(input) {
     }
     if (copy.postSettings.queueAutoRefill !== undefined && typeof copy.postSettings.queueAutoRefill !== 'boolean') throw new TypeError('自动补仓开关无效');
     if (copy.postSettings.oneSentencePerLine !== undefined && typeof copy.postSettings.oneSentencePerLine !== 'boolean') throw new TypeError('一句一行开关无效');
+    if (copy.postSettings.manualBannedTopics !== undefined) {
+      if (!Array.isArray(copy.postSettings.manualBannedTopics) || copy.postSettings.manualBannedTopics.length > 200) throw new TypeError('手动避写话题最多 200 条');
+      copy.postSettings.manualBannedTopics = [...new Set(
+        copy.postSettings.manualBannedTopics.map(item => String(item || '').trim()).filter(Boolean),
+      )];
+      for (const item of copy.postSettings.manualBannedTopics) {
+        if (item.length > 80) throw new TypeError('单条避写话题不能超过 80 字');
+      }
+    }
     if (copy.postSettings.hotFilter !== undefined) {
       const filter = copy.postSettings.hotFilter;
       if (!isRecord(filter)) throw new TypeError('热榜筛选规则无效');
@@ -1683,12 +1712,15 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       const formatRule = onePerLine ? `\n\n${ONE_SENTENCE_RULE}` : '';
       const basePrompt = oneOffPrompt || postCfg.customPrompt || '你在推特(X)上用周天子姬霸的人设发一条原创推文。文风为幽默、古奥的文言文或诗词歌赋，自称周天子、姬霸或夫子，不要露骨，禁止提现代网络低俗梗，字数在30到90字之间。';
       // Learned patterns steer topic choice and structure; the writing style above stays authoritative.
-      const learnings = readLearnings(activeLearningsPath);
+      const rawLearnings = readLearnings(activeLearningsPath);
       const influence = Number(postCfg.learningInfluence ?? 100);
+      // The operator's own ban list joins the learned one before anything reads it.
+      const bannedList = mergeBannedTopics(rawLearnings, postCfg);
+      const learnings = { ...rawLearnings, bannedTopics: bannedList };
       const learningBlock = (learningCfg.injectIntoPost === false || influence === 0)
         ? ''
         : buildLearningPromptBlock(learnings, { influence });
-      const banned = new Set(learnings.bannedTopics.map(topic => topic.toLowerCase()));
+      const banned = new Set(bannedList.map(topic => topic.toLowerCase()));
       const configuredTopics = postCfg.topics && postCfg.topics.length ? postCfg.topics : ['文言雅趣', '日常随笔', '周朝掌故'];
       const preferred = learnings.winningTopics.filter(topic => !banned.has(topic.toLowerCase()));
       const topics = [...preferred, ...configuredTopics.filter(topic => !banned.has(String(topic).toLowerCase()))];
@@ -1701,7 +1733,13 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       const themePlan = planThemeBatch(postCfg.topicMix, count);
       const hotQuota = Math.max(0, Math.min(Number(postCfg.hotTopicPerBatch) || 0, count));
       const trendPool = hotQuota > 0
-        ? screenHotTopics(readTrends().topics, postCfg.hotFilter || DEFAULT_CONFIG.postSettings.hotFilter).usable
+        ? screenHotTopics(readTrends().topics, {
+            ...(postCfg.hotFilter || DEFAULT_CONFIG.postSettings.hotFilter),
+            excludeKeywords: [
+              ...((postCfg.hotFilter || DEFAULT_CONFIG.postSettings.hotFilter).excludeKeywords || []),
+              ...bannedList,
+            ],
+          }).usable
         : [];
       for (let k = trendPool.length - 1; k > 0; k -= 1) {
         const j = Math.floor(Math.random() * (k + 1));

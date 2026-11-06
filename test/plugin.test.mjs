@@ -1323,6 +1323,44 @@ test('trending topics are screened by rule before reuse', async () => {
   assert.match(source, /被剔除的/);
 });
 
+test('operator banned topics merge with learned ones and survive learning', async () => {
+  const { mergeBannedTopics } = await import('../index.js');
+  const learnings = { bannedTopics: ['感情', '职场'] };
+  const postCfg = { manualBannedTopics: ['政治', '感情', ' 政治 '] };
+  const merged = mergeBannedTopics(learnings, postCfg);
+  assert.deepEqual(merged, ['政治', '感情', '职场'], 'manual first, de-duplicated, learned kept');
+
+  assert.deepEqual(mergeBannedTopics({}, {}), []);
+  assert.deepEqual(mergeBannedTopics(null, null), []);
+
+  const config = clone(DEFAULT_CONFIG);
+  assert.deepEqual(config.postSettings.manualBannedTopics, []);
+  config.postSettings.manualBannedTopics = ['政治', '政治', '明星八卦'];
+  const ok = validateConfig(config);
+  assert.deepEqual(ok.postSettings.manualBannedTopics, ['政治', '明星八卦']);
+
+  const tooMany = clone(DEFAULT_CONFIG);
+  tooMany.postSettings.manualBannedTopics = Array.from({ length: 201 }, (_, i) => 'topic' + i);
+  assert.throws(() => validateConfig(tooMany), /手动避写话题最多/);
+
+  const tooLong = clone(DEFAULT_CONFIG);
+  tooLong.postSettings.manualBannedTopics = ['长'.repeat(81)];
+  assert.throws(() => validateConfig(tooLong), /不能超过 80 字/);
+
+  const { FIELD_SIDE } = await import('../index.js');
+  assert.equal(FIELD_SIDE['postSettings.manualBannedTopics'], 'post');
+
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.match(source, /输入要避开的话题/);
+  assert.match(source, /手动 · /);
+  assert.match(source, /学习 · /);
+
+  // A fresh learning run must not drop the operator's own entries.
+  const worker = readFileSync('/Users/zhouxiaoming/Documents/Codex/tmp-84e0365a44937636/scripts/post_worker.py', 'utf8');
+  assert.match(worker, /def merged_banned_topics/);
+  assert.match(worker, /manualBannedTopics/);
+});
+
 test('save rebases onto disk so untouched prompts are never wiped', async () => {
   const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
 
