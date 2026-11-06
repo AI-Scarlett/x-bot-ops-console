@@ -1055,6 +1055,43 @@ test('queued drafts record the signature so stale ones are detectable', async ()
   assert.match(indexSource, /sig: postSettingsSignature\(postCfg\)/);
 });
 
+test('built-in worker rules are editable and validated', async () => {
+  const config = clone(DEFAULT_CONFIG);
+  assert.ok(config.replySettings.lengthRule.length > 0);
+  assert.ok(config.replySettings.cannedForbidden.length > 0);
+  assert.deepEqual(config.replySettings.thinReplyExtra, []);
+  assert.deepEqual(config.commentSettings.skipKeywords, []);
+  assert.equal(config.commentSettings.minLength, 8);
+  assert.equal(config.commentSettings.maxLength, 60);
+
+  const edited = clone(DEFAULT_CONFIG);
+  edited.replySettings.lengthRule = '12到40字。';
+  edited.replySettings.thinReplyExtra = ['收到', '收到 ', '好的'];
+  edited.commentSettings.skipKeywords = ['广告', '广告', '抽奖'];
+  const ok = validateConfig(edited);
+  assert.equal(ok.replySettings.lengthRule, '12到40字。');
+  assert.deepEqual(ok.replySettings.thinReplyExtra, ['收到', '好的'], 'duplicates are removed');
+  assert.deepEqual(ok.commentSettings.skipKeywords, ['广告', '抽奖']);
+
+  const badLen = clone(DEFAULT_CONFIG);
+  badLen.commentSettings.minLength = 100;
+  badLen.commentSettings.maxLength = 20;
+  assert.throws(() => validateConfig(badLen), /最短长度不能大于最长长度/);
+
+  const badType = clone(DEFAULT_CONFIG);
+  badType.commentSettings.skipKeywords = 'not-an-array';
+  assert.throws(() => validateConfig(badType), /跳过关键词/);
+
+  const { FIELD_SIDE } = await import('../index.js');
+  assert.equal(FIELD_SIDE['replySettings.lengthRule'], 'reply');
+  assert.equal(FIELD_SIDE['commentSettings.skipKeywords'], 'comment');
+
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.match(source, /内置评论规则/);
+  assert.match(source, /内置回复规则/);
+  assert.match(source, /跳过关键词/);
+});
+
 test('save rebases onto disk so untouched prompts are never wiped', async () => {
   const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
 

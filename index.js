@@ -70,8 +70,15 @@ export const FIELD_SIDE = Object.freeze({
   'rules.mentionPauseDuringFullStop': 'reply',
   'commentSettings.model': 'comment',
   'commentSettings.customPrompt': 'comment',
+  'commentSettings.skipKeywords': 'comment',
+  'commentSettings.minLength': 'comment',
+  'commentSettings.maxLength': 'comment',
   'replySettings.model': 'reply',
   'replySettings.customPrompt': 'reply',
+  'replySettings.lengthRule': 'reply',
+  'replySettings.cannedForbidden': 'reply',
+  'replySettings.thinReplyExtra': 'reply',
+  'replySettings.forbiddenPhrases': 'reply',
   'postSettings.enabled': 'post',
   'postSettings.intervalMinutes': 'post',
   'postSettings.intervalSeconds': 'post',
@@ -703,10 +710,19 @@ const DEFAULT_CONFIG = Object.freeze({
   commentSettings: {
     model: '',
     customPrompt: '',
+    // Words that make the worker skip a post entirely.
+    skipKeywords: [],
+    minLength: 8,
+    maxLength: 60,
   },
   replySettings: {
     model: '',
     customPrompt: '',
+    // Built-in prompt fragments, surfaced in the UI so they can be edited.
+    lengthRule: '10到28字。结尾不要用“。”或“.”。可用省略号、感叹号、一个表情、文言语气词，或者不加标点。',
+    cannedForbidden: '禁止“评论区卧虎藏龙”“感谢分享”“支持一下”“同谋共济”“投书密语”这类套话，禁止方括号表情。',
+    thinReplyExtra: [],
+    forbiddenPhrases: [],
   },
   timing: { commentWindowHours: 6, mentionWindowHours: 12, quietHoursStart: 0, quietHoursEnd: 7, fullStopStart: 1, fullStopEnd: 6, publishMinSeconds: 30, publishMaxSeconds: 100, replyMinSeconds: 0, replyMaxSeconds: 0, authorCooldownSeconds: 1800, postingWorkMinutes: 20, postingRestMinutes: 5, rateLimitMinutes: 5, rateLimitLongMinutes: 15 },
   tiers: [
@@ -940,9 +956,29 @@ function validateConfig(input) {
   if (!isRecord(copy.timing) || !isRecord(copy.specialReplies) || !isRecord(copy.rules) || !isRecord(copy.specialPersons)) throw new TypeError('时段或规则设置无效');
   if (copy.commentSettings !== undefined) {
     if (!isRecord(copy.commentSettings) || (copy.commentSettings.model !== undefined && typeof copy.commentSettings.model !== 'string') || (copy.commentSettings.customPrompt !== undefined && typeof copy.commentSettings.customPrompt !== 'string')) throw new TypeError('评论个性化设置无效');
+    if (copy.commentSettings.skipKeywords !== undefined) {
+      if (!Array.isArray(copy.commentSettings.skipKeywords) || copy.commentSettings.skipKeywords.length > 500) throw new TypeError('评论跳过关键词名单无效');
+      copy.commentSettings.skipKeywords = [...new Set(copy.commentSettings.skipKeywords.map(item => String(item || '').trim()).filter(Boolean))];
+    }
+    for (const key of ['minLength', 'maxLength']) {
+      if (copy.commentSettings[key] === undefined) continue;
+      const value = Number(copy.commentSettings[key]);
+      if (!Number.isInteger(value) || value < 1 || value > 500) throw new TypeError('评论文本长度需为 1~500 的整数');
+      copy.commentSettings[key] = value;
+    }
+    if (copy.commentSettings.minLength > copy.commentSettings.maxLength) throw new TypeError('评论最短长度不能大于最长长度');
   }
   if (copy.replySettings !== undefined) {
     if (!isRecord(copy.replySettings) || (copy.replySettings.model !== undefined && typeof copy.replySettings.model !== 'string') || (copy.replySettings.customPrompt !== undefined && typeof copy.replySettings.customPrompt !== 'string')) throw new TypeError('回复个性化设置无效');
+    for (const key of ['lengthRule', 'cannedForbidden']) {
+      if (copy.replySettings[key] !== undefined && (typeof copy.replySettings[key] !== 'string' || copy.replySettings[key].length > 2000)) throw new TypeError('回复内置提示词片段无效');
+    }
+    for (const key of ['thinReplyExtra', 'forbiddenPhrases']) {
+      if (copy.replySettings[key] !== undefined) {
+        if (!Array.isArray(copy.replySettings[key]) || copy.replySettings[key].length > 200) throw new TypeError('回复规则名单无效');
+        copy.replySettings[key] = [...new Set(copy.replySettings[key].map(item => String(item || '').trim()).filter(Boolean))];
+      }
+    }
   }
   if (copy.postSettings !== undefined) {
     if (!isRecord(copy.postSettings) || typeof copy.postSettings.enabled !== 'boolean') throw new TypeError('发帖设置无效');

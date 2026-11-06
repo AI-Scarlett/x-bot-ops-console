@@ -453,7 +453,7 @@ window.__ModuleLoader__.load({
               t('title')),
             h('p', { style: { margin: '4px 0 0', fontSize: 13, color: C.muted } }, t('subtitle'))),
           h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.11.1'),
+            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.12.0'),
             h('button', {
               type: 'button',
               disabled: busy || updating,
@@ -778,6 +778,36 @@ window.__ModuleLoader__.load({
             (config?.commentSettings?.customPrompt || '').trim()
               ? h('small', { style: { color: C.success, fontSize: 12 } }, `✓ 已设置（${config.commentSettings.customPrompt.length} 字），生效于自动评论 Worker`)
               : h('small', { style: { color: C.error, fontSize: 12 } }, '⚠️ 当前为空：自动评论将只使用 Worker 内置文风，不会应用任何自定义补充要求。'),
+            h('div', { style: { marginTop: 14, padding: '10px 12px', borderRadius: 8, background: C.layerTwo, border: `1px solid ${C.border}` } },
+              h('div', { style: { fontSize: 13, fontWeight: '600', marginBottom: 6 } }, '⚙️ 内置评论规则（原先写死在 Worker 里，现在可改）'),
+              h('label', { style: { ...labelStyle, marginTop: 4 } }, '跳过关键词（逗号分隔，命中即整条跳过）：', h(SideBadge, { side: 'comment' })),
+              h('input', {
+                style: inputStyle,
+                placeholder: '例如：广告, 抽奖, 拼多多',
+                value: (config?.commentSettings?.skipKeywords || []).join(', '),
+                onChange: e => updateConfig(c => ({
+                  ...c,
+                  commentSettings: {
+                    ...(c.commentSettings || {}),
+                    skipKeywords: e.target.value.split(/[,，\s]+/).map(x => x.trim()).filter(Boolean),
+                  },
+                })),
+              }),
+              h('div', { style: { display: 'flex', gap: 16, marginTop: 10, flexWrap: 'wrap' } },
+                h('label', { style: { ...labelStyle, flex: '1 1 160px' } },
+                  '评论最短字数：',
+                  h('input', {
+                    type: 'number', min: 1, max: 500, style: inputStyle,
+                    value: config?.commentSettings?.minLength ?? 8,
+                    onChange: e => updateConfig(c => ({ ...c, commentSettings: { ...(c.commentSettings || {}), minLength: e.target.value === '' ? '' : Number(e.target.value) } })),
+                  })),
+                h('label', { style: { ...labelStyle, flex: '1 1 160px' } },
+                  '评论最长字数：',
+                  h('input', {
+                    type: 'number', min: 1, max: 500, style: inputStyle,
+                    value: config?.commentSettings?.maxLength ?? 60,
+                    onChange: e => updateConfig(c => ({ ...c, commentSettings: { ...(c.commentSettings || {}), maxLength: e.target.value === '' ? '' : Number(e.target.value) } })),
+                  })))),
             h('label', { style: { ...labelStyle, marginTop: 12 } }, t('modelPort'), h(SideBadge, { side: 'comment' })),
             h('input', { type: 'number', min: 1, max: 65535, style: inputStyle, value: config?.model?.endpointPort || '', placeholder: '留空表示使用默认端口（如 3040）', onChange: e => updateConfig(current => ({ ...current, model: { ...current.model, endpointPort: e.target.value === '' ? null : Number(e.target.value) } })) }),
             h('small', { style: { color: C.faint, fontSize: 12 } }, t('portHint')),
@@ -869,6 +899,36 @@ window.__ModuleLoader__.load({
             (config?.replySettings?.customPrompt || '').trim()
               ? h('small', { style: { color: C.success, fontSize: 12 } }, `✓ 已设置（${config.replySettings.customPrompt.length} 字），生效于提及回复 Worker`)
               : h('small', { style: { color: C.error, fontSize: 12 } }, '⚠️ 当前为空：提及回复将只使用 Worker 内置文风，不会应用任何自定义补充要求。'),
+            h('div', { style: { marginTop: 14, padding: '10px 12px', borderRadius: 8, background: C.layerTwo, border: `1px solid ${C.border}` } },
+              h('div', { style: { fontSize: 13, fontWeight: '600', marginBottom: 6 } }, '⚙️ 内置回复规则（原先写死在 Worker 里，现在可改）'),
+              h('label', { style: { ...labelStyle, marginTop: 4 } }, '长度要求（覆盖内置默认）：'),
+              h('input', {
+                style: inputStyle,
+                value: config?.replySettings?.lengthRule || '',
+                placeholder: '例如：10到28字。结尾不要用句号。',
+                onChange: e => updateConfig(c => ({ ...c, replySettings: { ...(c.replySettings || {}), lengthRule: e.target.value } })),
+              }),
+              h('label', { style: { ...labelStyle, marginTop: 10 } }, '套话禁语（覆盖内置默认）：'),
+              h('textarea', {
+                style: { ...inputStyle, minHeight: 56, fontSize: 12 },
+                value: config?.replySettings?.cannedForbidden || '',
+                placeholder: '禁止“感谢分享”“支持一下”这类套话…',
+                onChange: e => updateConfig(c => ({ ...c, replySettings: { ...(c.replySettings || {}), cannedForbidden: e.target.value } })),
+              }),
+              h('label', { style: { ...labelStyle, marginTop: 10 } }, '追加「太空洞」判定词（逗号分隔，命中则不回复）：'),
+              h('input', {
+                style: inputStyle,
+                placeholder: '例如：好的, 收到, 谢谢',
+                value: (config?.replySettings?.thinReplyExtra || []).join(', '),
+                onChange: e => updateConfig(c => ({ ...c, replySettings: { ...(c.replySettings || {}), thinReplyExtra: e.target.value.split(/[,，\s]+/).map(x => x.trim()).filter(Boolean) } })),
+              }),
+              h('label', { style: { ...labelStyle, marginTop: 10 } }, '回复中禁止出现的词（逗号分隔）：'),
+              h('input', {
+                style: inputStyle,
+                placeholder: '例如：亲, 宝子',
+                value: (config?.replySettings?.forbiddenPhrases || []).join(', '),
+                onChange: e => updateConfig(c => ({ ...c, replySettings: { ...(c.replySettings || {}), forbiddenPhrases: e.target.value.split(/[,，\s]+/).map(x => x.trim()).filter(Boolean) } })),
+              })),
             h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 14 } },
               ...timingFields.filter(([, , , side]) => side === 'reply' || side === 'send').map(([key, min, max, side, hint]) =>
                 h('label', { key, style: { ...labelStyle, flex: '1 1 45%', minWidth: 240, margin: 0 } },
