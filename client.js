@@ -608,17 +608,12 @@ window.__ModuleLoader__.load({
             h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 } },
               h('div', null,
                 h('h2', { style: { margin: 0, fontSize: 16 } }, '🌟 关键特例人物专属回复配置（Special Person Rules）'),
-                h('p', { style: { margin: '4px 0 0', fontSize: 12, color: C.faint } }, '标注 worker 中仍由代码固定的内置分支，以及你可以覆盖的动态句柄和提示词规则。')),
+                h('p', { style: { margin: '4px 0 0', fontSize: 12, color: C.faint } }, '名单在这里全量维护：可新增、改账号名、改专属规则、调顺序、启用或禁用、直接删除。保存后两端 Worker 下一轮读取生效。')),
               h('span', { style: { fontSize: 12, color: C.accent, background: C.raised, padding: '4px 8px', borderRadius: 6 } }, 'Worker 核心内置策略')),
             h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginTop: 14 } },
               h('p', { style: { margin: 0, fontSize: 12, color: C.faint, lineHeight: 1.6 } },
                 `当前 ${specialRows.length} 个特例人物。账号名忽略大小写与 @ 前缀，命中后专属规则会作为附加提示词进入回复 Worker；新增行只在保存后生效。`),
-              h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' } },
-                h('button', { type: 'button', style: buttonStyle(true), onClick: addSpecialRow }, '➕ 添加特例人物'),
-                h('button', {
-                  type: 'button', style: buttonStyle(),
-                  onClick: () => setSpecialRows(rows => [...rows, { id: `sp_${Date.now().toString(36)}`, label: '新特例人物', handle: '', enabled: true, replyStyle: '', rules: {} }].slice(0, 50)),
-                }, '＋ 空白行'))),
+              h('button', { type: 'button', style: buttonStyle(true), onClick: addSpecialRow }, '➕ 添加特例人物')),
             specialRows.length === 0
               ? h('div', { style: { marginTop: 12, padding: 14, border: `1px dashed ${C.border}`, borderRadius: 10, color: C.faint, fontSize: 12 } }, '还没有特例人物，点击「添加特例人物」新增一行。')
               : null,
