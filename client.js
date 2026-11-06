@@ -2131,6 +2131,10 @@ window.__ModuleLoader__.load({
             })(),
             h('div', { style: { marginTop: 14, padding: '10px 12px', borderRadius: 8, background: C.layerTwo, border: `1px solid ${C.border}` } },
               h('div', { style: { fontSize: 13, fontWeight: '600', marginBottom: 6 } }, '🎯 热榜挑选规则'),
+              h('p', { style: { margin: '0 0 8px', fontSize: 12, color: C.faint, lineHeight: 1.6 } },
+                '抓取时就按下面的规则筛选过一遍：命中的话题不会写进缓存，也就不会出现在「会被采用的」里。'
+                + '另外有一层内置安全底线（凶杀/性侵/战争/灾难/色情等 97 条）和政治词表始终生效、不可关闭，'
+                + '避免你把关键词列表整个换掉之后这类标题混进来。'),
               h('label', { style: { ...labelStyle, marginTop: 4 } }, '剔除关键词（命中即跳过，逗号分隔）：'),
               h('textarea', {
                 style: { ...inputStyle, minHeight: 62, fontSize: 12 },

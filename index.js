@@ -798,6 +798,25 @@ export function checkPostDraft(text, format = {}, recentTexts = [], skeletonText
 }
 
 // Learned bans plus the operator's own list; either one vetoes a topic.
+// The board filter has two layers: the operator's own keyword list (editable, and
+// may be replaced wholesale) plus a built-in floor that always applies. Without the
+// floor, clearing the list would let crime and war headlines back into the queue.
+export function hotSafetyFloor() {
+  return [...(DEFAULT_CONFIG.postSettings.hotFilter.excludeKeywords || [])];
+}
+
+export function effectiveHotFilter(postCfg, learnings) {
+  const base = { ...(postCfg?.hotFilter || DEFAULT_CONFIG.postSettings.hotFilter) };
+  const political = (postCfg?.politicalCap?.keywords || DEFAULT_CONFIG.postSettings.politicalCap?.keywords || []);
+  base.excludeKeywords = [...new Set([
+    ...(base.excludeKeywords || []),
+    ...hotSafetyFloor(),
+    ...political,
+    ...mergeBannedTopics(learnings, postCfg),
+  ].map(item => String(item || '').trim()).filter(Boolean))];
+  return base;
+}
+
 export function mergeBannedTopics(learnings, postCfg) {
   const learned = Array.isArray(learnings?.bannedTopics) ? learnings.bannedTopics : [];
   const manual = Array.isArray(postCfg?.manualBannedTopics) ? postCfg.manualBannedTopics : [];
@@ -2063,13 +2082,8 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
           .filter(Boolean)
         : [];
       const trendPool = hotQuota > 0
-        ? screenHotTopics(readTrends(activeTrendsPath).topics, {
-            ...(postCfg.hotFilter || DEFAULT_CONFIG.postSettings.hotFilter),
-            excludeKeywords: [
-              ...((postCfg.hotFilter || DEFAULT_CONFIG.postSettings.hotFilter).excludeKeywords || []),
-              ...bannedList,
-            ],
-          }).usable
+        ? screenHotTopics(readTrends(activeTrendsPath).topics,
+            effectiveHotFilter(postCfg, { bannedTopics: bannedList })).usable
         : [];
       for (let k = trendPool.length - 1; k > 0; k -= 1) {
         const j = Math.floor(Math.random() * (k + 1));
@@ -2234,13 +2248,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       }
       // Screen before caching: headlines the rules already reject must never reach
       // the board list, otherwise the operator has to strike them out by hand.
-      const filterCfg = {
-        ...(sharedCfg.postSettings?.hotFilter || DEFAULT_CONFIG.postSettings.hotFilter),
-        excludeKeywords: [
-          ...((sharedCfg.postSettings?.hotFilter || DEFAULT_CONFIG.postSettings.hotFilter).excludeKeywords || []),
-          ...mergeBannedTopics(readLearnings(activeLearningsPath), sharedCfg.postSettings),
-        ],
-      };
+      const filterCfg = effectiveHotFilter(sharedCfg.postSettings, readLearnings(activeLearningsPath));
       const { usable, dropped } = screenHotTopics(topics, filterCfg);
       const payload = writeTrends({
         topics: usable,

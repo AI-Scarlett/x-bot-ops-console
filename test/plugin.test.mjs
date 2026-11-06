@@ -2017,3 +2017,19 @@ test('fetch-trends keeps the previous cache when every board comes back empty', 
     await new Promise(resolve => server.close(resolve));
   }
 });
+
+test('the hot-board safety floor survives an operator list that was replaced wholesale', async () => {
+  const { effectiveHotFilter, hotSafetyFloor, screenHotTopics } = await import('../index.js');
+  // The live config only keeps a 42-item political list; the floor must still apply.
+  const live = { hotFilter: { excludeKeywords: ['政治', '被查'] }, politicalCap: { keywords: ['主席', '总统'] } };
+  const filter = effectiveHotFilter(live, { bannedTopics: ['某明星'] });
+  for (const word of ['性侵', '战争', '色情', '自杀', '主席', '政治', '某明星']) {
+    assert.ok(filter.excludeKeywords.includes(word), `${word} should be in the effective filter`);
+  }
+  assert.ok(hotSafetyFloor().length >= 90);
+  const kept = screenHotTopics(['两人共谋性侵11岁女童', '国防部：须高度警惕日本重启战争机器', '央行宣布降准'], filter);
+  assert.deepEqual(kept.usable, ['央行宣布降准']);
+  assert.equal(kept.dropped.length, 2);
+  // The operator list is never mutated in place.
+  assert.deepEqual(live.hotFilter.excludeKeywords, ['政治', '被查']);
+});
