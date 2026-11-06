@@ -693,11 +693,14 @@ export function buildStructureBlock(format = {}, style = {}) {
     .replace(/\{lines\}/g, String(fmt.lineCount ?? 3))
     .replace(/\{min\}/g, String(fmt.minChars ?? 30))
     .replace(/\{max\}/g, String(fmt.maxChars ?? 60));
+  const autoLines = Number(fmt.lineCount) === 0;
   const lines = [
-    `【硬性结构】共 ${fmt.lineCount ?? 3} 行，不多不少。汉字 ${fmt.minChars ?? 30}-${fmt.maxChars ?? 60} 个。`,
-    st.line1Rule ? fill(st.line1Rule) : '',
-    st.line2Rule ? fill(st.line2Rule) : '',
-    st.line3Rule ? fill(st.line3Rule) : '',
+    autoLines
+      ? `【结构】行数按内容自然安排，不硬性规定。汉字 ${fmt.minChars ?? 30}-${fmt.maxChars ?? 60} 个，务必不超过上限。`
+      : `【硬性结构】共 ${fmt.lineCount ?? 3} 行，不多不少。汉字 ${fmt.minChars ?? 30}-${fmt.maxChars ?? 60} 个，务必不超过上限。`,
+    autoLines ? '' : (st.line1Rule ? fill(st.line1Rule) : ''),
+    autoLines ? '' : (st.line2Rule ? fill(st.line2Rule) : ''),
+    autoLines ? (st.autoLineRule ? fill(st.autoLineRule) : '') : (st.line3Rule ? fill(st.line3Rule) : ''),
     st.languageRule ? fill(st.languageRule) : '',
     Array.isArray(fmt.softOpeners) && fmt.softOpeners.length ? `禁在首行使用：${fmt.softOpeners.join('、')}。` : '',
     Array.isArray(fmt.bannedPatterns) && fmt.bannedPatterns.length ? `禁用作废句式：${fmt.bannedPatterns.join('、')}。` : '',
@@ -714,7 +717,8 @@ export function buildStructureBlock(format = {}, style = {}) {
 export function checkPostDraft(text, format = {}, recentTexts = []) {
   const reasons = [];
   const fmt = format || {};
-  const lineCount = Number(fmt.lineCount) || 3;
+  // 0 means automatic, so it must not fall back to the default.
+  const lineCount = fmt.lineCount === undefined || fmt.lineCount === null || fmt.lineCount === '' ? 3 : Number(fmt.lineCount);
   const minChars = Number(fmt.minChars) || 30;
   const maxChars = Number(fmt.maxChars) || 60;
   const closingPrefix = String(fmt.closingPrefix ?? '尔');
@@ -722,7 +726,11 @@ export function checkPostDraft(text, format = {}, recentTexts = []) {
   const body = lines.join('');
 
   if (!body) return { ok: false, reasons: ['内容为空'] };
-  if (lines.length !== lineCount) reasons.push(`行数为 ${lines.length}，应为 ${lineCount}`);
+  if (lineCount > 0) {
+    if (lines.length !== lineCount) reasons.push(`行数为 ${lines.length}，应为 ${lineCount}`);
+  } else if (lines.length < 2) {
+    reasons.push('自动分行模式下至少要分成两行，不能写成一段');
+  }
   const hanCount = (body.match(/[\u4e00-\u9fff]/g) || []).length;
   if (hanCount < minChars || hanCount > maxChars) reasons.push(`汉字 ${hanCount} 个，应在 ${minChars}-${maxChars}`);
 
@@ -1114,6 +1122,8 @@ const DEFAULT_CONFIG = Object.freeze({
       line3Rule: '第 3 行：以「{prefix}」开头的具体提问，并以问号结尾。',
       languageRule: '浅显文言，陌生人一读就懂；不写骈赋、不堆僻字；多用曰/之/乎/也/矣/者/焉/何/乃/亦/其。',
       hotRewriteRule: '借这个话题的热度写一条原创推文：可以评论、反讽、借题发挥或抒发感怀；不要照搬新闻标题，不要写成新闻播报。',
+      // Used when 行数 = 自动, so the shape still has a beginning and an end.
+      autoLineRule: '开头直接扔出冲突、欲望或暧昧；随后揭底或反转；结尾给出以「{prefix}」开头的具体提问。行数随内容自然安排，一句一行，不要写成整段。',
       extraRules: '',
     },
     // Reuse guard: no long verbatim run and no repeated skeleton.
@@ -1472,9 +1482,10 @@ function validateConfig(input) {
       for (const key of ['lineCount', 'minChars', 'maxChars']) {
         if (fmt[key] === undefined) continue;
         const value = Number(fmt[key]);
-        if (!Number.isInteger(value) || value < 1 || value > 500) throw new TypeError('发帖结构数值需为 1~500 的整数');
+        if (!Number.isInteger(value) || value < 0 || value > 500) throw new TypeError('发帖结构数值需为非负整数');
         fmt[key] = value;
       }
+      if (fmt.minChars < 1) throw new TypeError('汉字下限至少为 1');
       if (fmt.lineCount > 12) throw new TypeError('发帖行数不能超过 12 行');
       if (fmt.minChars > fmt.maxChars) throw new TypeError('字数下限不能大于上限');
       if (fmt.closingPrefix !== undefined && (typeof fmt.closingPrefix !== 'string' || fmt.closingPrefix.length > 10)) throw new TypeError('结尾引导字无效');
@@ -1489,7 +1500,7 @@ function validateConfig(input) {
     if (copy.postSettings.style !== undefined) {
       const style = copy.postSettings.style;
       if (!isRecord(style)) throw new TypeError('文风设置无效');
-      for (const key of ['persona', 'line1Rule', 'line2Rule', 'line3Rule', 'languageRule', 'hotRewriteRule', 'extraRules']) {
+      for (const key of ['persona', 'line1Rule', 'line2Rule', 'line3Rule', 'languageRule', 'hotRewriteRule', 'extraRules', 'autoLineRule']) {
         if (style[key] === undefined) continue;
         if (typeof style[key] !== 'string' || style[key].length > 4000) throw new TypeError(`文风片段 ${key} 无效`);
       }
@@ -1985,15 +1996,16 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
           let rawDraft = await generateTweetViaLmh(prompt, { model, port });
           let draftText = fmtCfg.lineCount > 0
             ? String(rawDraft || '').trim()
-            : (onePerLine ? enforceOneSentencePerLine(rawDraft) : rawDraft);
+            : enforceOneSentencePerLine(rawDraft);
           let verdict = checkPostDraft(draftText, { ...fmtCfg, maxOverlapChars: dedupeCfg.maxOverlapChars }, recentTexts);
-          if (!verdict.ok) {
-            // One corrective retry that names every violation.
-            const retryPrompt = `${prompt}\n\n【上一次不合格，必须修正】\n- ${verdict.reasons.join('\n- ')}`;
+          for (let attempt = 0; attempt < 2 && !verdict.ok; attempt += 1) {
+            // Corrective retries that name every violation.
+            const retryPrompt = `${prompt}\n\n【上一次不合格，必须逐条修正】\n- ${verdict.reasons.join('\n- ')}`
+              + (fmtCfg.lineCount === 0 ? '' : `\n- 严格保持 ${fmtCfg.lineCount} 行`);
             rawDraft = await generateTweetViaLmh(retryPrompt, { model, port });
             draftText = fmtCfg.lineCount > 0
               ? String(rawDraft || '').trim()
-              : (onePerLine ? enforceOneSentencePerLine(rawDraft) : rawDraft);
+              : enforceOneSentencePerLine(rawDraft);
             verdict = checkPostDraft(draftText, { ...fmtCfg, maxOverlapChars: dedupeCfg.maxOverlapChars }, recentTexts);
           }
           if (!verdict.ok) {

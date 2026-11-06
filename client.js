@@ -480,7 +480,7 @@ window.__ModuleLoader__.load({
               t('title')),
             h('p', { style: { margin: '4px 0 0', fontSize: 13, color: C.muted } }, t('subtitle'))),
           h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.18.1'),
+            h('span', { style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: C.muted, border: `1px solid ${C.border}` } }, 'v0.19.0'),
             h('button', {
               type: 'button',
               disabled: busy || updating,
@@ -1341,13 +1341,15 @@ window.__ModuleLoader__.load({
             h('p', { style: { margin: '6px 0 10px', fontSize: 12, color: C.faint, lineHeight: 1.6 } },
               '改动即时生效：生成提示词会带上这些要求，生成后再按同样规则硬校验，不合规重写一次，仍不合格就丢弃不入队。'),
             h('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' } },
-              h('label', { style: { ...labelStyle, flex: '1 1 130px' } },
-                '固定行数：', h(SideBadge, { side: 'post' }),
-                h('input', {
-                  type: 'number', min: 1, max: 12, style: inputStyle,
-                  value: config?.postSettings?.format?.lineCount ?? 3,
-                  onChange: e => setPostFormat('lineCount', e.target.value === '' ? '' : Number(e.target.value)),
-                })),
+              h('label', { style: { ...labelStyle, flex: '1 1 150px' } },
+                '行数：', h(SideBadge, { side: 'post' }),
+                h('select', {
+                  style: inputStyle,
+                  value: String(config?.postSettings?.format?.lineCount ?? 3),
+                  onChange: e => setPostFormat('lineCount', Number(e.target.value)),
+                },
+                  h('option', { value: '0' }, '自动（按内容自然分行）'),
+                  ...[1, 2, 3, 4, 5, 6, 7, 8].map(n => h('option', { key: n, value: String(n) }, `固定 ${n} 行`)))),
               h('label', { style: { ...labelStyle, flex: '1 1 130px' } },
                 '汉字下限：',
                 h('input', {
@@ -1376,6 +1378,10 @@ window.__ModuleLoader__.load({
                 onChange: e => setPostFormat('requireClosingQuestion', e.target.checked),
               }),
               '末行必须以引导字开头并以问号结尾'),
+            (config?.postSettings?.format?.lineCount ?? 3) === 0
+              ? h('small', { style: { color: C.muted, fontSize: 11, display: 'block', marginTop: 6 } },
+                  '当前为「自动」：不限行数，按句子自然分行（一句一行），仍会检查字数、末行提问与禁则。')
+              : null,
             (() => {
               const fields = [
                 ['persona', '人设与立场', true],

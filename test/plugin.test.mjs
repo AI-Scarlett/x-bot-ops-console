@@ -1499,6 +1499,45 @@ test('style prompt fragments are editable and drive the structure block', async 
   assert.match(worker, /DEFAULT_STYLE = \{/);
 });
 
+test('line count can be automatic instead of a fixed number', async () => {
+  const { buildStructureBlock, checkPostDraft, enforceOneSentencePerLine, DEFAULT_CONFIG: defaults } = await import('../index.js');
+  const fmt = defaults.postSettings.format;
+  const style = defaults.postSettings.style;
+
+  // Fixed mode states the exact line count.
+  const fixed = buildStructureBlock({ ...fmt, lineCount: 3 }, style);
+  assert.ok(fixed.includes('共 3 行，不多不少'));
+  assert.ok(fixed.includes('第 1 行'));
+
+  // Auto mode drops the fixed count and keeps the shape via autoLineRule.
+  const auto = buildStructureBlock({ ...fmt, lineCount: 0 }, style);
+  assert.ok(!auto.includes('共 3 行'), 'auto mode must not demand an exact count');
+  assert.ok(auto.includes('行数按内容自然安排'));
+  assert.ok(auto.includes('以「尔」开头'), 'closing question still required');
+  assert.ok(auto.includes('现成的第 1 行') === false);
+
+  // Auto mode accepts any line count >= 2 but still rejects one solid block.
+  const threeLines = '余昨夜赴宴，卿举杯便解罗带，满座皆惊。\n余只顾看她嘴角那点酒，实在难当得很。\n尔若同席，先劝酒还是先劝归？';
+  assert.equal(checkPostDraft(threeLines, { ...fmt, lineCount: 0 }, []).ok, true);
+  const sixLines = enforceOneSentencePerLine('第一句长一点好通过字数。第二句也要够长才行。第三句继续凑字数。第四句继续凑。第五句继续凑。尔若同席，先劝酒还是先劝归？');
+  assert.ok(sixLines.split('\n').length >= 2);
+  assert.equal(checkPostDraft(sixLines, { ...fmt, lineCount: 0 }, []).ok, true);
+
+  // A single paragraph is still rejected in auto mode.
+  const oneBlock = '余昨夜赴宴卿举杯便解罗带满座皆惊余只顾看她嘴角那点酒实在难当尔若同席先劝酒还是先劝归？';
+  const blocked = checkPostDraft(oneBlock, { ...fmt, lineCount: 0 }, []);
+  assert.equal(blocked.ok, false);
+  assert.ok(blocked.reasons.some(r => r.includes('至少')));
+
+  // 0 must be a valid stored value.
+  const config = clone(DEFAULT_CONFIG);
+  config.postSettings.format.lineCount = 0;
+  assert.equal(validateConfig(config).postSettings.format.lineCount, 0);
+
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.match(source, /自动（按内容自然分行）/);
+});
+
 test('save rebases onto disk so untouched prompts are never wiped', async () => {
   const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
 
