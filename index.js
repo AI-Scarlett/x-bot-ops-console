@@ -2297,15 +2297,22 @@ function validateConfig(input) {
     if (copy.postSettings.format !== undefined) {
       const fmt = copy.postSettings.format;
       if (!isRecord(fmt)) throw new TypeError('发帖结构设置无效');
+      // X Premium accounts can post long-form (25k characters), so the ceiling is
+      // generous; ordinary accounts are limited to ~140 Chinese characters by X
+      // itself and will simply fail at publish time.
       for (const key of ['lineCount', 'minChars', 'maxChars']) {
         if (fmt[key] === undefined) continue;
         const value = Number(fmt[key]);
-        if (!Number.isInteger(value) || value < 0 || value > 500) throw new TypeError('发帖结构数值需为非负整数');
+        const limit = key === 'lineCount' ? 12 : 2000;
+        const floor = key === 'lineCount' ? 0 : 1;
+        if (!Number.isInteger(value) || value < floor || value > limit) {
+          throw new TypeError(key === 'lineCount'
+            ? `发帖行数需为 ${floor}~${limit} 之间的整数（当前填的是 ${fmt[key]}）`
+            : `${key === 'minChars' ? '汉字下限' : '汉字上限'}需为 ${floor}~${limit} 之间的整数（当前填的是 ${fmt[key]}）`);
+        }
         fmt[key] = value;
       }
-      if (fmt.minChars < 1) throw new TypeError('汉字下限至少为 1');
-      if (fmt.lineCount > 12) throw new TypeError('发帖行数不能超过 12 行');
-      if (fmt.minChars > fmt.maxChars) throw new TypeError('字数下限不能大于上限');
+      if (fmt.minChars !== undefined && fmt.maxChars !== undefined && fmt.minChars > fmt.maxChars) throw new TypeError('字数下限不能大于上限');
       if (fmt.closingPrefix !== undefined && (typeof fmt.closingPrefix !== 'string' || fmt.closingPrefix.length > 10)) throw new TypeError('结尾引导字无效');
       for (const key of ['forbidColloquial', 'softOpeners', 'bannedPatterns']) {
         if (fmt[key] === undefined) continue;

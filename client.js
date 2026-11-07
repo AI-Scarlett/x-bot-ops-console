@@ -1699,14 +1699,14 @@ window.__ModuleLoader__.load({
               h('label', { style: { ...labelStyle, flex: '1 1 130px' } },
                 '汉字下限：',
                 h('input', {
-                  type: 'number', min: 1, max: 500, style: inputStyle,
+                  type: 'number', min: 1, max: 2000, style: inputStyle,
                   value: config?.postSettings?.format?.minChars ?? 30,
                   onChange: e => setPostFormat('minChars', e.target.value === '' ? '' : Number(e.target.value)),
                 })),
               h('label', { style: { ...labelStyle, flex: '1 1 130px' } },
                 '汉字上限：',
                 h('input', {
-                  type: 'number', min: 1, max: 500, style: inputStyle,
+                  type: 'number', min: 1, max: 2000, style: inputStyle,
                   value: config?.postSettings?.format?.maxChars ?? 60,
                   onChange: e => setPostFormat('maxChars', e.target.value === '' ? '' : Number(e.target.value)),
                 })),
@@ -1728,6 +1728,9 @@ window.__ModuleLoader__.load({
               ? h('small', { style: { color: C.muted, fontSize: 11, display: 'block', marginTop: 6 } },
                   '当前为「自动」：不限行数，按句子自然分行（一句一行），仍会检查字数、末行提问与禁则。')
               : null,
+            h('small', { style: { color: C.faint, fontSize: 11, display: 'block', marginTop: 4, lineHeight: 1.6 } },
+              '汉字上限可填 1~2000。X 普通账号单条推文约 140 个汉字就会被截断，只有 X Premium 才能发长文；'
+              + '本账号实测可以直接发 1200 字，所以按你想要的长度填即可。'),
             (() => {
               const fields = [
                 ['persona', '人设与立场', true],

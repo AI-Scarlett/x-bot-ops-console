@@ -1434,7 +1434,7 @@ test('writer rule settings are editable and validated', async () => {
 
   const badLines = clone(DEFAULT_CONFIG);
   badLines.postSettings.format.lineCount = 20;
-  assert.throws(() => validateConfig(badLines), /行数不能超过/);
+  assert.throws(() => validateConfig(badLines), /发帖行数需为 0~12 之间的整数/);
 
   const badChars = clone(DEFAULT_CONFIG);
   badChars.postSettings.format.minChars = 100;
@@ -2605,4 +2605,34 @@ test('the cruise panel shows the quota explanation and the gap inputs', async ()
   assert.match(source, /上限只是刹车，间隔才是油门/);
   assert.match(source, /拜访间隔下限/);
   assert.match(source, /visitGapMaxSeconds/);
+});
+
+test('the format ceiling allows long-form posts and names the field in errors', async () => {
+  const { DEFAULT_CONFIG, validateConfig } = await import('../index.js');
+  const config = structuredClone(DEFAULT_CONFIG);
+  config.postSettings.format = { ...config.postSettings.format, minChars: 20, maxChars: 1000 };
+  const saved = validateConfig(config);
+  assert.equal(saved.postSettings.format.maxChars, 1000, 'X Premium long posts must be allowed');
+
+  const tooLong = structuredClone(DEFAULT_CONFIG);
+  tooLong.postSettings.format = { ...tooLong.postSettings.format, maxChars: 2001 };
+  assert.throws(() => validateConfig(tooLong), /汉字上限需为 1~2000 之间的整数/);
+
+  const zero = structuredClone(DEFAULT_CONFIG);
+  zero.postSettings.format = { ...zero.postSettings.format, maxChars: 0 };
+  assert.throws(() => validateConfig(zero), /汉字上限需为 1~2000 之间的整数/);
+
+  const inverted = structuredClone(DEFAULT_CONFIG);
+  inverted.postSettings.format = { ...inverted.postSettings.format, minChars: 900, maxChars: 100 };
+  assert.throws(() => validateConfig(inverted), /字数下限不能大于上限/);
+
+  const badLines = structuredClone(DEFAULT_CONFIG);
+  badLines.postSettings.format = { ...badLines.postSettings.format, lineCount: 30 };
+  assert.throws(() => validateConfig(badLines), /发帖行数需为 0~12 之间的整数/);
+});
+
+test('the format inputs accept up to 2000 characters', async () => {
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.match(source, /type: 'number', min: 1, max: 2000, style: inputStyle/);
+  assert.match(source, /本账号实测可以直接发 1200 字/);
 });
