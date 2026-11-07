@@ -1088,16 +1088,78 @@ export function mutatePostQueue(mutator, queuePath = POST_QUEUE_PATH, { maxSize 
   }, queuePath);
 }
 
+// The hot-board screen rejects news headlines (crime, politics, disaster). The
+// preferred topics are the opposite: they are directions for the account's own
+// adult fiction, so a blanket "sexual suggestion" ban would empty the list.
+// This rule set only removes the directions that belong to other subjects.
+export const PREFERRED_TOPIC_SCREEN_INSTRUCTION = [
+  '你是账号选题审核员。下面是从 X 榜单学到的「选题方向」，将来要用来写虚构的、成年人之间的原创内容。',
+  '',
+  '# 必须剔除（判断语义，不是字面）',
+  '1. 明星、演员、歌手、偶像、网红、主持人等真实公众人物，及其私生活、作品比较、影视综艺、娱乐圈八卦',
+  '2. 时政要闻、领导人、外交、军事、灾难事故、犯罪案件、疾病死亡、战争',
+  '3. 复述真实历史事件、真实新闻人物、纯带货广告、教程类内容',
+  '4. 涉及未成年人',
+  '',
+  '# 必须保留',
+  '成年人之间的暧昧、关系拉扯、男女博弈、相亲与彩礼、亲密与边界表达、情感与欲望的转折、职场与日常、家庭与朋友。',
+  '这类方向是账号要写的东西：即使出现「服务」「按摩」「亲密」「主动」等词，只要写的是虚构的成年人关系、且不涉及真实公众人物，就保留。',
+  '',
+  '# 待审方向',
+  '{topics}',
+  '',
+  '只输出 JSON，不要解释、不要代码块：{"keep":[编号],"reject":[{"id":编号,"why":"简短原因"}]}',
+].join('\n');
+
 // The learned "winning topics" come from the X benchmark and can contain exactly
 // the entertainment headlines the account does not want. They are screened with
 // the same model rules as the hot board, so the preferred topics stay on brand.
 export async function screenPreferredTopics(winners, filter = {}, { model = 'gpt-6-luna', port = 3040, timeoutMs = 45000 } = {}) {
   const list = (Array.isArray(winners) ? winners : []).map(topic => String(topic).trim()).filter(Boolean);
   if (!list.length) return { usable: [], rejected: [], error: '' };
-  const screened = await aiScreenHotTopics(list, filter, { model, port, batchSize: 20, maxTopics: 60, timeoutMs });
+  // Its own rule set: the hot-board one would reject every adult-fiction topic.
+  const screenFilter = { ...filter, aiScreenInstruction: PREFERRED_TOPIC_SCREEN_INSTRUCTION };
+  const screened = await aiScreenHotTopics(list, screenFilter, { model, port, batchSize: 20, maxTopics: 60, timeoutMs });
   const rejected = screened.rejected.map(item => ({ topic: item.topic, reason: item.reason }));
   const usable = screened.usable.filter(topic => !rejected.some(item => item.topic === topic));
   return { usable, rejected, error: screened.error || '' };
+}
+
+  // ---- preferred topic screening cache ----------------------------------------
+// The learned "winning topics" come from the X benchmark and often contain the
+// very entertainment headlines the account refuses. The hot board is screened by
+// the model, so the preferred topics are screened the same way. The result is
+// cached so a generation does not pay for a model call every time.
+export const PREFERRED_TOPIC_CACHE = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/preferred-topics.json');
+
+export function readPreferredTopicCache(cachePath = PREFERRED_TOPIC_CACHE) {
+  try {
+    const parsed = JSON.parse(readFileSync(cachePath, 'utf8'));
+    return {
+      at: Number(parsed.at) || 0,
+      source: Array.isArray(parsed.source) ? parsed.source.map(String) : [],
+      usable: Array.isArray(parsed.usable) ? parsed.usable.map(String) : [],
+      rejected: Array.isArray(parsed.rejected) ? parsed.rejected : [],
+      error: String(parsed.error || ''),
+    };
+  } catch {
+    return { at: '', source: [], usable: [], rejected: [], error: '' };
+  }
+}
+
+export function writePreferredTopicCache(cache, cachePath = PREFERRED_TOPIC_CACHE) {
+  try {
+    mkdirSync(dirname(cachePath), { recursive: true, mode: 0o700 });
+    writeFileSync(cachePath, `${JSON.stringify(cache, null, 2)}\n`, { mode: 0o600 });
+  } catch { /* the cache is an optimisation, never a blocker */ }
+  return cache;
+}
+
+export function preferredTopicCacheFresh(cache, source, maxAgeHours = 24) {
+  if (!cache || !Array.isArray(cache.source) || !Array.isArray(source)) return false;
+  if (JSON.stringify(cache.source) !== JSON.stringify(source)) return false;
+  const age = Date.now() / 1000 - Number(cache.at || 0);
+  return Number.isFinite(age) && age >= 0 && age < maxAgeHours * 3600;
 }
 
 // ---- account persona --------------------------------------------------------
@@ -1378,7 +1440,8 @@ const DEFAULT_CONFIG = Object.freeze({
   },
   specialReplies: { asksAi: '若被问及是否为 AI，请如实回答。', asksToStop: '若对方要求停止，请勿继续回复该讨论串。', care: '礼貌回应并围绕话题。', affection: '尊重回应，不诱导私下联系。', namedAddress: '以中性方式回应称呼。', daddy: '拒绝不合适的亲属角色扮演。', imperialTitle: '不宣称现实中的权力或身份。', vernacular: '仅在明确请求时翻译。' },
   rules: { skipFinanceComments: true, skipGrokMentions: false, doNotReplyAfterStopRequest: true, keepSensitiveKeyOutOfUi: true, mentionPauseDuringQuiet: true, mentionPauseDuringFullStop: true },
-  // The account persona constrains who is speaking in every generated text:
+
+// The account persona constrains who is speaking in every generated text:
   // posts, comments and replies must stay inside this identity.
   persona: {
     enabled: false,
@@ -2510,15 +2573,35 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         : buildLearningPromptBlock(learnings, { influence });
       const banned = new Set(bannedList.map(topic => topic.toLowerCase()));
       const configuredTopics = postCfg.topics && postCfg.topics.length ? postCfg.topics : ['文言雅趣', '日常随笔', '周朝掌故'];
-      const preferred = learnings.winningTopics.filter(topic => !banned.has(String(topic).toLowerCase()));
+      const rawWinners = learnings.winningTopics.filter(topic => !banned.has(String(topic).toLowerCase()));
+      // The preferred topics are screened with the same model rules as the hot
+      // board, so the benchmark's entertainment hits never reach a draft.
+      const model = postCfg.model || sharedCfg.model?.name || 'gpt-6-luna';
+      const port = sharedCfg.model?.endpointPort || 3040;
+      const screenFilter = effectiveHotFilter(postCfg, { bannedTopics: bannedList });
+      let preferred = rawWinners;
+      if (rawWinners.length) {
+        let cache = readPreferredTopicCache();
+        if (!preferredTopicCacheFresh(cache, rawWinners)) {
+          const screened = await screenPreferredTopics(rawWinners, screenFilter, { model, port });
+          cache = {
+            at: Math.floor(Date.now() / 1000),
+            source: rawWinners,
+            usable: screened.usable,
+            rejected: screened.rejected,
+            error: screened.error || '',
+          };
+          writePreferredTopicCache(cache);
+        }
+        // A failed screen keeps the raw list rather than losing every topic.
+        preferred = cache.error ? rawWinners : cache.usable.filter(topic => !banned.has(String(topic).toLowerCase()));
+      }
       const manual = configuredTopics.filter(topic => !banned.has(String(topic).toLowerCase()));
       // "Preferred" has to mean preferred: with both lists present the learned
       // winners are used most of the time.
       const pool = preferred.length
         ? (manual.length && Math.random() >= 0.7 ? [...preferred, ...manual] : preferred)
         : (manual.length ? manual : ['文言雅趣']);
-      const model = postCfg.model || sharedCfg.model?.name || 'gpt-6-luna';
-      const port = sharedCfg.model?.endpointPort || 3040;
       const maxSize = Number(postCfg.queueMaxSize) || 100;
       const generated = [];
       const failures = [];
@@ -2881,6 +2964,23 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         dropped.push(...ai.rejected);
         aiInfo = { screened: ai.screened, skipped: ai.skipped, error: ai.error, rejected: ai.rejected.length };
       }
+      // The preferred topics are screened with the same model pass, so the cache
+      // stays fresh whenever the boards are refreshed.
+      try {
+        const rawWinners = (readLearnings(activeLearningsPath).winningTopics || [])
+          .filter(topic => !mergeBannedTopics(readLearnings(activeLearningsPath), postCfg)
+            .some(banned => String(banned).toLowerCase() === String(topic).toLowerCase()));
+        if (rawWinners.length && !preferredTopicCacheFresh(readPreferredTopicCache(), rawWinners)) {
+          const screened = await screenPreferredTopics(rawWinners, filterCfg, { model, port });
+          writePreferredTopicCache({
+            at: Math.floor(Date.now() / 1000),
+            source: rawWinners,
+            usable: screened.usable,
+            rejected: screened.rejected,
+            error: screened.error || '',
+          });
+        }
+      } catch { /* the cache is an optimisation, never a blocker */ }
       const payload = writeTrends({
         topics: usable,
         sources: results,

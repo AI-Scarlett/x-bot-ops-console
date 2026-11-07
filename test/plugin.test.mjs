@@ -2358,3 +2358,25 @@ test('the general settings expose the persona panel', async () => {
   assert.match(source, /人设禁用词/);
   assert.match(source, /persona: \{ \.\.\.\(c\.persona \|\| \{\}\), summary/);
 });
+
+test('the preferred topics are screened by the model and cached', async () => {
+  const {
+    readPreferredTopicCache, writePreferredTopicCache, preferredTopicCacheFresh,
+    PREFERRED_TOPIC_SCREEN_INSTRUCTION, PREFERRED_TOPIC_CACHE,
+  } = await import('../index.js');
+  // The preferred topics get their own rule set: the hot-board one would reject
+  // every adult-fiction direction.
+  assert.match(PREFERRED_TOPIC_SCREEN_INSTRUCTION, /必须剔除/);
+  assert.match(PREFERRED_TOPIC_SCREEN_INSTRUCTION, /真实公众人物/);
+  assert.match(PREFERRED_TOPIC_SCREEN_INSTRUCTION, /必须保留/);
+  assert.match(PREFERRED_TOPIC_SCREEN_INSTRUCTION, /成年人之间的暧昧/);
+  assert.match(PREFERRED_TOPIC_SCREEN_INSTRUCTION, /\{topics\}/);
+  assert.match(PREFERRED_TOPIC_CACHE, /preferred-topics\.json$/);
+
+  // The cache is fresh only for the same source list and within the age limit.
+  const now = Math.floor(Date.now() / 1000);
+  assert.equal(preferredTopicCacheFresh({ at: now, source: ['a', 'b'] }, ['a', 'b']), true);
+  assert.equal(preferredTopicCacheFresh({ at: now, source: ['a'] }, ['b']), false);
+  assert.equal(preferredTopicCacheFresh({ at: now - 90000, source: ['a'] }, ['a']), false);
+  assert.equal(preferredTopicCacheFresh({ at: 0, source: [] }, []), false);
+});
