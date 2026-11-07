@@ -387,3 +387,37 @@ test('adding a handle that sits in another tier asks before moving it', async ()
     assert.deepEqual(app.config().tiers[2].handles, ['李四']);
   } finally { app.close(); }
 });
+
+test('the priority list lets you mark a nickname and a gender', async () => {
+  const tiers = [
+    { id: 'apex', label: 'Apex 档位', handles: ['4ggug'], rounds: 30, replyStyle: '' },
+    { id: 'tier1', label: 'Tier 1 档位', handles: [], rounds: 20, replyStyle: '' },
+    { id: 'tier2', label: 'Tier 2 档位', handles: [], rounds: 10, replyStyle: '' },
+    { id: 'tier3', label: 'Tier 3 档位', handles: [], rounds: 5, replyStyle: '' },
+    { id: 'tier4', label: 'Tier 4 档位', handles: [], rounds: 4, replyStyle: '' },
+    { id: 'other', label: '其他用户', handles: [], rounds: 3, replyStyle: '' },
+  ];
+  const app = mount({ tab: 'tiers', config: sampleConfig({ tiers }) });
+  try {
+    let tree = app.render();
+    assert.match(flatText(tree), /昵称与性别标注/);
+    // One editor row per handle.
+    const nickInputs = elements(tree).filter(node => node.type === 'input'
+      && String(node.props?.placeholder || '').includes('昵称'));
+    assert.equal(nickInputs.length, 1, 'one nickname field for the single handle');
+    const genderSelect = elements(tree).find(node => node.type === 'select'
+      && node.props?.value === 'unknown');
+    assert.ok(genderSelect, 'a gender select is rendered');
+
+    // Typing a nickname stores it under the handle.
+    nickInputs[0].props.onChange({ target: { value: '阿呆' } });
+    tree = app.render();
+    assert.deepEqual(app.config().handleProfiles['4ggug'], { nickname: '阿呆', gender: 'unknown', note: '' });
+
+    // Picking a gender stores it too.
+    const select = elements(tree).find(node => node.type === 'select' && node.props?.value === 'unknown');
+    select.props.onChange({ target: { value: 'male' } });
+    tree = app.render();
+    assert.equal(app.config().handleProfiles['4ggug'].gender, 'male');
+  } finally { app.close(); }
+});

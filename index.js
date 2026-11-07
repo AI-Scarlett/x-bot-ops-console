@@ -2068,6 +2068,8 @@ function validateConfig(input) {
       cleaned[handle] = { nickname, gender, note };
     }
     copy.handleProfiles = cleaned;
+  } else {
+    copy.handleProfiles = {};
   }
   if (copy.persona !== undefined) {
     if (!isRecord(copy.persona)) throw new TypeError('人设配置无效');
