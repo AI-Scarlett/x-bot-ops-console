@@ -834,6 +834,48 @@ window.__ModuleLoader__.load({
         // TAB 2: 🌐 通用与公共配置
         activeTab === 'general' ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
 
+          // 账号人设：约束「谁在说话」
+          h('section', { style: cardStyle },
+            h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 } },
+              h('div', null,
+                h('h2', { style: { margin: 0, fontSize: 15 } }, '🎭 账号人设（谁在说话）'),
+                h('p', { style: { margin: '4px 0 0', fontSize: 12, color: C.faint, lineHeight: 1.6 } },
+                  '人设会同时约束发帖、评论、主页评论和提及回复：叙述视角必须与身份一致（例如人设是男性，就不能写成女性视角；人设是中年失业者，就不能写自己还在上班或在校）。')),
+              h('label', { style: { display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 } },
+                h('input', {
+                  type: 'checkbox',
+                  checked: config?.persona?.enabled !== false && Boolean(config?.persona?.summary || config?.persona?.rules),
+                  onChange: e => updateConfig(c => ({ ...c, persona: { ...(c.persona || {}), enabled: e.target.checked } })),
+                }),
+                '启用')),
+            h('label', { style: { ...labelStyle, marginTop: 10 } }, '人设简介（一句话说明身份，例如「男性，中年失业，在旧书市场卖旧书维生」）：'),
+            h('textarea', {
+              style: { ...inputStyle, minHeight: 60, fontSize: 12 },
+              placeholder: '例如：男性，中年失业，靠在旧书市场卖旧书维生。',
+              value: config?.persona?.summary || '',
+              onChange: e => updateConfig(c => ({ ...c, persona: { ...(c.persona || {}), summary: e.target.value } })),
+            }),
+            h('label', { style: { ...labelStyle, marginTop: 8 } }, '人设附加规则（可选，会追加到提示词里）：'),
+            h('textarea', {
+              style: { ...inputStyle, minHeight: 52, fontSize: 12 },
+              placeholder: '例如：自称「余」，不写现代职场用语。',
+              value: config?.persona?.rules || '',
+              onChange: e => updateConfig(c => ({ ...c, persona: { ...(c.persona || {}), rules: e.target.value } })),
+            }),
+            h('label', { style: { ...labelStyle, marginTop: 8 } }, '人设禁用词（生成结果里出现就整条作废，逗号分隔）：'),
+            h('input', {
+              style: inputStyle,
+              placeholder: '例如：上班, 打工, 男大, 学生',
+              value: (config?.persona?.forbidden || []).join(', '),
+              onChange: e => updateConfig(c => ({
+                ...c,
+                persona: { ...(c.persona || {}), forbidden: String(e.target.value || '').split(/[,，、\s]+/).map(x => x.trim()).filter(Boolean) },
+              })),
+            }),
+            h('p', { style: { margin: '6px 0 0', fontSize: 11, color: C.faint, lineHeight: 1.6 } },
+              '禁用词是「硬校验」：命中就不发（评论记成 skipped_persona_conflict，回复与草稿会被丢弃重生成）。所以别填太宽泛的字，比如「女」会把正常提到对方的帖子也毙掉。'),
+          ),
+
           // 配置备份与恢复
           h('section', { style: cardStyle },
             h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 } },
@@ -2061,7 +2103,7 @@ window.__ModuleLoader__.load({
               '⏱ 按间隔自动学习（关闭后只能手动触发）', h(SideBadge, { side: 'post' })),
             h('label', { style: { display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginTop: 6 } },
               h('input', { type: 'checkbox', checked: config?.learningSettings?.injectIntoPost !== false, onChange: e => updateConfig(c => ({ ...c, learningSettings: { ...(c.learningSettings || {}), injectIntoPost: e.target.checked } })) }),
-              '✨ 生成推文时参考学习成果（关闭则仍按原始提示词写）', h(SideBadge, { side: 'post' }))
+              '✨ 生成推文时参考学习成果（套路/钩子/结构；关闭则不注入，但优先话题仍作为选题来源）', h(SideBadge, { side: 'post' }))
           ),
 
           // 1. 历史发帖表现
@@ -2518,7 +2560,18 @@ window.__ModuleLoader__.load({
               }, '💾 保存套路总结')),
 
             h('div', { style: { marginTop: 12 } },
-              h('div', { style: { fontSize: 13, fontWeight: '600', marginBottom: 6 } }, `✅ 优先话题（${(state?.learnings?.winningTopics || []).length}）`),
+              h('div', { style: { fontSize: 13, fontWeight: '600', marginBottom: 6 } },
+                `✅ 优先话题（${(state?.learnings?.winningTopics || []).length}）`
+                + (() => {
+                  const winners = state?.learnings?.winningTopics || [];
+                  const banned = new Set((state?.learnings?.bannedTopics || []).map(t => String(t).toLowerCase()));
+                  const usable = winners.filter(t => !banned.has(String(t).toLowerCase()));
+                  return winners.length && usable.length < winners.length
+                    ? `　其中 ${usable.length} 条可用，${winners.length - usable.length} 条已被避写清单排除`
+                    : '';
+                })()),
+              h('p', { style: { margin: '0 0 8px', fontSize: 12, color: C.faint, lineHeight: 1.6 } },
+                '优先话题是生成选题的默认来源：每条帖子只讲一个话题，写热榜话题时才会改用热榜标题。生成配比（香艳/批判/搞女人）只决定切入角度，不决定题目。'),
               (state?.learnings?.winningTopics || []).length
                 ? h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
                     ...(state.learnings.winningTopics).map(topic => h('span', {

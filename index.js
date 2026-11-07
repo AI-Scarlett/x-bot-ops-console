@@ -122,6 +122,10 @@ export const FIELD_SIDE = Object.freeze({
   'cruiseSettings.tierSweepHours': 'profile',
   'cruiseSettings.commentsPerProfile': 'profile',
   'cruiseSettings.likesPerProfile': 'profile',
+  'persona.enabled': 'both',
+  'persona.summary': 'both',
+  'persona.forbidden': 'both',
+  'persona.rules': 'both',
   'cruiseSettings.autoVisitInvited': 'profile',
   'cruiseSettings.model': 'profile',
   'cruiseSettings.customPrompt': 'profile',
@@ -968,7 +972,11 @@ export function buildLearningPromptBlock(learnings, { maxChars = 1600, influence
   if (hooks.length) parts.push(`【高互动钩子/开头方式】\n${hooks.map(h => `- ${h}`).join('\n')}`);
   const structures = learnings.patterns.map(p => p.structure).filter(Boolean).slice(0, 6);
   if (structures.length) parts.push(`【可借鉴的行文结构】\n${structures.map(s => `- ${s}`).join('\n')}`);
-  if (learnings.winningTopics.length) parts.push(`【已验证有效的话题方向】${learnings.winningTopics.join('、')}`);
+  // A topic that is also banned must not be advertised as proven: the two
+  // lists contradicted each other and the banned ones leaked back in.
+  const bannedSet = new Set((learnings.bannedTopics || []).map(topic => String(topic).toLowerCase()));
+  const usableWinners = (learnings.winningTopics || []).filter(topic => !bannedSet.has(String(topic).toLowerCase()));
+  if (usableWinners.length) parts.push(`【已验证有效的话题方向】${usableWinners.join('、')}`);
   if (learnings.bannedTopics.length) parts.push(`【必须避开的话题（历史表现差）】${learnings.bannedTopics.join('、')}`);
   if (!parts.length) return '';
   // influence scales how much of the learned guidance reaches the model.
@@ -1078,6 +1086,52 @@ export function mutatePostQueue(mutator, queuePath = POST_QUEUE_PATH, { maxSize 
     const payload = writePostQueue(current, queuePath, { maxSize });
     return { result, payload };
   }, queuePath);
+}
+
+// The learned "winning topics" come from the X benchmark and can contain exactly
+// the entertainment headlines the account does not want. They are screened with
+// the same model rules as the hot board, so the preferred topics stay on brand.
+export async function screenPreferredTopics(winners, filter = {}, { model = 'gpt-6-luna', port = 3040, timeoutMs = 45000 } = {}) {
+  const list = (Array.isArray(winners) ? winners : []).map(topic => String(topic).trim()).filter(Boolean);
+  if (!list.length) return { usable: [], rejected: [], error: '' };
+  const screened = await aiScreenHotTopics(list, filter, { model, port, batchSize: 20, maxTopics: 60, timeoutMs });
+  const rejected = screened.rejected.map(item => ({ topic: item.topic, reason: item.reason }));
+  const usable = screened.usable.filter(topic => !rejected.some(item => item.topic === topic));
+  return { usable, rejected, error: screened.error || '' };
+}
+
+// ---- account persona --------------------------------------------------------
+// The persona answers "who is speaking". It is injected into every generated
+// text (posts, comments, replies) and the result is checked afterwards, because
+// a model can still slip an identity detail past the instruction.
+export function personaBlock(config = {}) {
+  const persona = (config && config.persona) || {};
+  if (persona.enabled === false) return '';
+  const summary = String(persona.summary || '').trim();
+  const rules = String(persona.rules || '').trim();
+  if (!summary && !rules) return '';
+  const parts = [];
+  if (summary) parts.push(`【人设（必须严格遵守）】${summary}`);
+  parts.push('全篇以该人设的第一人称视角叙述，身份、性别、年龄、职业、处境必须与人设一致；'
+    + '不得出现与人设矛盾的细节（例如人设是中年失业者，就不能写自己正在上班、在读大学、当学生）。'
+    + '叙述的对象可以是别人，但说话的人始终是这个人。');
+  if (rules) parts.push(rules);
+  return `\n\n${parts.join('\n')}`;
+}
+
+export function personaViolations(text, config = {}) {
+  const persona = (config && config.persona) || {};
+  if (persona.enabled === false) return [];
+  const forbidden = Array.isArray(persona.forbidden) ? persona.forbidden : [];
+  if (!forbidden.length) return [];
+  const body = String(text || '');
+  const hits = [];
+  for (const word of forbidden) {
+    const needle = String(word || '').trim();
+    if (!needle) continue;
+    if (body.includes(needle)) hits.push(needle);
+  }
+  return hits;
 }
 
 // Generic local-model chat call: one prompt in, raw text out. Kept separate from
@@ -1324,6 +1378,14 @@ const DEFAULT_CONFIG = Object.freeze({
   },
   specialReplies: { asksAi: '若被问及是否为 AI，请如实回答。', asksToStop: '若对方要求停止，请勿继续回复该讨论串。', care: '礼貌回应并围绕话题。', affection: '尊重回应，不诱导私下联系。', namedAddress: '以中性方式回应称呼。', daddy: '拒绝不合适的亲属角色扮演。', imperialTitle: '不宣称现实中的权力或身份。', vernacular: '仅在明确请求时翻译。' },
   rules: { skipFinanceComments: true, skipGrokMentions: false, doNotReplyAfterStopRequest: true, keepSensitiveKeyOutOfUi: true, mentionPauseDuringQuiet: true, mentionPauseDuringFullStop: true },
+  // The account persona constrains who is speaking in every generated text:
+  // posts, comments and replies must stay inside this identity.
+  persona: {
+    enabled: false,
+    summary: '',
+    forbidden: [],
+    rules: '',
+  },
   postSettings: {
     enabled: true,
     intervalMinutes: 180,
@@ -1856,6 +1918,21 @@ function validateConfig(input) {
         if (!Array.isArray(copy.replySettings[key]) || copy.replySettings[key].length > 200) throw new TypeError('回复规则名单无效');
         copy.replySettings[key] = [...new Set(copy.replySettings[key].map(item => String(item || '').trim()).filter(Boolean))];
       }
+    }
+  }
+  if (copy.persona !== undefined) {
+    if (!isRecord(copy.persona)) throw new TypeError('人设配置无效');
+    if (copy.persona.enabled !== undefined && typeof copy.persona.enabled !== 'boolean') throw new TypeError('人设开关无效');
+    if (copy.persona.summary !== undefined) {
+      if (typeof copy.persona.summary !== 'string' || copy.persona.summary.length > 500) throw new TypeError('人设简介不能超过 500 字');
+    }
+    if (copy.persona.rules !== undefined) {
+      if (typeof copy.persona.rules !== 'string' || copy.persona.rules.length > 1000) throw new TypeError('人设附加规则不能超过 1000 字');
+    }
+    if (copy.persona.forbidden !== undefined) {
+      if (!Array.isArray(copy.persona.forbidden) || copy.persona.forbidden.length > 200) throw new TypeError('人设禁用词名单无效');
+      copy.persona.forbidden = [...new Set(copy.persona.forbidden.map(item => String(item || '').trim()).filter(Boolean))];
+      for (const item of copy.persona.forbidden) if (item.length > 40) throw new TypeError('单条人设禁用词不能超过 40 字');
     }
   }
   if (copy.postSettings !== undefined) {
@@ -2417,9 +2494,11 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       // worker's compose_post_prompt does.
       const slotPrompt = oneOffPrompt ? '' : slot.prompt;
       const slotLabel = oneOffPrompt ? '' : slot.label;
+      const personaText = personaBlock(sharedCfg);
       const basePrompt = oneOffPrompt
         ? oneOffPrompt
-        : (slotPrompt ? `${globalPrompt}\n\n【当前时段文风：${slotLabel || '分时文风'}】${slotPrompt}` : globalPrompt);
+        : (slotPrompt ? `${globalPrompt}\n\n【当前时段文风：${slotLabel || '分时文风'}】${slotPrompt}` : globalPrompt)
+          + personaText;
       // Learned patterns steer topic choice and structure; the writing style above stays authoritative.
       const rawLearnings = readLearnings(activeLearningsPath);
       const influence = Number(postCfg.learningInfluence ?? 100);
@@ -2431,9 +2510,13 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         : buildLearningPromptBlock(learnings, { influence });
       const banned = new Set(bannedList.map(topic => topic.toLowerCase()));
       const configuredTopics = postCfg.topics && postCfg.topics.length ? postCfg.topics : ['文言雅趣', '日常随笔', '周朝掌故'];
-      const preferred = learnings.winningTopics.filter(topic => !banned.has(topic.toLowerCase()));
-      const topics = [...preferred, ...configuredTopics.filter(topic => !banned.has(String(topic).toLowerCase()))];
-      const pool = topics.length ? topics : ['文言雅趣'];
+      const preferred = learnings.winningTopics.filter(topic => !banned.has(String(topic).toLowerCase()));
+      const manual = configuredTopics.filter(topic => !banned.has(String(topic).toLowerCase()));
+      // "Preferred" has to mean preferred: with both lists present the learned
+      // winners are used most of the time.
+      const pool = preferred.length
+        ? (manual.length && Math.random() >= 0.7 ? [...preferred, ...manual] : preferred)
+        : (manual.length ? manual : ['文言雅趣']);
       const model = postCfg.model || sharedCfg.model?.name || 'gpt-6-luna';
       const port = sharedCfg.model?.endpointPort || 3040;
       const maxSize = Number(postCfg.queueMaxSize) || 100;
@@ -2485,18 +2568,21 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       const hotTopics = trendPool.slice(0, Math.min(hotQuota, trendPool.length));
       for (let i = 0; i < count; i++) {
         const hotTopic = i < hotTopics.length ? hotTopics[i] : '';
-        const topic = pool[Math.floor(Math.random() * pool.length)];
+        // One subject per draft: the hot headline when this draft got one, else a
+        // preferred topic. The theme only decides the angle, so the two no
+        // longer fight each other and the preferred topics really get used.
+        const topic = hotTopic || pool[Math.floor(Math.random() * pool.length)];
         const theme = themePlan[i] || pickTopicTheme(postCfg.topicMix);
-        // When a weighted theme is active it owns the content direction; a random
-        // topic hint would fight it, so the hint is dropped in that case.
         const themeBlock = theme
           ? `\n\n【本条主题方向：${theme.label}】（约占 ${theme.weight}%）${theme.prompt ? ` ${theme.prompt}` : ''}`
           : '';
-        const hotBlock = hotTopic
-          ? `\n\n【今日热点话题】${hotTopic}\n${styleCfg.hotRewriteRule || ''}`
+        const subjectSource = hotTopic ? '今日热点' : '优先话题';
+        const subjectBlock = topic
+          ? `\n\n【本条话题：${topic}】（来源：${subjectSource}）`
+            + (hotTopic ? `\n（借这条热榜标题当素材写一条原创推文，不要照搬标题）` : '')
+            + `\n（请就上面这条话题写，主题方向只决定口吻与切入角度）`
           : '';
-        const topicHint = theme ? `\n（请紧扣「${theme.label}」这个主题方向，不要跑题）` : `\n（当前话题灵感参考：${topic}）`;
-        const prompt = basePrompt + themeBlock + hotBlock + learningBlock + topicHint + formatRule;
+        const prompt = basePrompt + themeBlock + learningBlock + subjectBlock + formatRule;
         try {
           let rawDraft = await generateTweetViaLmh(prompt, { model, port });
           let draftText = fmtCfg.lineCount > 0
@@ -2521,6 +2607,13 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
           if (draftText) {
             // The model can ignore the window rule; such a draft must not enter
             // the queue, or it would be published in the wrong language.
+            // The persona is a hard constraint: a draft that breaks it is dropped
+            // instead of being published.
+            const personaHits = personaViolations(draftText, sharedCfg);
+            if (personaHits.length) {
+              failures.push(`第 ${i + 1} 条不符合人设（出现「${personaHits.join('、')}」）`);
+              continue;
+            }
             const han = (draftText.match(/[\u4e00-\u9fff]/g) || []).length;
             const wantsEnglish = slotLabel.includes('英文') || slotLabel.toLowerCase().includes('english');
             const wantsChinese = slotLabel.includes('文言') || slotLabel.includes('楚辞') || slotLabel.includes('中文');

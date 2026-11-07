@@ -2289,3 +2289,72 @@ test('the profile tab exposes the like budget next to the comment budget', async
   assert.match(source, /likesPerProfile/);
   assert.match(source, /未点赞过/);
 });
+
+test('a post names its subject: preferred topic by default, hot headline when assigned', async () => {
+  const { buildLearningPromptBlock } = await import('../index.js');
+  // The generator lives on the server side.
+  const server = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
+  // The subject block names the topic and its source.
+  assert.match(server, /【本条话题：\$\{topic\}】/);
+  assert.match(server, /优先话题/);
+  assert.match(server, /今日热点/);
+  // The UI explains the behaviour.
+  const client = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.match(client, /优先话题是生成选题的默认来源/);
+  // The learning block must not advertise a banned topic as proven.
+  const block = buildLearningPromptBlock({
+    styleGuide: '', patterns: [],
+    winningTopics: ['可用话题', '被避写的话题'],
+    bannedTopics: ['被避写的话题'],
+  }, { influence: 100 });
+  assert.match(block, /可用话题/);
+  assert.doesNotMatch(block.split('【必须避开的话题')[0], /被避写的话题/);
+  assert.match(block, /【必须避开的话题/);
+});
+
+test('the account persona constrains every generated text', async () => {
+  const { personaBlock, personaViolations, validateConfig, DEFAULT_CONFIG } = await import('../index.js');
+  const persona = {
+    enabled: true,
+    summary: '男性，中年失业，在旧书市场卖旧书维生',
+    forbidden: ['上班', '打工', '男大', '学生'],
+    rules: '自称「余」，语气克制',
+  };
+  // The prompt names the persona and forbids contradictions.
+  const block = personaBlock({ persona });
+  assert.match(block, /男性，中年失业/);
+  assert.match(block, /第一人称视角/);
+  assert.match(block, /不得出现与人设矛盾的细节/);
+  assert.match(block, /自称「余」/);
+  // A disabled persona adds nothing.
+  assert.equal(personaBlock({ persona: { ...persona, enabled: false } }), '');
+  assert.equal(personaBlock({ persona: { enabled: true } }), '');
+
+  // The hard check catches identity slips.
+  assert.deepEqual(personaViolations('我今日仍在上班，尔且问我何时返校。', { persona }), ['上班']);
+  assert.deepEqual(personaViolations('余今日于旧书市场摆摊，所得微薄。', { persona }), []);
+  assert.deepEqual(personaViolations('上班', { persona: { ...persona, enabled: false } }), []);
+
+  // Config validation.
+  const config = structuredClone(DEFAULT_CONFIG);
+  assert.equal(config.persona.enabled, false);
+  config.persona = { ...persona };
+  assert.equal(validateConfig(config).persona.summary, persona.summary);
+  const bad = structuredClone(DEFAULT_CONFIG);
+  bad.persona.forbidden = '上班';
+  assert.throws(() => validateConfig(bad), /人设禁用词名单无效/);
+  const tooLong = structuredClone(DEFAULT_CONFIG);
+  tooLong.persona.summary = 'x'.repeat(501);
+  assert.throws(() => validateConfig(tooLong), /人设简介不能超过 500 字/);
+  const badSwitch = structuredClone(DEFAULT_CONFIG);
+  badSwitch.persona.enabled = 'yes';
+  assert.throws(() => validateConfig(badSwitch), /人设开关无效/);
+});
+
+test('the general settings expose the persona panel', async () => {
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.match(source, /账号人设（谁在说话）/);
+  assert.match(source, /人设简介/);
+  assert.match(source, /人设禁用词/);
+  assert.match(source, /persona: \{ \.\.\.\(c\.persona \|\| \{\}\), summary/);
+});
