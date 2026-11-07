@@ -4,7 +4,7 @@ import { execFile, execFileSync, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { createConnection } from 'node:net';
 import http from 'node:http';
@@ -521,6 +521,123 @@ export function collectUsedHotTopics({ historyPosts = [], queueItems = [], extra
     if (topic) out.push(topic);
   }
   return [...new Set(out)];
+}
+
+// ---- local knowledge base ----------------------------------------------------
+// A folder of notes (.txt / .md). Each note can carry a picture: either a file
+// with the same name next to it, or an "image: <file>" line at the top.
+const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.gif'];
+
+export function knowledgeSettings(postCfg = {}) {
+  const kb = (postCfg && postCfg.knowledgeBase) || {};
+  const extensions = Array.isArray(kb.extensions) && kb.extensions.length
+    ? kb.extensions.map(item => String(item).trim().toLowerCase()).filter(Boolean)
+    : ['.txt', '.md'];
+  return {
+    enabled: kb.enabled !== false && Boolean(String(kb.path || '').trim()),
+    path: String(kb.path || '').trim(),
+    perDay: Math.max(0, Math.min(5, Number(kb.perDay) || 1)),
+    includeImage: kb.includeImage !== false,
+    prompt: String(kb.prompt || '').trim().slice(0, 2000),
+    extensions,
+  };
+}
+
+export function readKnowledgeEntry(filePath) {
+  try {
+    const raw = readFileSync(filePath, 'utf8');
+    let image = '';
+    let body = raw;
+    const match = raw.match(/^\s*(?:image|图片|pic)\s*[:：]\s*(\S+)\s*$/im);
+    if (match) {
+      image = match[1].trim();
+      body = raw.replace(match[0], '');
+    }
+    const titleMatch = body.match(/^#\s+(.+)$/m);
+    const title = titleMatch ? titleMatch[1].trim() : basename(filePath).replace(/\.[^.]+$/, '');
+    return { title, text: body.trim().slice(0, 20000), image };
+  } catch {
+    return null;
+  }
+}
+
+export const KNOWLEDGE_STATE_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/knowledge_base.json');
+
+export function readKnowledgeState(statePath = KNOWLEDGE_STATE_PATH) {
+  const blank = { published: [], days: {}, today: new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10), todayCount: 0 };
+  try {
+    if (!existsSync(statePath)) return blank;
+    const data = JSON.parse(readFileSync(statePath, 'utf8'));
+    if (!isRecord(data)) return blank;
+    const published = Array.isArray(data.published) ? data.published.map(item => String(item)) : [];
+    const days = isRecord(data.days) ? data.days : {};
+    const raw = days[blank.today];
+    const todayCount = Array.isArray(raw) ? raw.length : Math.max(0, Number(raw) || 0);
+    return { published, days, today: blank.today, todayCount };
+  } catch {
+    return blank;
+  }
+}
+
+export function scanKnowledgeBase(postCfg = {}, statePath = KNOWLEDGE_STATE_PATH) {
+  const settings = knowledgeSettings(postCfg);
+  const result = { enabled: settings.enabled, path: settings.path, exists: false, entries: [], error: '' };
+  const fail = () => withKnowledgeState(result, settings, statePath);
+  if (!settings.path) return fail();
+  let dir;
+  try { dir = statSync(settings.path); }
+  catch { result.error = '目录不存在'; return fail(); }
+  if (!dir.isDirectory()) { result.error = '不是目录'; return fail(); }
+  result.exists = true;
+  let files = [];
+  try { files = readdirSync(settings.path); } catch (error) { result.error = String(error?.message || error).slice(0, 120); return fail(); }
+  const entries = [];
+  for (const name of files.sort()) {
+    const full = join(settings.path, name);
+    let info;
+    try { info = statSync(full); } catch { continue; }
+    if (!info.isFile()) continue;
+    const lower = name.toLowerCase();
+    if (!settings.extensions.some(ext => lower.endsWith(ext))) continue;
+    const parsed = readKnowledgeEntry(full);
+    if (!parsed || !parsed.text) continue;
+    // The picture: an explicit image line, else a file with the same stem.
+    let imagePath = '';
+    if (parsed.image) {
+      const candidate = join(settings.path, parsed.image);
+      if (existsSync(candidate)) imagePath = candidate;
+    }
+    if (!imagePath) {
+      const stem = name.replace(/\.[^.]+$/, '');
+      for (const ext of IMAGE_EXTENSIONS) {
+        const candidate = join(settings.path, `${stem}${ext}`);
+        if (existsSync(candidate)) { imagePath = candidate; break; }
+      }
+    }
+    entries.push({
+      id: name,
+      title: parsed.title,
+      file: full,
+      image: imagePath,
+      imageName: imagePath ? basename(imagePath) : '',
+      bytes: info.size,
+      preview: parsed.text.slice(0, 240),
+    });
+  }
+  result.entries = entries.slice(0, 300);
+  return withKnowledgeState(result, settings, statePath);
+}
+
+function withKnowledgeState(result, settings, statePath = KNOWLEDGE_STATE_PATH) {
+  const state = readKnowledgeState(statePath);
+  const done = new Set(state.published);
+  for (const entry of result.entries) entry.published = done.has(entry.id);
+  result.publishedCount = result.entries.filter(entry => entry.published).length;
+  result.pendingCount = result.entries.length - result.publishedCount;
+  result.todayCount = state.todayCount;
+  result.perDay = settings.perDay;
+  result.quotaLeft = Math.max(0, settings.perDay - state.todayCount);
+  return result;
 }
 
 export function readTrends(trendsPath = TRENDS_PATH) {
@@ -1625,6 +1742,16 @@ const DEFAULT_CONFIG = Object.freeze({
     topics: ['文言雅趣', '周朝掌故', '易经随笔', '日常感悟'],
     model: '',
     customPrompt: '你在推特(X)上用浅显文言发一条原创推文。自称余/吾，称对方君/卿/尔，不用我/你作主语，不用白话虚词。写虚构成年人之间自愿的暧昧、男女博弈、相亲彩礼、渣男渣女，或骂一件具体的事。陌生人一读就懂，不写骈赋、不堆僻字。',
+    // A local folder of notes: one entry is turned into a post per day, with the
+    // picture that sits next to it.
+    knowledgeBase: {
+      enabled: false,
+      path: '',
+      perDay: 1,
+      includeImage: true,
+      prompt: '',
+      extensions: ['.txt', '.md'],
+    },
   },
   cruiseSettings: {
     enabled: true,
@@ -2229,6 +2356,27 @@ function validateConfig(input) {
       }
       if (filter.minLength > filter.maxLength) throw new TypeError('热榜话题最短长度不能大于最长长度');
     }
+    if (copy.postSettings.knowledgeBase !== undefined) {
+      const kb = copy.postSettings.knowledgeBase;
+      if (!isRecord(kb)) throw new TypeError('本地知识库设置无效');
+      if (kb.enabled !== undefined && typeof kb.enabled !== 'boolean') throw new TypeError('本地知识库开关无效');
+      if (kb.path !== undefined) {
+        if (typeof kb.path !== 'string' || kb.path.length > 400) throw new TypeError('本地知识库路径无效');
+      }
+      if (kb.perDay !== undefined) {
+        const per = Number(kb.perDay);
+        if (!Number.isInteger(per) || per < 0 || per > 5) throw new TypeError('知识库每天条数需为 0~5 的整数');
+        kb.perDay = per;
+      }
+      if (kb.includeImage !== undefined && typeof kb.includeImage !== 'boolean') throw new TypeError('知识库配图开关无效');
+      if (kb.prompt !== undefined) {
+        if (typeof kb.prompt !== 'string' || kb.prompt.length > 2000) throw new TypeError('知识库提示词不能超过 2000 字');
+      }
+      if (kb.extensions !== undefined) {
+        if (!Array.isArray(kb.extensions) || kb.extensions.length > 10) throw new TypeError('知识库文件后缀名单无效');
+        kb.extensions = [...new Set(kb.extensions.map(item => String(item || '').trim().toLowerCase()).filter(Boolean))];
+      }
+    }
     if (copy.postSettings.hotTopicPerBatch !== undefined) {
       const hot = Number(copy.postSettings.hotTopicPerBatch);
       if (!Number.isInteger(hot) || hot < 0 || hot > 20) throw new TypeError('每批热榜条数需为 0~20 的整数');
@@ -2535,6 +2683,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       postHistory: postHistory.slice(-20),
       learnings: readLearnings(activeLearningsPath),
       trends: readTrends(activeTrendsPath),
+      knowledgeBase: scanKnowledgeBase(shared.config.postSettings),
       usedHotTopics: collectUsedHotTopics({
         historyPosts: postHistory,
         queueItems: postQueue.queue,

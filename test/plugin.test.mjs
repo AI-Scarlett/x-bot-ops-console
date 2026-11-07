@@ -2452,3 +2452,81 @@ test('the priority list shows the nickname and gender editor', async () => {
   assert.match(source, /option.*value: 'male'.*男/s);
   assert.match(source, /option.*value: 'female'.*女/s);
 });
+
+test('the local knowledge base is scanned, configured and validated', async () => {
+  const { knowledgeSettings, scanKnowledgeBase, validateConfig, DEFAULT_CONFIG } = await import('../index.js');
+  const dir = mkdtempSync(join(tmpdir(), 'xbot-kb-'));
+  writeFileSync(join(dir, 'a.md'), '# 甲篇\n这是第一篇材料。\n');
+  writeFileSync(join(dir, 'a.png'), 'png-bytes');
+  writeFileSync(join(dir, 'b.txt'), 'image: pic.jpg\n第二篇材料。\n');
+  writeFileSync(join(dir, 'pic.jpg'), 'jpg-bytes');
+  writeFileSync(join(dir, 'skip.bin'), 'ignored');
+
+  const settings = knowledgeSettings({ knowledgeBase: { enabled: true, path: dir, perDay: 2 } });
+  assert.equal(settings.enabled, true);
+  assert.equal(settings.perDay, 2);
+  assert.deepEqual(settings.extensions, ['.txt', '.md']);
+
+  const scan = scanKnowledgeBase({ knowledgeBase: { enabled: true, path: dir } });
+  assert.equal(scan.exists, true);
+  assert.equal(scan.entries.length, 2, 'only .txt and .md notes count');
+  const a = scan.entries.find(entry => entry.id === 'a.md');
+  const b = scan.entries.find(entry => entry.id === 'b.txt');
+  assert.equal(a.title, '甲篇');
+  assert.ok(a.image.endsWith('a.png'), 'the same-stem picture is picked up');
+  assert.ok(b.image.endsWith('pic.jpg'), 'the image: line is honoured');
+  // A missing folder is reported, not thrown.
+  const missing = scanKnowledgeBase({ knowledgeBase: { enabled: true, path: join(dir, 'nope') } });
+  assert.equal(missing.exists, false);
+  assert.match(missing.error, /目录不存在/);
+
+  // Config validation.
+  const config = structuredClone(DEFAULT_CONFIG);
+  assert.equal(config.postSettings.knowledgeBase.enabled, false);
+  config.postSettings.knowledgeBase = { enabled: true, path: dir, perDay: 2, includeImage: true, prompt: '' };
+  assert.equal(validateConfig(config).postSettings.knowledgeBase.perDay, 2);
+  const tooMany = structuredClone(DEFAULT_CONFIG);
+  tooMany.postSettings.knowledgeBase = { perDay: 9 };
+  assert.throws(() => validateConfig(tooMany), /每天条数需为 0~5/);
+  const badSwitch = structuredClone(DEFAULT_CONFIG);
+  badSwitch.postSettings.knowledgeBase = { enabled: 'yes' };
+  assert.throws(() => validateConfig(badSwitch), /知识库开关无效/);
+});
+
+test('a note that already went out is marked and the daily quota is counted', async () => {
+  const { readKnowledgeState, scanKnowledgeBase } = await import('../index.js');
+  const dir = mkdtempSync(join(tmpdir(), 'xbot-kbs-'));
+  writeFileSync(join(dir, 'one.md'), '# 一篇\n材料一\n');
+  writeFileSync(join(dir, 'two.md'), '# 二篇\n材料二\n');
+  const statePath = join(dir, 'knowledge_base.json');
+  const today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+  writeFileSync(statePath, JSON.stringify({ published: ['one.md'], days: { [today]: 1 } }));
+
+  const state = readKnowledgeState(statePath);
+  assert.equal(state.todayCount, 1);
+  assert.deepEqual(state.published, ['one.md']);
+
+  const scan = scanKnowledgeBase({ knowledgeBase: { enabled: true, path: dir, perDay: 2 } }, statePath);
+  assert.equal(scan.publishedCount, 1);
+  assert.equal(scan.pendingCount, 1);
+  assert.equal(scan.quotaLeft, 1);
+  assert.equal(scan.entries.find(entry => entry.id === 'one.md').published, true);
+  assert.equal(scan.entries.find(entry => entry.id === 'two.md').published, false);
+
+  // A day counter stored as a list of ids is still understood.
+  writeFileSync(statePath, JSON.stringify({ published: [], days: { [today]: ['one.md', 'two.md'] } }));
+  assert.equal(readKnowledgeState(statePath).todayCount, 2);
+
+  // A missing state file means nothing has gone out yet.
+  const blank = readKnowledgeState(join(dir, 'nope.json'));
+  assert.equal(blank.todayCount, 0);
+  assert.deepEqual(blank.published, []);
+});
+
+test('the learning tab exposes the knowledge base panel', async () => {
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.match(source, /本地知识库（每天一篇 · 带图）/);
+  assert.match(source, /knowledgeBase/);
+  assert.match(source, /知识库文件夹路径/);
+  assert.match(source, /附带图片/);
+});

@@ -2610,6 +2610,75 @@ window.__ModuleLoader__.load({
               }, '📊 抓取并拆解榜单'))
           ),
 
+          // 4. 本地知识库：每天一篇，带图
+          h('section', { style: cardStyle },
+            h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 } },
+              h('div', null,
+                h('h2', { style: { margin: 0, fontSize: 15 } }, '④ 本地知识库（每天一篇 · 带图）'),
+                h('p', { style: { margin: '4px 0 0', fontSize: 12, color: C.faint, lineHeight: 1.6 } },
+                  '指向一个本地文件夹，里面每篇 .txt / .md 当一条选题：发帖 Worker 每天取一篇，按当前文风改写成原创推文，'
+                  + '并把同名的图片（同名.png/.jpg，或文件里写 image: xxx.png）一起发出去。')),
+              h('label', { style: { display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 } },
+                h('input', {
+                  type: 'checkbox',
+                  checked: config?.postSettings?.knowledgeBase?.enabled !== false && Boolean(config?.postSettings?.knowledgeBase?.path),
+                  onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), knowledgeBase: { ...(c.postSettings?.knowledgeBase || {}), enabled: e.target.checked } } })),
+                }),
+                '启用')),
+            h('label', { style: { ...labelStyle, marginTop: 10 } }, '知识库文件夹路径：'),
+            h('input', {
+              style: inputStyle,
+              placeholder: '例如：/Users/你的名字/Documents/知识库',
+              value: config?.postSettings?.knowledgeBase?.path || '',
+              onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), knowledgeBase: { ...(c.postSettings?.knowledgeBase || {}), path: e.target.value } } })),
+            }),
+            h('div', { style: { display: 'flex', gap: 16, marginTop: 6, flexWrap: 'wrap' } },
+              h('label', { style: { ...labelStyle, flex: '1 1 140px' } }, '每天发几篇：',
+                h('input', {
+                  type: 'number', min: 0, max: 5, style: inputStyle,
+                  value: config?.postSettings?.knowledgeBase?.perDay ?? 1,
+                  onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), knowledgeBase: { ...(c.postSettings?.knowledgeBase || {}), perDay: e.target.value === '' ? 1 : Number(e.target.value) } } })),
+                })),
+              h('label', { style: { ...labelStyle, flex: '1 1 160px' } }, '附带图片：',
+                h('label', { style: { display: 'flex', gap: 6, alignItems: 'center', fontSize: 13, marginTop: 4 } },
+                  h('input', {
+                    type: 'checkbox',
+                    checked: config?.postSettings?.knowledgeBase?.includeImage !== false,
+                    onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), knowledgeBase: { ...(c.postSettings?.knowledgeBase || {}), includeImage: e.target.checked } } })),
+                  }),
+                  '同名图片一起发'))),
+            h('label', { style: { ...labelStyle, marginTop: 8 } }, '额外要求（可选，会追加到提示词）：'),
+            h('textarea', {
+              style: { ...inputStyle, minHeight: 52, fontSize: 12 },
+              placeholder: '例如：只取材料里的观点，别写材料里没写的结论。',
+              value: config?.postSettings?.knowledgeBase?.prompt || '',
+              onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), knowledgeBase: { ...(c.postSettings?.knowledgeBase || {}), prompt: e.target.value } } })),
+            }),
+            (() => {
+              const kb = state?.knowledgeBase;
+              if (!kb?.enabled) return null;
+              return h('div', { style: { marginTop: 10, padding: '10px 12px', background: C.layerTwo, borderRadius: 8 } },
+                h('div', { style: { fontSize: 12, color: kb.exists ? C.muted : C.error, marginBottom: 6 } },
+                  kb.exists
+                    ? `目录可读 · 找到 ${kb.entries.length} 篇（${kb.entries.filter(e => e.imageName).length} 篇有配图）`
+                    : `目录不可用：${kb.error || '未知原因'}`),
+                kb.exists ? h('div', { style: { fontSize: 12, color: C.faint, marginBottom: 6 } },
+                  `已发 ${kb.publishedCount || 0} 篇 · 待发 ${kb.pendingCount || 0} 篇 · 今日已发 ${kb.todayCount || 0}/${kb.perDay ?? 1}（今天还能发 ${kb.quotaLeft || 0} 篇）`) : null,
+                kb.entries.length ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 220, overflowY: 'auto' } },
+                  ...kb.entries.slice(0, 60).map(entry => h('div', {
+                    key: entry.id,
+                    style: { display: 'flex', gap: 8, alignItems: 'center', padding: '5px 8px', background: C.surface, borderRadius: 6, fontSize: 12 },
+                  },
+                    h('span', { style: { flex: '1 1 120px', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+                      entry.title,
+                      entry.published ? h('span', { style: { marginLeft: 6, color: C.success } }, '✓已发') : null),
+                    entry.imageName ? h('span', { style: { color: C.success } }, `🖼 ${entry.imageName}`) : h('span', { style: { color: C.faint } }, '无图'),
+                    h('span', { style: { color: C.faint } }, `${Math.round(entry.bytes / 1024)} KB`)))) : null);
+            })(),
+            h('p', { style: { margin: '8px 0 0', fontSize: 11, color: C.faint, lineHeight: 1.6 } },
+              '先填好路径并保存，再点「🔄 刷新状态」就能看到扫到的篇目。Worker 每天按额度取一篇，发过的不会重复发。'),
+          ),
+
           // 3. 手动粘贴
           h('section', { style: cardStyle },
             h('h2', { style: { margin: 0, fontSize: 15 } }, '③ 手动粘贴高曝光帖拆解'),
