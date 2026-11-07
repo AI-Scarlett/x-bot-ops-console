@@ -34,6 +34,7 @@ export const POST_METRICS_PATH = join(APP_HOME, 'Library/Application Support/XBo
 export const LEARN_TRIGGER_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/learn_now.trigger');
 export const CRUISE_HISTORY_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/profile_cruise_history.json');
 export const TRENDS_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/trends.json');
+export const USED_HOT_TOPICS_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/used-hot-topics.json');
 export const COOKIE_SET_SENTINEL = '__COOKIE_SET__';
 export const CACHE_CLEANUP_STATE = join(homedir(), 'Library/Application Support/XBotOpsConsole/cache_cleanup.json');
 export const SAVE_LOG_PATH = join(homedir(), 'Library/Application Support/XBotOpsConsole/save-log.json');
@@ -480,6 +481,47 @@ export function readSaveLog(saveLogPath = SAVE_LOG_PATH) {
   }
 }
 
+export function normalizeHotTopic(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+export function readUsedHotTopics(path = USED_HOT_TOPICS_PATH) {
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8'));
+    const topics = Array.isArray(parsed.topics) ? parsed.topics : (Array.isArray(parsed) ? parsed : []);
+    return [...new Set(topics.map(normalizeHotTopic).filter(Boolean))].slice(-400);
+  } catch {
+    return [];
+  }
+}
+
+export function writeUsedHotTopics(topics, path = USED_HOT_TOPICS_PATH) {
+  const list = [...new Set((Array.isArray(topics) ? topics : []).map(normalizeHotTopic).filter(Boolean))].slice(-400);
+  const dir = dirname(path);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+  writeFileSync(path, `${JSON.stringify({ topics: list, updatedAt: new Date().toISOString() }, null, 2)}\n`, { mode: 0o600 });
+  return list;
+}
+
+export function rememberUsedHotTopics(topics, path = USED_HOT_TOPICS_PATH) {
+  const extra = (Array.isArray(topics) ? topics : [topics]).map(normalizeHotTopic).filter(Boolean);
+  if (!extra.length) return readUsedHotTopics(path);
+  return writeUsedHotTopics([...readUsedHotTopics(path), ...extra], path);
+}
+
+export function collectUsedHotTopics({ historyPosts = [], queueItems = [], extra = [] } = {}) {
+  const out = [];
+  for (const item of [...(Array.isArray(historyPosts) ? historyPosts : []), ...(Array.isArray(queueItems) ? queueItems : [])]) {
+    const topic = normalizeHotTopic(item?.hotTopic);
+    if (topic) out.push(topic);
+  }
+  for (const item of extra) {
+    const topic = normalizeHotTopic(item);
+    if (topic) out.push(topic);
+  }
+  return [...new Set(out)];
+}
+
 export function readTrends(trendsPath = TRENDS_PATH) {
   try {
     if (existsSync(trendsPath)) {
@@ -520,6 +562,7 @@ export function screenHotTopics(topics, filter = {}) {
   const prefer = (Array.isArray(filter.preferKeywords) ? filter.preferKeywords : []).map(item => String(item).toLowerCase());
   // Manually removed headlines are matched exactly (case-insensitive).
   const bannedTopics = new Set((Array.isArray(filter.excludedTopics) ? filter.excludedTopics : []).map(item => String(item).replace(/\s+/g, ' ').trim().toLowerCase()));
+  const usedTopics = new Set((Array.isArray(filter.usedTopics) ? filter.usedTopics : []).map(item => String(item).replace(/\s+/g, ' ').trim().toLowerCase()));
   const kept = [];
   const dropped = [];
   for (const raw of Array.isArray(topics) ? topics : []) {
@@ -529,6 +572,7 @@ export function screenHotTopics(topics, filter = {}) {
     if (topic.length < minLength) { dropped.push({ topic, reason: '太短' }); continue; }
     if (topic.length > maxLength) { dropped.push({ topic, reason: '太长' }); continue; }
     if (bannedTopics.has(lower)) { dropped.push({ topic, reason: '手动剔除' }); continue; }
+    if (usedTopics.has(lower)) { dropped.push({ topic, reason: '已用过' }); continue; }
     const hit = exclude.find(word => word && lower.includes(word));
     if (hit) { dropped.push({ topic, reason: `含敏感词「${hit}」` }); continue; }
     const bonus = prefer.some(word => word && lower.includes(word)) ? 1 : 0;
@@ -889,7 +933,7 @@ export function hotSafetyFloor() {
   return [...(DEFAULT_CONFIG.postSettings.hotFilter.excludeKeywords || [])];
 }
 
-export function effectiveHotFilter(postCfg, learnings) {
+export function effectiveHotFilter(postCfg, learnings, extra = {}) {
   const base = { ...(postCfg?.hotFilter || DEFAULT_CONFIG.postSettings.hotFilter) };
   const political = (postCfg?.politicalCap?.keywords || DEFAULT_CONFIG.postSettings.politicalCap?.keywords || []);
   base.excludeKeywords = [...new Set([
@@ -898,6 +942,10 @@ export function effectiveHotFilter(postCfg, learnings) {
     ...political,
     ...mergeBannedTopics(learnings, postCfg),
   ].map(item => String(item || '').trim()).filter(Boolean))];
+  // A headline that already became a post is never reused.
+  if (Array.isArray(extra.usedTopics) && extra.usedTopics.length) {
+    base.usedTopics = [...new Set(extra.usedTopics.map(normalizeHotTopic).filter(Boolean))];
+  }
   return base;
 }
 
@@ -2466,6 +2514,11 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       postHistory: postHistory.slice(-20),
       learnings: readLearnings(activeLearningsPath),
       trends: readTrends(activeTrendsPath),
+      usedHotTopics: collectUsedHotTopics({
+        historyPosts: postHistory,
+        queueItems: postQueue.queue,
+        extra: readUsedHotTopics(),
+      }),
       maintenance: { diskFreeBytes: diskFreeBytes(), cacheCleanup: readCacheCleanupState() },
       cruiseSweep: readCruiseSweep(),
       replyDiagnostics: readReplyDiagnostics(items.reply ? items.reply.stateDir : null),
@@ -2656,9 +2709,15 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
           .map(item => item?.text)
           .filter(Boolean)
         : [];
+      // A headline that already turned into a post is dropped from the board.
+      const usedHotTopics = collectUsedHotTopics({
+        historyPosts,
+        queueItems: readPostQueue(activeQueuePath).queue,
+        extra: readUsedHotTopics(),
+      });
       const trendPool = hotQuota > 0
         ? screenHotTopics(readTrends(activeTrendsPath).topics,
-            effectiveHotFilter(postCfg, { bannedTopics: bannedList })).usable
+            effectiveHotFilter(postCfg, { bannedTopics: bannedList }, { usedTopics: usedHotTopics })).usable
         : [];
       for (let k = trendPool.length - 1; k > 0; k -= 1) {
         const j = Math.floor(Math.random() * (k + 1));
@@ -2751,6 +2810,9 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         }
       }
       if (generated.length === 0) throw new Error(`未能成功生成推文草稿，请检查 LocalModelHub 服务状态${failures[0] ? `（${failures[0]}）` : ''}`);
+      // These headlines are now spoken for: never offer them again.
+      const usedNow = generated.map(item => item.hotTopic).filter(Boolean);
+      if (usedNow.length) rememberUsedHotTopics(usedNow);
       const { payload } = mutatePostQueue((current) => {
         current.queue.push(...generated);
       }, activeQueuePath, { maxSize });
@@ -2939,6 +3001,15 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         note: `已从「${source}」复制 ${session.length} 个 x.com Cookie，${done}/${applied.length} 个浏览器恢复登录。`
           + (done < applied.length ? ' 没成功的窗口请手动登录一次。' : '')
           + ' Cookie 值不会显示在界面或日志里。',
+      };
+    }
+    if (request.action === 'clear-used-hot-topics') {
+      const cleared = writeUsedHotTopics([]);
+      return {
+        ok: true,
+        action: 'clear-used-hot-topics',
+        usedHotTopics: cleared,
+        note: '已清空「已用过的热榜话题」，这些话题可以重新参与选题。',
       };
     }
     if (request.action === 'fetch-trends') {

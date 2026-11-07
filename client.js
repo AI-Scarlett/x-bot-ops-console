@@ -2312,7 +2312,29 @@ window.__ModuleLoader__.load({
                 h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 5, maxHeight: 110, overflowY: 'auto' } },
                   ...(excludedTopics.length
                     ? excludedTopics.map((topic, index) => chip({ topic, ok: false, reason: '手动剔除，点 ↩ 恢复' }, index, chipAction('↩', '恢复采用', () => restoreTopic(topic), C.accent)))
-                    : [h('span', { style: { fontSize: 12, color: C.faint } }, '（无。在上面的「会被采用的」里点 ✕ 就能剔除任意热榜话题）')])));
+                    : [h('span', { style: { fontSize: 12, color: C.faint } }, '（无。在上面的「会被采用的」里点 ✕ 就能剔除任意热榜话题）')])),
+                (() => {
+                  const used = state?.usedHotTopics || [];
+                  return h('div', { style: { marginTop: 12 } },
+                    h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
+                      h('div', { style: { fontSize: 12, fontWeight: '600', color: C.text } },
+                        `🔁 已用过的热榜话题（${used.length} 条，不会再被选中）`),
+                      used.length ? h('button', {
+                        type: 'button',
+                        style: { ...buttonStyle(false), padding: '2px 8px', fontSize: 11 },
+                        onClick: async () => {
+                          try {
+                            const res = await act('clear-used-hot-topics');
+                            setNotice(res?.note || '已清空已用过的热榜话题。');
+                            await refresh();
+                          } catch (err) { setError(`清空失败：${err.message || String(err)}`); }
+                        },
+                      }, '清空，允许重新使用') : null),
+                    h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 5, maxHeight: 90, overflowY: 'auto', marginTop: 4 } },
+                      ...(used.length
+                        ? used.slice(-60).map((topic, index) => chip({ topic, ok: false, reason: '已用过' }, index))
+                        : [h('span', { style: { fontSize: 12, color: C.faint } }, '（还没有用过任何热榜话题）')])));
+                })());
             })(),
             h('div', { style: { marginTop: 14, padding: '10px 12px', borderRadius: 8, background: C.layerTwo, border: `1px solid ${C.border}` } },
               h('div', { style: { fontSize: 13, fontWeight: '600', marginBottom: 6 } }, '🎯 热榜挑选规则'),

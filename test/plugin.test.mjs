@@ -2382,3 +2382,35 @@ test('the preferred topics are screened by the model and cached', async () => {
   assert.equal(preferredTopicCacheFresh({ at: now - 90000, source: ['a'] }, ['a']), false);
   assert.equal(preferredTopicCacheFresh({ at: 0, source: [] }, []), false);
 });
+
+test('a hot headline that already became a post is dropped from the board', async () => {
+  const {
+    screenHotTopics, collectUsedHotTopics, readUsedHotTopics, writeUsedHotTopics,
+    rememberUsedHotTopics, effectiveHotFilter, normalizeHotTopic,
+  } = await import('../index.js');
+  const topics = ['央行宣布降准', '某顶流塌房'];
+  // The filter carries the used headlines.
+  const filter = effectiveHotFilter({}, {}, { usedTopics: ['央行宣布降准'] });
+  assert.ok(filter.usedTopics.includes('央行宣布降准'));
+  const screened = screenHotTopics(topics, filter);
+  assert.deepEqual(screened.usable, ['某顶流塌房']);
+  assert.deepEqual(screened.dropped, [{ topic: '央行宣布降准', reason: '已用过' }]);
+  // Without the list the headline is usable again.
+  assert.deepEqual(screenHotTopics(topics, effectiveHotFilter({}, {})).usable, topics);
+
+  // The used list is collected from history, queue and the shared file.
+  const collected = collectUsedHotTopics({
+    historyPosts: [{ hotTopic: '央行宣布降准' }],
+    queueItems: [{ hotTopic: '某顶流塌房' }],
+    extra: ['第三条热点'],
+  });
+  assert.deepEqual(collected, ['央行宣布降准', '某顶流塌房', '第三条热点']);
+
+  // The shared file round-trips and de-duplicates.
+  const path = join(mkdtempSync(join(tmpdir(), 'xbot-used-')), 'used.json');
+  writeUsedHotTopics(['  央行宣布降准  ', '央行宣布降准', '另一条'], path);
+  assert.deepEqual(readUsedHotTopics(path), ['央行宣布降准', '另一条']);
+  rememberUsedHotTopics('第三条', path);
+  assert.deepEqual(readUsedHotTopics(path), ['央行宣布降准', '另一条', '第三条']);
+  assert.equal(normalizeHotTopic('  多  空格  '), '多 空格');
+});
