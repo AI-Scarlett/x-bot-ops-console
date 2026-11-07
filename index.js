@@ -1972,7 +1972,7 @@ function validateConfig(input) {
   for (const tier of copy.tiers) {
     if (!isRecord(tier) || typeof tier.id !== 'string' || typeof tier.label !== 'string' || tier.label.length > 80 || !Array.isArray(tier.handles) || !Number.isInteger(tier.rounds) || tier.rounds < 1 || tier.rounds > 1000 || typeof tier.replyStyle !== 'string' || tier.replyStyle.length > 5000 || tier.handles.length > 500) throw new TypeError('回复档位配置无效');
     tier.handles = tier.handles.map(sanitizeHandle);
-    for (const handle of tier.handles) { if (seen.has(handle)) throw new TypeError(`用户名重复：${handle}`); seen.add(handle); }
+    for (const handle of tier.handles) { if (seen.has(handle)) throw new TypeError(`用户名重复：${handle}（同一个账号只能出现在一个档位，请在界面上确认移动）`); seen.add(handle); }
   }
   const m = copy.model;
   if (!isRecord(m) || typeof m.name !== 'string' || m.name.length > 100 || (m.name.length > 0 && !/^[\w./:-]{1,100}$/.test(m.name)) || (m.endpointPort !== null && m.endpointPort !== undefined && (!Number.isInteger(m.endpointPort) || m.endpointPort < 1 || m.endpointPort > 65535))) throw new TypeError('模型设置无效');

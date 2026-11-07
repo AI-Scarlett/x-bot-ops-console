@@ -440,6 +440,54 @@ window.__ModuleLoader__.load({
           return { ...tier, [key]: value };
         }),
       }));
+      // A handle belongs to exactly one tier. Adding one that already sits in
+      // another tier moves it instead of failing the save with "用户名重复".
+      const tierOfHandle = (tiers, handle) => {
+        const needle = String(handle || '').trim().replace(/^@/, '').toLowerCase();
+        if (!needle) return null;
+        return (tiers || []).find(tier => (tier.handles || []).some(item => String(item).toLowerCase() === needle)) || null;
+      };
+      const commitTierHandles = (index, parsed) => {
+        const tiers = config?.tiers || [];
+        const target = tiers[index];
+        // The same handle twice in one tier would also trip the server check.
+        const unique = [...new Set(parsed)];
+        const moved = [];
+        for (const handle of unique) {
+          const owner = tierOfHandle(tiers, handle);
+          if (owner && owner.id !== target?.id) moved.push({ handle, from: owner });
+        }
+        const apply = () => {
+          updateConfig(current => {
+            const nextTiers = (current.tiers || []).map((tier, i) => {
+              if (i === index) return { ...tier, handles: unique };
+              // Drop the handles that moved into this tier.
+              const kept = (tier.handles || []).filter(item => !moved.some(entry => entry.handle === String(item).toLowerCase()));
+              return kept.length === (tier.handles || []).length ? tier : { ...tier, handles: kept };
+            });
+            return { ...current, tiers: nextTiers };
+          });
+          setTierHandlesText(current => {
+            const next = { ...current };
+            next[target?.id] = unique.join(', ');
+            for (const entry of moved) {
+              if (entry.from?.id && entry.from.id !== target?.id) {
+                const list = splitList(next[entry.from.id] ?? (tiers.find(t => t.id === entry.from.id)?.handles || []).join(', '));
+                next[entry.from.id] = list.filter(item => item !== entry.handle).join(', ');
+              }
+            }
+            return next;
+          });
+        };
+        if (!moved.length) { apply(); return; }
+        const lines = moved.map(entry => `· @${entry.handle}：从「${entry.from.label || entry.from.id}」移到「${target?.label || target?.id}」`);
+        setConfirmModal({
+          title: '这个账号已在其他档位',
+          prompt: `以下账号已经添加过，添加后会从原档位移过来：\n\n${lines.join('\n')}\n\n确认移动吗？`,
+          confirmText: '确认移动',
+          onConfirm: apply,
+        });
+      };
       const setPostFormat = (key, value) => updateConfig(c => ({
         ...c,
         postSettings: { ...(c.postSettings || {}), format: { ...(c.postSettings?.format || {}), [key]: value } },
@@ -776,8 +824,8 @@ window.__ModuleLoader__.load({
                     builtin.length ? h('button', {
                       type: 'button', disabled: busy,
                       onClick: () => {
-                        setTier(index, 'handles', builtin);
                         setTierHandlesText(current => ({ ...current, [tier.id]: builtin.join(', ') }));
+                        commitTierHandles(index, builtin);
                       },
                       style: { ...buttonStyle(), padding: '3px 8px', fontSize: 11 },
                     }, '一键恢复内置名单') : null),
@@ -789,7 +837,7 @@ window.__ModuleLoader__.load({
                     onBlur: e => {
                       const parsed = splitList(e.target.value);
                       setTierHandlesText(current => ({ ...current, [tier.id]: parsed.join(', ') }));
-                      setTier(index, 'handles', parsed);
+                      commitTierHandles(index, parsed);
                     },
                   }),
                   h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 4 } },

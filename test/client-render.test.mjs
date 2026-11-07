@@ -338,3 +338,52 @@ test('list fields keep exactly what you type and only parse on blur', () => {
     }
   } finally { app.close(); }
 });
+
+test('adding a handle that sits in another tier asks before moving it', async () => {
+  const tiers = [
+    { id: 'apex', label: 'Apex 档位', handles: [], rounds: 30, replyStyle: '' },
+    { id: 'tier1', label: 'Tier 1 档位', handles: ['老王'], rounds: 20, replyStyle: '' },
+    { id: 'tier2', label: 'Tier 2 档位', handles: [], rounds: 10, replyStyle: '' },
+    { id: 'tier3', label: 'Tier 3 档位', handles: [], rounds: 5, replyStyle: '' },
+    { id: 'tier4', label: 'Tier 4 档位', handles: [], rounds: 4, replyStyle: '' },
+    { id: 'other', label: '其他用户', handles: [], rounds: 3, replyStyle: '' },
+  ];
+  const app = mount({ tab: 'tiers', config: sampleConfig({ tiers }) });
+  try {
+    let tree = app.render();
+    // Find the tier that owns 老王 and the tier we add him to.
+    const tierBoxes = elements(tree).filter(node => node.type === 'textarea'
+      && String(node.props?.placeholder || '').includes('user1'));
+    assert.equal(tierBoxes.length, 6, 'the tier list renders a handle box per tier');
+    // 老王 sits in Tier 1; add him to the Apex tier instead.
+    const tier1Box = tierBoxes[0];
+
+    // Adding 老王 to the first tier (apex) must ask first.
+    tier1Box.props.onBlur({ target: { value: '老王, 新同学' } });
+    tree = app.render();
+    const modal = elements(tree).find(node => node.props && node.props.role === 'alertdialog');
+    assert.ok(modal, 'a confirmation dialog appears');
+    const dialogText = flatText(modal);
+    assert.match(dialogText, /老王/);
+    assert.match(dialogText, /Tier 1/);
+    assert.match(dialogText, /Apex/);
+    // Nothing moved before the confirmation.
+    assert.equal(app.config().tiers[1].handles.length, 1);
+
+    // Confirm: the handle moves, the other tier loses it, the new one stays.
+    const confirmBtn = elements(modal).find(node => node.type === 'button' && flatText(node).includes('确认移动'));
+    assert.ok(confirmBtn, 'the dialog has a confirm button');
+    confirmBtn.props.onClick({ preventDefault() {}, target: {} });
+    tree = app.render();
+    const after = app.config().tiers;
+    assert.deepEqual(after[0].handles, ['老王', '新同学']);
+    assert.deepEqual(after[1].handles, [], 'the old tier gave the handle away');
+    // A handle nobody owns is added straight away, without a dialog.
+    const tierBoxes2 = elements(tree).filter(node => node.type === 'textarea'
+      && String(node.props?.placeholder || '').includes('user1'));
+    tierBoxes2[2].props.onBlur({ target: { value: '李四' } });
+    tree = app.render();
+    assert.equal(elements(tree).filter(node => node.props && node.props.role === 'alertdialog').length, 0);
+    assert.deepEqual(app.config().tiers[2].handles, ['李四']);
+  } finally { app.close(); }
+});
