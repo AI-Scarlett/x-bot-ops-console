@@ -2643,13 +2643,22 @@ window.__ModuleLoader__.load({
                   onChange: e => updateConfig(c => ({ ...c, learningSettings: { ...(c.learningSettings || {}), xTrends: { ...(c.learningSettings?.xTrends || {}), maxSamples: e.target.value === '' ? 12 : Number(e.target.value) } } })),
                 })),
             ),
-            h('label', { style: { ...labelStyle, marginTop: 4 } }, '固定搜索词（可选，逗号分隔；留空 = 用 X 实时热搜榜）：'),
-            h('input', {
-              style: inputStyle,
-              placeholder: '例如：外卖, 足疗, 中年失业',
-              value: config?.learningSettings?.xTrends?.keywords || '',
-              onChange: e => updateConfig(c => ({ ...c, learningSettings: { ...(c.learningSettings || {}), xTrends: { ...(c.learningSettings?.xTrends || {}), keywords: e.target.value } } })),
-            }),
+            h('label', { style: { ...labelStyle, marginTop: 4 } }, '固定搜索词（随时可改；逗号分隔，中英文逗号都认；留空 = 用 X 实时热搜榜）：'),
+            (() => {
+              const keywordsText = config?.learningSettings?.xTrends?.keywords || '';
+              const words = keywordsText.split(/[,，、\n]/).map(word => word.trim()).filter(Boolean);
+              return h('div', null,
+                h('textarea', {
+                  style: { ...inputStyle, minHeight: 62, fontSize: 12, resize: 'vertical' },
+                  placeholder: '例如：外卖, 足疗, 中年失业',
+                  value: keywordsText,
+                  onChange: e => updateConfig(c => ({ ...c, learningSettings: { ...(c.learningSettings || {}), xTrends: { ...(c.learningSettings?.xTrends || {}), keywords: e.target.value } } })),
+                }),
+                h('div', { style: { fontSize: 11, color: C.faint, margin: '-4px 0 8px', lineHeight: 1.6 } },
+                  words.length
+                    ? `当前 ${words.length} 个搜索词：${words.slice(0, 12).join('、')}${words.length > 12 ? ' …' : ''}｜每轮抓 ${config?.learningSettings?.xTrends?.maxTrends ?? 3} 个，按轮次轮换（约 ${Math.max(1, Math.ceil(words.length / Math.max(1, config?.learningSettings?.xTrends?.maxTrends ?? 3)))} 轮跑完一遍）`
+                    : '留空时每轮从 X 实时热搜榜里取话题搜。'));
+            })(),
             state?.learnings?.lastCycle?.xTrendsNote ? h('p', { style: { margin: '6px 0 0', fontSize: 12, color: C.muted } },
               `上次 X 热搜：${state.learnings.lastCycle.xTrendsNote}（样本 ${state.learnings.lastCycle.xTrendsConsidered ?? 0} 条，新套路 ${state.learnings.lastCycle.xTrendsLearned ?? 0} 条）`) : null,
           ),
