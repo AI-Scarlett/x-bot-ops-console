@@ -127,6 +127,7 @@ export const FIELD_SIDE = Object.freeze({
   'persona.summary': 'both',
   'persona.forbidden': 'both',
   'persona.rules': 'both',
+  'handleProfiles': 'both',
   'cruiseSettings.autoVisitInvited': 'profile',
   'cruiseSettings.model': 'profile',
   'cruiseSettings.customPrompt': 'profile',
@@ -1507,6 +1508,9 @@ const DEFAULT_CONFIG = Object.freeze({
   },
   specialReplies: { asksAi: '若被问及是否为 AI，请如实回答。', asksToStop: '若对方要求停止，请勿继续回复该讨论串。', care: '礼貌回应并围绕话题。', affection: '尊重回应，不诱导私下联系。', namedAddress: '以中性方式回应称呼。', daddy: '拒绝不合适的亲属角色扮演。', imperialTitle: '不宣称现实中的权力或身份。', vernacular: '仅在明确请求时翻译。' },
   rules: { skipFinanceComments: true, skipGrokMentions: false, doNotReplyAfterStopRequest: true, keepSensitiveKeyOutOfUi: true, mentionPauseDuringQuiet: true, mentionPauseDuringFullStop: true },
+  // Per-handle notes: the real nickname and the gender. The X display name is
+  // often not the nickname, and the gender decides how a reply addresses them.
+  handleProfiles: {},
 
 // The account persona constrains who is speaking in every generated text:
   // posts, comments and replies must stay inside this identity.
@@ -2049,6 +2053,21 @@ function validateConfig(input) {
         copy.replySettings[key] = [...new Set(copy.replySettings[key].map(item => String(item || '').trim()).filter(Boolean))];
       }
     }
+  }
+  if (copy.handleProfiles !== undefined) {
+    if (!isRecord(copy.handleProfiles)) throw new TypeError('重点名单备注无效');
+    const cleaned = {};
+    for (const [rawHandle, profile] of Object.entries(copy.handleProfiles)) {
+      const handle = String(rawHandle || '').trim().replace(/^@/, '').toLowerCase();
+      if (!HANDLE_PATTERN.test(handle)) throw new TypeError(`重点名单备注里的用户名无效：${rawHandle}`);
+      if (!isRecord(profile)) throw new TypeError(`重点名单备注无效：${handle}`);
+      const nickname = String(profile.nickname || '').trim().slice(0, 60);
+      const gender = ['male', 'female', 'unknown'].includes(profile.gender) ? profile.gender : 'unknown';
+      const note = String(profile.note || '').trim().slice(0, 200);
+      if (!nickname && gender === 'unknown' && !note) continue;
+      cleaned[handle] = { nickname, gender, note };
+    }
+    copy.handleProfiles = cleaned;
   }
   if (copy.persona !== undefined) {
     if (!isRecord(copy.persona)) throw new TypeError('人设配置无效');

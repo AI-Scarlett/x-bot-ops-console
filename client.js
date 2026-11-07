@@ -842,7 +842,43 @@ window.__ModuleLoader__.load({
                   }),
                   h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 4 } },
                     ...handlesList.map(handle => h('button', { key: handle, type: 'button', disabled: busy, title: `移除 @${handle}`, onClick: () => { const next = handlesList.filter(item => item !== handle); setTier(index, 'handles', next); setTierHandlesText(current => ({ ...current, [tier.id]: next.join(', ') })); }, style: { ...buttonStyle(), padding: '3px 8px', fontSize: 11 } }, `@${handle} ×`)),
-                    !handlesList.length ? h('small', { style: { color: C.faint } }, '名单为空，可在上方输入框新增。') : null)),
+                    !handlesList.length ? h('small', { style: { color: C.faint } }, '名单为空，可在上方输入框新增。') : null),
+                  handlesList.length ? h('div', { style: { marginTop: 10, padding: '8px 10px', background: C.layerTwo, borderRadius: 8 } },
+                    h('div', { style: { fontSize: 12, fontWeight: '600', marginBottom: 6 } }, '🏷 昵称与性别标注（回复、评论时按这里称呼）'),
+                    h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
+                      ...handlesList.map(handle => {
+                        const key = String(handle).toLowerCase();
+                        const profile = config?.handleProfiles?.[key] || { nickname: '', gender: 'unknown', note: '' };
+                        const setProfile = patch => updateConfig(current => {
+                          const next = { ...(current.handleProfiles || {}) };
+                          const merged = { ...(next[key] || { nickname: '', gender: 'unknown', note: '' }), ...patch };
+                          if (!merged.nickname && merged.gender === 'unknown' && !merged.note) delete next[key];
+                          else next[key] = merged;
+                          return { ...current, handleProfiles: next };
+                        });
+                        return h('div', { key: handle, style: { display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' } },
+                          h('span', { style: { fontSize: 12, minWidth: 120, color: C.text } }, `@${handle}`),
+                          h('input', {
+                            style: { ...inputStyle, flex: '1 1 140px', margin: 0, padding: '4px 8px', fontSize: 12 },
+                            placeholder: '昵称（X 显示名之外的称呼）',
+                            value: profile.nickname || '',
+                            onChange: e => setProfile({ nickname: e.target.value }),
+                          }),
+                          h('select', {
+                            style: { ...inputStyle, flex: '0 0 92px', margin: 0, padding: '4px 6px', fontSize: 12, cursor: 'pointer' },
+                            value: profile.gender || 'unknown',
+                            onChange: e => setProfile({ gender: e.target.value }),
+                          },
+                            h('option', { value: 'unknown' }, '性别未知'),
+                            h('option', { value: 'male' }, '男'),
+                            h('option', { value: 'female' }, '女')),
+                          h('input', {
+                            style: { ...inputStyle, flex: '1 1 160px', margin: 0, padding: '4px 8px', fontSize: 12 },
+                            placeholder: '备注（可选，如「别叫姐」）',
+                            value: profile.note || '',
+                            onChange: e => setProfile({ note: e.target.value }),
+                          }));
+                      }))) : null),
 
                 h('div', { style: { display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 10 } },
                   h('div', { style: { flex: '1 1 200px' } },

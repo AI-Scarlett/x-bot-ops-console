@@ -2414,3 +2414,41 @@ test('a hot headline that already became a post is dropped from the board', asyn
   assert.deepEqual(readUsedHotTopics(path), ['央行宣布降准', '另一条', '第三条']);
   assert.equal(normalizeHotTopic('  多  空格  '), '多 空格');
 });
+
+test('a handle can carry a nickname and a gender', async () => {
+  const { validateConfig, DEFAULT_CONFIG } = await import('../index.js');
+  const config = structuredClone(DEFAULT_CONFIG);
+  assert.deepEqual(config.handleProfiles, {});
+  config.handleProfiles = {
+    '4ggug': { nickname: '阿呆', gender: 'male', note: '别叫姐' },
+    '@Someone': { nickname: '', gender: 'female' },
+  };
+  const validated = validateConfig(config);
+  // The key is normalised and the values are kept.
+  assert.deepEqual(validated.handleProfiles['4ggug'], { nickname: '阿呆', gender: 'male', note: '别叫姐' });
+  assert.equal(validated.handleProfiles['someone'].gender, 'female');
+  // An unknown gender falls back to "unknown".
+  const odd = structuredClone(DEFAULT_CONFIG);
+  odd.handleProfiles = { x: { nickname: 'n', gender: 'other' } };
+  assert.equal(validateConfig(odd).handleProfiles.x.gender, 'unknown');
+  // A profile without anything worth keeping is dropped.
+  const empty = structuredClone(DEFAULT_CONFIG);
+  empty.handleProfiles = { x: { nickname: '', gender: 'unknown', note: '' } };
+  assert.deepEqual(validateConfig(empty).handleProfiles, {});
+  // Broken values are rejected.
+  const badHandle = structuredClone(DEFAULT_CONFIG);
+  badHandle.handleProfiles = { 'bad handle!': { nickname: 'n', gender: 'male' } };
+  assert.throws(() => validateConfig(badHandle), /用户名无效/);
+  const notObject = structuredClone(DEFAULT_CONFIG);
+  notObject.handleProfiles = { x: 'nope' };
+  assert.throws(() => validateConfig(notObject), /重点名单备注无效/);
+});
+
+test('the priority list shows the nickname and gender editor', async () => {
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.match(source, /昵称与性别标注/);
+  assert.match(source, /handleProfiles/);
+  assert.match(source, /gender: 'unknown'/);
+  assert.match(source, /option.*value: 'male'.*男/s);
+  assert.match(source, /option.*value: 'female'.*女/s);
+});
