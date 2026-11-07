@@ -2694,7 +2694,8 @@ window.__ModuleLoader__.load({
                       setNotice(`已选择：${res.path}（记得点「保存到共享配置」）`);
                     }
                   } catch (err) {
-                    setError(err.message || String(err));
+                    const detail = err.message || String(err);
+                    setError(`${detail}（若提示未知操作，重启一次 DeepSeek Harness 即可启用原生文件夹选择）`);
                   } finally {
                     setPickingFolder(false);
                   }
