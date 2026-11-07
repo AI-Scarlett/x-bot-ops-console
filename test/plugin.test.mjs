@@ -1842,6 +1842,28 @@ test('special person rows are operator-managed: migrate, validate, add, delete',
   assert.throws(() => validateConfig(tooLongRow), /4000 字/);
 });
 
+test('the 重点名单 row itself can request one classical plus one vernacular line', () => {
+  const cfg = structuredClone(DEFAULT_CONFIG);
+  cfg.handleProfiles = {
+    white_talk: { nickname: '', gender: 'unknown', note: '', bilingual: true },
+    plain_friend: { nickname: '老友', gender: 'male', note: '' },
+  };
+  const out = validateConfig(cfg).handleProfiles;
+  // A row that only carries the switch must survive, otherwise the setting would
+  // vanish the moment the operator saves.
+  assert.equal(out.white_talk.bilingual, true);
+  assert.equal(out.plain_friend.bilingual, false);
+
+  const wrong = structuredClone(DEFAULT_CONFIG);
+  wrong.handleProfiles = { white_talk: { nickname: '', gender: 'unknown', note: '', bilingual: 'yes' } };
+  assert.throws(() => validateConfig(wrong), /文言\+白话/);
+
+  // Rows with nothing at all are still dropped, so the file does not accumulate junk.
+  const empty = structuredClone(DEFAULT_CONFIG);
+  empty.handleProfiles = { ghost: { nickname: '', gender: 'unknown', note: '' } };
+  assert.deepEqual(validateConfig(empty).handleProfiles, {});
+});
+
 test('specific people can ask for one classical line plus one vernacular line', () => {
   // The switch is optional: rows written before it existed stay valid and off.
   const plain = structuredClone(DEFAULT_CONFIG);
@@ -1872,6 +1894,9 @@ test('reply tab ships the special-person editor with add and delete controls', a
   assert.match(source, /两行：文言 \+ 白话/);
   assert.match(source, /wantsBilingualStyle/);
   assert.match(source, /bilingual: row\.bilingual === true/);
+  // The 重点名单 rows carry the same switch, right after 昵称/性别/备注.
+  assert.match(source, /'文言\+白话'/);
+  assert.match(source, /setProfile\(\{ bilingual: e\.target\.checked \}\)/);
 });
 
 test('post skeleton fingerprint is stable and drives the 48h cooldown', async () => {
@@ -2444,7 +2469,7 @@ test('a handle can carry a nickname and a gender', async () => {
   };
   const validated = validateConfig(config);
   // The key is normalised and the values are kept.
-  assert.deepEqual(validated.handleProfiles['4ggug'], { nickname: '阿呆', gender: 'male', note: '别叫姐' });
+  assert.deepEqual(validated.handleProfiles['4ggug'], { nickname: '阿呆', gender: 'male', note: '别叫姐', bilingual: false });
   assert.equal(validated.handleProfiles['someone'].gender, 'female');
   // An unknown gender falls back to "unknown".
   const odd = structuredClone(DEFAULT_CONFIG);

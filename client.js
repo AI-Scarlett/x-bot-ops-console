@@ -778,7 +778,8 @@ window.__ModuleLoader__.load({
                     h(SideBadge, { side: 'both' }))),
                 person.bilingual === true
                   ? h('div', { style: { marginTop: -2, fontSize: 12, color: C.muted, lineHeight: 1.6 } },
-                    '已开启：对这个人的回复和评论都发两行 —— 第一行文言文，第二行是它的白话译文。不用再在下面的规则里重复写。')
+                    '已开启：对这个人的回复和评论都发两行 —— 第一行文言文，第二行是它的白话译文。不用再在下面的规则里重复写。'
+                    + '（这个人如果也在「重点名单」里，直接在那一行勾「文言+白话」更省事，两边等价。）')
                   : null,
                 h('div', { style: { fontSize: 12, color: C.muted } }, specialRowNote(person.id)),
                 h('label', { style: labelStyle }, '专属回复规则 / 附加提示词（空白则只用 Worker 内置规则）',
@@ -867,15 +868,17 @@ window.__ModuleLoader__.load({
                     ...handlesList.map(handle => h('button', { key: handle, type: 'button', disabled: busy, title: `移除 @${handle}`, onClick: () => { const next = handlesList.filter(item => item !== handle); setTier(index, 'handles', next); setTierHandlesText(current => ({ ...current, [tier.id]: next.join(', ') })); }, style: { ...buttonStyle(), padding: '3px 8px', fontSize: 11 } }, `@${handle} ×`)),
                     !handlesList.length ? h('small', { style: { color: C.faint } }, '名单为空，可在上方输入框新增。') : null),
                   handlesList.length ? h('div', { style: { marginTop: 10, padding: '8px 10px', background: C.layerTwo, borderRadius: 8 } },
-                    h('div', { style: { fontSize: 12, fontWeight: '600', marginBottom: 6 } }, '🏷 昵称与性别标注（回复、评论时按这里称呼）'),
+                    h('div', { style: { fontSize: 12, fontWeight: '600', marginBottom: 2 } }, '🏷 昵称与性别标注（回复、评论时按这里称呼）'),
+                    h('div', { style: { fontSize: 11, color: C.faint, marginBottom: 6, lineHeight: 1.5 } },
+                      '最右边的「文言+白话」勾上后，对这位的回复和评论都发两行：第一行文言文，第二行白话译文。'),
                     h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
                       ...handlesList.map(handle => {
                         const key = String(handle).toLowerCase();
-                        const profile = config?.handleProfiles?.[key] || { nickname: '', gender: 'unknown', note: '' };
+                        const profile = config?.handleProfiles?.[key] || { nickname: '', gender: 'unknown', note: '', bilingual: false };
                         const setProfile = patch => updateConfig(current => {
                           const next = { ...(current.handleProfiles || {}) };
-                          const merged = { ...(next[key] || { nickname: '', gender: 'unknown', note: '' }), ...patch };
-                          if (!merged.nickname && merged.gender === 'unknown' && !merged.note) delete next[key];
+                          const merged = { ...(next[key] || { nickname: '', gender: 'unknown', note: '', bilingual: false }), ...patch };
+                          if (!merged.nickname && merged.gender === 'unknown' && !merged.note && !merged.bilingual) delete next[key];
                           else next[key] = merged;
                           return { ...current, handleProfiles: next };
                         });
@@ -900,7 +903,13 @@ window.__ModuleLoader__.load({
                             placeholder: '备注（可选，如「别叫姐」）',
                             value: profile.note || '',
                             onChange: e => setProfile({ note: e.target.value }),
-                          }));
+                          }),
+                          h('label', {
+                            title: '勾上以后：对这个人的回复和评论都发两行，第一行文言文，第二行白话译文',
+                            style: { display: 'flex', gap: 5, alignItems: 'center', fontSize: 12, color: profile.bilingual ? C.accent : C.muted, cursor: 'pointer', whiteSpace: 'nowrap' },
+                          },
+                            h('input', { type: 'checkbox', checked: profile.bilingual === true, onChange: e => setProfile({ bilingual: e.target.checked }) }),
+                            '文言+白话'));
                       }))) : null),
 
                 h('div', { style: { display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 10 } },

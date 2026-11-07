@@ -412,7 +412,16 @@ test('the priority list lets you mark a nickname and a gender', async () => {
     // Typing a nickname stores it under the handle.
     nickInputs[0].props.onChange({ target: { value: '阿呆' } });
     tree = app.render();
-    assert.deepEqual(app.config().handleProfiles['4ggug'], { nickname: '阿呆', gender: 'unknown', note: '' });
+    assert.deepEqual(app.config().handleProfiles['4ggug'], { nickname: '阿呆', gender: 'unknown', note: '', bilingual: false });
+
+    // The same row carries the 文言+白话 switch; turning it on keeps the other fields.
+    const bilingualBox = elements(tree).filter(node => node.type === 'input' && node.props?.type === 'checkbox')
+      .find(node => node.props?.onChange && String(node.props.onChange).includes('setProfile'));
+    assert.ok(bilingualBox, 'a bilingual checkbox is rendered per handle');
+    assert.equal(bilingualBox.props.checked, false);
+    bilingualBox.props.onChange({ target: { checked: true } });
+    tree = app.render();
+    assert.deepEqual(app.config().handleProfiles['4ggug'], { nickname: '阿呆', gender: 'unknown', note: '', bilingual: true });
 
     // Picking a gender stores it too.
     const select = elements(tree).find(node => node.type === 'select' && node.props?.value === 'unknown');

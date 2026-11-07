@@ -2262,8 +2262,10 @@ function validateConfig(input) {
       const nickname = String(profile.nickname || '').trim().slice(0, 60);
       const gender = ['male', 'female', 'unknown'].includes(profile.gender) ? profile.gender : 'unknown';
       const note = String(profile.note || '').trim().slice(0, 200);
-      if (!nickname && gender === 'unknown' && !note) continue;
-      cleaned[handle] = { nickname, gender, note };
+      if (profile.bilingual !== undefined && typeof profile.bilingual !== 'boolean') throw new TypeError(`重点名单备注的「文言+白话」开关无效：${handle}`);
+      const bilingual = profile.bilingual === true;
+      if (!nickname && gender === 'unknown' && !note && !bilingual) continue;
+      cleaned[handle] = { nickname, gender, note, bilingual };
     }
     copy.handleProfiles = cleaned;
   } else {
