@@ -2957,8 +2957,9 @@ window.__ModuleLoader__.load({
               const gapMin = config?.cruiseSettings?.visitGapMinSeconds ?? 120;
               const gapMax = config?.cruiseSettings?.visitGapMaxSeconds ?? 240;
               const avgGap = (Number(gapMin) + Number(gapMax)) / 2;
-              // A visit costs page loads + a model call + the gap, ~3.5 minutes.
-              const perVisit = 210 + avgGap;
+              // Measured on the live account: ~4 minutes of work per profile
+              // (page loads + reading + model call + like/comment), then the gap.
+              const perVisit = 240 + avgGap;
               const ceiling = Math.max(1, Math.floor(86400 / perVisit));
               const used = state?.cruiseSweep?.dailyCount ?? 0;
               const pool = state?.cruiseSweep?.knownCount || state?.cruiseSweep?.visitedCount || 0;
