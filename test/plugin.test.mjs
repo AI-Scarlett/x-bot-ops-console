@@ -2320,19 +2320,21 @@ test('the account persona constrains every generated text', async () => {
     forbidden: ['上班', '打工', '男大', '学生'],
     rules: '自称「余」，语气克制',
   };
-  // The prompt names the persona and forbids contradictions.
+  // The prompt names the persona as a constraint, not as the subject of the post.
   const block = personaBlock({ persona });
   assert.match(block, /男性，中年失业/);
-  assert.match(block, /第一人称视角/);
+  assert.match(block, /只作约束，禁止写进正文/);
+  assert.match(block, /不是帖子的题材/);
   assert.match(block, /不得出现与人设矛盾的细节/);
   assert.match(block, /自称「余」/);
   // A disabled persona adds nothing.
   assert.equal(personaBlock({ persona: { ...persona, enabled: false } }), '');
   assert.equal(personaBlock({ persona: { enabled: true } }), '');
 
-  // The hard check catches identity slips.
+  // The hard check catches identity slips and reciting the persona itself.
   assert.deepEqual(personaViolations('我今日仍在上班，尔且问我何时返校。', { persona }), ['上班']);
-  assert.deepEqual(personaViolations('余今日于旧书市场摆摊，所得微薄。', { persona }), []);
+  assert.ok(personaViolations('余年过不惑，失业之后，昼骑车送膳。', { persona }).includes('失业'));
+  assert.deepEqual(personaViolations('卿含笑牵余手，低声求入帐共欢。', { persona }), []);
   assert.deepEqual(personaViolations('上班', { persona: { ...persona, enabled: false } }), []);
 
   // Config validation.

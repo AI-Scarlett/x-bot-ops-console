@@ -1173,25 +1173,35 @@ export function personaBlock(config = {}) {
   const rules = String(persona.rules || '').trim();
   if (!summary && !rules) return '';
   const parts = [];
-  if (summary) parts.push(`【人设（必须严格遵守）】${summary}`);
-  parts.push('全篇以该人设的第一人称视角叙述，身份、性别、年龄、职业、处境必须与人设一致；'
-    + '不得出现与人设矛盾的细节（例如人设是中年失业者，就不能写自己正在上班、在读大学、当学生）。'
-    + '叙述的对象可以是别人，但说话的人始终是这个人。');
+  if (summary) parts.push(`【人设（只作约束，禁止写进正文）】${summary}`);
+  parts.push('人设只是说话人的身份背景，用来约束能写什么、不能写什么，不是帖子的题材。'
+    + '正文不要交代、复述或解释这个人设：不要写年龄、失业、职业、兼职、收入来源，'
+    + '不要写「余年过…」「失业后…」「白昼…夜…」这类自我介绍。'
+    + '身份、性别、年龄、职业、处境必须与人设一致，不得出现与人设矛盾的细节'
+    + '（例如人设是中年失业者，就不能写自己正在上班、在读大学、当学生）。'
+    + '叙述对象可以是别人，但说话的人始终是这个人。');
   if (rules) parts.push(rules);
   return `\n\n${parts.join('\n')}`;
 }
 
+// Identity details the narrator must not announce. The persona is a constraint,
+// not the subject of the post.
+const PERSONA_SELF_INTRO = ['失业', '失职', '兼职', '跑外卖', '送餐', '送膳', '足疗', '足肆', '旧书市', '旧书市场', '年过', '年近', '不惑', '知命'];
+
 export function personaViolations(text, config = {}) {
   const persona = (config && config.persona) || {};
   if (persona.enabled === false) return [];
-  const forbidden = Array.isArray(persona.forbidden) ? persona.forbidden : [];
-  if (!forbidden.length) return [];
   const body = String(text || '');
   const hits = [];
+  const forbidden = Array.isArray(persona.forbidden) ? persona.forbidden : [];
   for (const word of forbidden) {
     const needle = String(word || '').trim();
-    if (!needle) continue;
-    if (body.includes(needle)) hits.push(needle);
+    if (needle && body.includes(needle)) hits.push(needle);
+  }
+  const summary = String(persona.summary || '');
+  for (const word of PERSONA_SELF_INTRO) {
+    if (!summary.includes(word)) continue;
+    if (body.includes(word) && !hits.includes(word)) hits.push(word);
   }
   return hits;
 }

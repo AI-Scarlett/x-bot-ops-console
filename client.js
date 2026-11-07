@@ -840,7 +840,7 @@ window.__ModuleLoader__.load({
               h('div', null,
                 h('h2', { style: { margin: 0, fontSize: 15 } }, '🎭 账号人设（谁在说话）'),
                 h('p', { style: { margin: '4px 0 0', fontSize: 12, color: C.faint, lineHeight: 1.6 } },
-                  '人设会同时约束发帖、评论、主页评论和提及回复：叙述视角必须与身份一致（例如人设是男性，就不能写成女性视角；人设是中年失业者，就不能写自己还在上班或在校）。')),
+                  '人设只约束「谁在说话」，不会写进帖子正文。发帖、评论、主页评论和提及回复都必须与身份一致（例如人设是男性，就不能写成女性视角；人设是中年失业者，就不能写自己还在上班或在校），但正文不要自我介绍这份人设。')),
               h('label', { style: { display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 } },
                 h('input', {
                   type: 'checkbox',
@@ -873,7 +873,7 @@ window.__ModuleLoader__.load({
               })),
             }),
             h('p', { style: { margin: '6px 0 0', fontSize: 11, color: C.faint, lineHeight: 1.6 } },
-              '禁用词是「硬校验」：命中就不发（评论记成 skipped_persona_conflict，回复与草稿会被丢弃重生成）。所以别填太宽泛的字，比如「女」会把正常提到对方的帖子也毙掉。'),
+              '人设是后台约束，不是题材。正文复述人设（失业、兼职、跑外卖等）也会被丢掉重写。禁用词命中就不发，所以别填太宽泛的字，比如「女」会把正常提到对方的帖子也毙掉。'),
           ),
 
           // 配置备份与恢复
