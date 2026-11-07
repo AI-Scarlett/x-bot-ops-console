@@ -630,6 +630,15 @@ function normalizeLearnings(data) {
       note: typeof history.note === 'string' ? history.note.slice(0, 500) : '',
       posts: (Array.isArray(history.posts) ? history.posts : []).filter(isRecord).slice(0, 100),
     },
+    lastCycle: isRecord(data.lastCycle) ? {
+      lastRunAt: typeof data.lastCycle.lastRunAt === 'string' ? data.lastCycle.lastRunAt : null,
+      historyNote: String(data.lastCycle.historyNote || '').slice(0, 500),
+      historyConsidered: Number.isFinite(Number(data.lastCycle.historyConsidered)) ? Number(data.lastCycle.historyConsidered) : 0,
+      historyLearned: Number.isFinite(Number(data.lastCycle.historyLearned)) ? Number(data.lastCycle.historyLearned) : 0,
+      benchmarkNote: String(data.lastCycle.benchmarkNote || '').slice(0, 500),
+      benchmarkConsidered: Number.isFinite(Number(data.lastCycle.benchmarkConsidered)) ? Number(data.lastCycle.benchmarkConsidered) : 0,
+      benchmarkLearned: Number.isFinite(Number(data.lastCycle.benchmarkLearned)) ? Number(data.lastCycle.benchmarkLearned) : 0,
+    } : null,
     updatedAt: typeof data.updatedAt === 'string' ? data.updatedAt : null,
   };
 }

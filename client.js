@@ -2088,7 +2088,7 @@ window.__ModuleLoader__.load({
                     setLearnBusy(false);
                   }
                 }
-              }, learnBusy ? '⏳ 学习中...' : '🚀 立即学习一次')),
+              }, learnBusy ? '⏳ 已通知 Worker...' : '🚀 立即学习一次')),
             h('label', { style: { display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginTop: 10 } },
               h('input', { type: 'checkbox', checked: config?.learningSettings?.enabled !== false, onChange: e => updateConfig(c => ({ ...c, learningSettings: { ...(c.learningSettings || {}), enabled: e.target.checked } })) }),
               '启用发帖学习模块', h(SideBadge, { side: 'post' })),
@@ -2155,9 +2155,21 @@ window.__ModuleLoader__.load({
                   updateConfig(c => ({ ...c, learningSettings: { ...(c.learningSettings || {}), maxSamples: val } }));
                 } }))
             ),
+            state?.learnTriggerPending
+              ? h('div', { style: { marginTop: 10, padding: '8px 10px', background: C.raised, borderRadius: 8, fontSize: 12, color: C.accent } },
+                '已收到「立即学习」请求，发帖 Worker 正在处理（需要连上 Chrome）。完成后这条提示会消失，下方时间戳会更新。')
+              : null,
+            state?.learnings?.lastCycle?.lastRunAt
+              ? h('div', { style: { marginTop: 10, fontSize: 12, color: C.muted, lineHeight: 1.7 } },
+                `整轮学习：${state.learnings.lastCycle.lastRunAt}`,
+                ` · 历史窗 ${state.learnings.lastCycle.historyConsidered} 条（达标 ${state.learnings.lastCycle.historyLearned}）`,
+                state.learnings.lastCycle.historyNote ? ` · ${state.learnings.lastCycle.historyNote}` : '',
+                ` · 榜单 ${state.learnings.lastCycle.benchmarkConsidered} 条（新套路 ${state.learnings.lastCycle.benchmarkLearned}）`,
+                state.learnings.lastCycle.benchmarkNote ? ` · ${state.learnings.lastCycle.benchmarkNote}` : '')
+              : null,
             state?.learnings?.history?.lastRunAt ? h('div', { style: { marginTop: 12 } },
               h('div', { style: { fontSize: 12, color: C.muted, marginBottom: 6 } },
-                `上次学习：${state.learnings.history.lastRunAt} · 分析 ${state.learnings.history.considered} 条 · 达标 ${state.learnings.history.learned} 条`,
+                `上次历史窗学习：${state.learnings.history.lastRunAt} · 分析 ${state.learnings.history.considered} 条 · 达标 ${state.learnings.history.learned} 条`,
                 state.learnings.history.note ? ` · ${state.learnings.history.note}` : ''),
               state.learnings.history.posts?.length ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
                 ...state.learnings.history.posts.slice(0, 20).map((post, idx) => h('div', {
