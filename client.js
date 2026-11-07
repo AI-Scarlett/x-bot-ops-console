@@ -359,6 +359,7 @@ window.__ModuleLoader__.load({
       const [tierHandlesText, setTierHandlesText] = React.useState({});
       const [learnPasteText, setLearnPasteText] = React.useState('');
       const [learnBusy, setLearnBusy] = React.useState(false);
+      const [pickingFolder, setPickingFolder] = React.useState(false);
       const [styleGuideDraft, setStyleGuideDraft] = React.useState('');
       const [bannedDraft, setBannedDraft] = React.useState('');
       // Last X login probe: { comment: true, reply: false, ... } when it ran.
@@ -1562,7 +1563,7 @@ window.__ModuleLoader__.load({
                       item.topic ? h('span', { style: { fontSize: 11, color: C.faint } }, `话题：${item.topic}`) : null,
                       item.createdAt ? h('span', { style: { fontSize: 11, color: C.faint } }, new Date(item.createdAt).toLocaleTimeString()) : null
                     ),
-                    item.hotTopic ? h('div', { style: { fontSize: 11, color: '#c07a00', marginBottom: 4, fontWeight: '600' } }, `🔥 借热点：${item.hotTopic}`) : null,
+                    item.hotTopic ? h('div', { style: { fontSize: 11, color: C.muted, marginBottom: 4, fontWeight: '600' } }, `🔥 借热点：${item.hotTopic}`) : null,
                     h('p', { style: { margin: 0, fontSize: 13, color: C.text, lineHeight: 1.5, whiteSpace: 'pre-wrap' } }, item.text)
                   ),
                   h('div', { style: { display: 'flex', gap: 6, flexShrink: 0 } },
@@ -1614,7 +1615,7 @@ window.__ModuleLoader__.load({
                   padding: '6px 16px',
                   fontSize: 13,
                   background: mode === key ? C.accent : 'transparent',
-                  color: mode === key ? '#fff' : C.muted,
+                  color: mode === key ? C.onAccent : C.muted,
                   borderColor: mode === key ? C.accent : C.border,
                 },
               }, text);
@@ -2047,7 +2048,7 @@ window.__ModuleLoader__.load({
                           onChange: e => patchSlot(slot.id, { endHour: e.target.value === '' ? 24 : Number(e.target.value) }),
                         }),
                         '时'),
-                      active ? h('span', { style: { fontSize: 11, padding: '2px 8px', borderRadius: 999, background: C.accent, color: '#fff' } }, '当前生效') : null,
+                      active ? h('span', { style: { fontSize: 11, padding: '2px 8px', borderRadius: 999, background: C.accent, color: C.onAccent, fontWeight: '600' } }, '当前生效') : null,
                       h('button', {
                         type: 'button',
                         disabled: busy,
@@ -2249,7 +2250,10 @@ window.__ModuleLoader__.load({
                 ` · 历史窗 ${state.learnings.lastCycle.historyConsidered} 条（达标 ${state.learnings.lastCycle.historyLearned}）`,
                 state.learnings.lastCycle.historyNote ? ` · ${state.learnings.lastCycle.historyNote}` : '',
                 ` · 榜单 ${state.learnings.lastCycle.benchmarkConsidered} 条（新套路 ${state.learnings.lastCycle.benchmarkLearned}）`,
-                state.learnings.lastCycle.benchmarkNote ? ` · ${state.learnings.lastCycle.benchmarkNote}` : '')
+                state.learnings.lastCycle.benchmarkNote ? ` · ${state.learnings.lastCycle.benchmarkNote}` : '',
+                state.learnings.lastCycle.xTrendsConsidered != null
+                  ? ` · X 热搜 ${state.learnings.lastCycle.xTrendsConsidered} 条（新套路 ${state.learnings.lastCycle.xTrendsLearned ?? 0}）`
+                  : '')
               : null,
             state?.learnings?.history?.lastRunAt ? h('div', { style: { marginTop: 12 } },
               h('div', { style: { fontSize: 12, color: C.muted, marginBottom: 6 } },
@@ -2610,6 +2614,46 @@ window.__ModuleLoader__.load({
               }, '📊 抓取并拆解榜单'))
           ),
 
+          // 3.5 X 热搜：用发帖浏览器自己抓
+          h('section', { style: cardStyle },
+            h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 } },
+              h('div', null,
+                h('h2', { style: { margin: 0, fontSize: 15 } }, '③ X 热搜拆解（用发帖浏览器抓，不用填 Key）'),
+                h('p', { style: { margin: '4px 0 0', fontSize: 12, color: C.faint, lineHeight: 1.6 } },
+                  '发帖 Worker 会在自己的浏览器里开一个后台标签页，打开 x.com/explore 抓热搜榜，'
+                  + '再逐个搜索榜单话题、取前排推文交给大模型拆解。不会占用评论/回复的浏览器，也不会动发帖用的那个标签页。')),
+              h('label', { style: { display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 } },
+                h('input', {
+                  type: 'checkbox',
+                  checked: config?.learningSettings?.xTrends?.enabled !== false,
+                  onChange: e => updateConfig(c => ({ ...c, learningSettings: { ...(c.learningSettings || {}), xTrends: { ...(c.learningSettings?.xTrends || {}), enabled: e.target.checked } } })),
+                }),
+                '启用')),
+            h('div', { style: { display: 'flex', gap: 16, marginTop: 6, flexWrap: 'wrap' } },
+              h('label', { style: { ...labelStyle, flex: '1 1 140px' } }, '每轮抓几个话题：',
+                h('input', {
+                  type: 'number', min: 0, max: 10, style: inputStyle,
+                  value: config?.learningSettings?.xTrends?.maxTrends ?? 3,
+                  onChange: e => updateConfig(c => ({ ...c, learningSettings: { ...(c.learningSettings || {}), xTrends: { ...(c.learningSettings?.xTrends || {}), maxTrends: e.target.value === '' ? 3 : Number(e.target.value) } } })),
+                })),
+              h('label', { style: { ...labelStyle, flex: '1 1 140px' } }, '每轮最多几条样本：',
+                h('input', {
+                  type: 'number', min: 2, max: 40, style: inputStyle,
+                  value: config?.learningSettings?.xTrends?.maxSamples ?? 12,
+                  onChange: e => updateConfig(c => ({ ...c, learningSettings: { ...(c.learningSettings || {}), xTrends: { ...(c.learningSettings?.xTrends || {}), maxSamples: e.target.value === '' ? 12 : Number(e.target.value) } } })),
+                })),
+            ),
+            h('label', { style: { ...labelStyle, marginTop: 4 } }, '固定搜索词（可选，逗号分隔；留空 = 用 X 实时热搜榜）：'),
+            h('input', {
+              style: inputStyle,
+              placeholder: '例如：外卖, 足疗, 中年失业',
+              value: config?.learningSettings?.xTrends?.keywords || '',
+              onChange: e => updateConfig(c => ({ ...c, learningSettings: { ...(c.learningSettings || {}), xTrends: { ...(c.learningSettings?.xTrends || {}), keywords: e.target.value } } })),
+            }),
+            state?.learnings?.lastCycle?.xTrendsNote ? h('p', { style: { margin: '6px 0 0', fontSize: 12, color: C.muted } },
+              `上次 X 热搜：${state.learnings.lastCycle.xTrendsNote}（样本 ${state.learnings.lastCycle.xTrendsConsidered ?? 0} 条，新套路 ${state.learnings.lastCycle.xTrendsLearned ?? 0} 条）`) : null,
+          ),
+
           // 4. 本地知识库：每天一篇，带图
           h('section', { style: cardStyle },
             h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 } },
@@ -2626,12 +2670,37 @@ window.__ModuleLoader__.load({
                 }),
                 '启用')),
             h('label', { style: { ...labelStyle, marginTop: 10 } }, '知识库文件夹路径：'),
-            h('input', {
-              style: inputStyle,
-              placeholder: '例如：/Users/你的名字/Documents/知识库',
-              value: config?.postSettings?.knowledgeBase?.path || '',
-              onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), knowledgeBase: { ...(c.postSettings?.knowledgeBase || {}), path: e.target.value } } })),
-            }),
+            h('div', { style: { display: 'flex', gap: 8, alignItems: 'stretch' } },
+              h('input', {
+                style: { ...inputStyle, flex: 1, minWidth: 0, margin: '4px 0 10px' },
+                placeholder: '点右边的「选择文件夹」，或直接粘贴路径',
+                value: config?.postSettings?.knowledgeBase?.path || '',
+                onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), knowledgeBase: { ...(c.postSettings?.knowledgeBase || {}), path: e.target.value } } })),
+              }),
+              h('button', {
+                type: 'button',
+                disabled: busy || pickingFolder,
+                style: { ...buttonStyle(false), margin: '4px 0 10px', whiteSpace: 'nowrap', flexShrink: 0 },
+                onClick: async () => {
+                  setPickingFolder(true);
+                  try {
+                    const res = await act('pick-folder', undefined, {
+                      prompt: '选择知识库文件夹',
+                      defaultLocation: config?.postSettings?.knowledgeBase?.path || '',
+                    });
+                    if (res?.cancelled) { setNotice('已取消选择文件夹。'); return; }
+                    if (res?.path) {
+                      updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), knowledgeBase: { ...(c.postSettings?.knowledgeBase || {}), path: res.path, enabled: true } } }));
+                      setNotice(`已选择：${res.path}（记得点「保存到共享配置」）`);
+                    }
+                  } catch (err) {
+                    setError(err.message || String(err));
+                  } finally {
+                    setPickingFolder(false);
+                  }
+                }
+              }, pickingFolder ? '⏳ 选择中...' : '📁 选择文件夹'),
+            ),
             h('div', { style: { display: 'flex', gap: 16, marginTop: 6, flexWrap: 'wrap' } },
               h('label', { style: { ...labelStyle, flex: '1 1 140px' } }, '每天发几篇：',
                 h('input', {

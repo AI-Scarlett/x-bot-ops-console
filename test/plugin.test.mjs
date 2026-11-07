@@ -2523,6 +2523,45 @@ test('a note that already went out is marked and the daily quota is counted', as
   assert.deepEqual(blank.published, []);
 });
 
+test('X hot search is a configurable learning source', async () => {
+  const { DEFAULT_CONFIG, validateConfig } = await import('../index.js');
+  const config = structuredClone(DEFAULT_CONFIG);
+  assert.equal(config.learningSettings.xTrends.enabled, true);
+  assert.equal(config.learningSettings.xTrends.maxTrends, 3);
+  assert.equal(config.learningSettings.xTrends.keywords, '');
+
+  const tuned = structuredClone(DEFAULT_CONFIG);
+  tuned.learningSettings.xTrends = { enabled: false, maxTrends: 5, maxSamples: 20, keywords: '外卖, 足疗' };
+  const saved = validateConfig(tuned);
+  assert.equal(saved.learningSettings.xTrends.maxTrends, 5);
+  assert.equal(saved.learningSettings.xTrends.keywords, '外卖, 足疗');
+
+  const tooMany = structuredClone(DEFAULT_CONFIG);
+  tooMany.learningSettings.xTrends = { maxTrends: 11 };
+  assert.throws(() => validateConfig(tooMany), /话题数需为 0~10/);
+  const badSamples = structuredClone(DEFAULT_CONFIG);
+  badSamples.learningSettings.xTrends = { maxSamples: 1 };
+  assert.throws(() => validateConfig(badSamples), /样本数需为 2~40/);
+  const badSwitch = structuredClone(DEFAULT_CONFIG);
+  badSwitch.learningSettings.xTrends = { enabled: 'yes' };
+  assert.throws(() => validateConfig(badSwitch), /X 热搜开关无效/);
+});
+
+test('the folder picker asks the system and reports a cancel as harmless', async () => {
+  const { pickFolder } = await import('../index.js');
+  await assert.rejects(() => pickFolder({}, 'linux'), /当前系统不支持原生选择框/);
+});
+
+test('the learning tab exposes the X hot search panel and a folder picker', async () => {
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.match(source, /X 热搜拆解（用发帖浏览器抓，不用填 Key）/);
+  assert.match(source, /xTrends/);
+  assert.match(source, /选择文件夹/);
+  assert.match(source, /pick-folder/);
+  // The dark-mode bug: white text on the theme accent is invisible in dark mode.
+  assert.doesNotMatch(source, /background: C\.accent[^}]*color: '#fff'/);
+});
+
 test('the learning tab exposes the knowledge base panel', async () => {
   const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
   assert.match(source, /本地知识库（每天一篇 · 带图）/);

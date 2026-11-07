@@ -143,6 +143,7 @@ export const FIELD_SIDE = Object.freeze({
   'learningSettings.injectIntoPost': 'post',
   'learningSettings.model': 'post',
   'learningSettings.trendSources': 'post',
+  'learningSettings.xTrends': 'post',
 });
 
 export function resolveDshPnpm() {
@@ -562,6 +563,30 @@ export function readKnowledgeEntry(filePath) {
 }
 
 export const KNOWLEDGE_STATE_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/knowledge_base.json');
+
+export async function pickFolder({ prompt: promptText = '选择知识库文件夹', defaultLocation = '' } = {}, platform = process.platform) {
+  if (platform !== 'darwin') {
+    throw new Error('当前系统不支持原生选择框，请直接粘贴文件夹路径');
+  }
+  const prompt = String(promptText).replace(/["\\]/g, '').slice(0, 120);
+  const fallback = String(defaultLocation || '').replace(/["\\]/g, '');
+  const script = fallback
+    ? `POSIX path of (choose folder with prompt "${prompt}" default location (POSIX file "${fallback}"))`
+    : `POSIX path of (choose folder with prompt "${prompt}")`;
+  try {
+    const { stdout } = await execFileAsync('/usr/bin/osascript', ['-e', script], { timeout: 180000, maxBuffer: 16384 });
+    const chosen = String(stdout || '').trim();
+    if (!chosen) return { ok: true, cancelled: true, path: '' };
+    return { ok: true, cancelled: false, path: chosen.replace(/\/+$/, '') };
+  } catch (error) {
+    const message = String(error?.stderr || error?.message || error);
+    // A cancel (-128) or a killed dialog is not an error for the operator.
+    if (error?.signal || /-128/.test(message) || /User canceled/i.test(message)) {
+      return { ok: true, cancelled: true, path: '' };
+    }
+    throw new Error(`打开文件夹选择框失败：${message.slice(0, 200)}`);
+  }
+}
 
 export function readKnowledgeState(statePath = KNOWLEDGE_STATE_PATH) {
   const blank = { published: [], days: {}, today: new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10), todayCount: 0 };
@@ -1780,6 +1805,8 @@ const DEFAULT_CONFIG = Object.freeze({
     injectIntoPost: true,
     benchmarkUrl: 'https://xbangdan.com/posts/',
     model: '',
+    // X's own trending list, mined through the posting browser (no API key).
+    xTrends: { enabled: true, maxTrends: 3, maxSamples: 12, keywords: '' },
     // Hot-search boards mined for trending topics.
     trendSources: [
       { id: 'baidu', label: '百度热搜', url: 'https://top.baidu.com/board?tab=realtime', enabled: true, cookie: '' },
@@ -2490,6 +2517,21 @@ function validateConfig(input) {
       if (ls[key] !== undefined && typeof ls[key] !== 'boolean') throw new TypeError('发帖学习开关无效');
     }
     if (ls.model !== undefined && typeof ls.model !== 'string') throw new TypeError('学习模型设置无效');
+    if (ls.xTrends !== undefined) {
+      if (!isRecord(ls.xTrends)) throw new TypeError('X 热搜配置格式无效');
+      const xt = ls.xTrends;
+      if (xt.enabled !== undefined && typeof xt.enabled !== 'boolean') throw new TypeError('X 热搜开关无效');
+      if (xt.maxTrends !== undefined) {
+        const value = Number(xt.maxTrends);
+        if (!Number.isFinite(value) || value < 0 || value > 10) throw new TypeError('X 热搜每轮话题数需为 0~10');
+      }
+      if (xt.maxSamples !== undefined) {
+        const value = Number(xt.maxSamples);
+        if (!Number.isFinite(value) || value < 2 || value > 40) throw new TypeError('X 热搜每轮样本数需为 2~40');
+      }
+      if (xt.keywords !== undefined && typeof xt.keywords !== 'string') throw new TypeError('X 热搜关键词必须是文本');
+      if (xt.keywords !== undefined && xt.keywords.length > 400) throw new TypeError('X 热搜关键词过长（最多 400 字）');
+    }
     if (ls.trendSources !== undefined) {
       if (!Array.isArray(ls.trendSources) || ls.trendSources.length > 20) throw new TypeError('热榜来源最多 20 个');
       const seen = new Set();
@@ -2709,6 +2751,13 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         config: saved, configHash: result.hash, runtimeConfigApplied: true, workerAcceptance: acceptance,
         note: '共享配置已写入，两个工作进程会在下轮读取。重点名单与人物特例句柄/提示词两侧生效；回复轮次、免回复名单由回复进程读取；skipFinanceComments 由评论进程读取。specialReplies 及其余规则仍为建议字段，不保证改变 Worker 分支逻辑。',
       };
+    }
+    if (request.action === 'pick-folder') {
+      const picked = await pickFolder({
+        prompt: request.prompt || '选择知识库文件夹',
+        defaultLocation: request.defaultLocation || '',
+      }, platform);
+      return { ok: true, action: 'pick-folder', ...picked };
     }
     if (request.action === 'update-plugin') {
       const updateResult = await executePluginUpdate();
