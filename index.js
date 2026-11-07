@@ -120,6 +120,8 @@ export const FIELD_SIDE = Object.freeze({
   'cruiseSettings.crawlFollowing': 'profile',
   'cruiseSettings.crawlFollowers': 'profile',
   'cruiseSettings.interactionCooldownHours': 'profile',
+  'cruiseSettings.visitGapMinSeconds': 'profile',
+  'cruiseSettings.visitGapMaxSeconds': 'profile',
   'cruiseSettings.tierSweepHours': 'profile',
   'cruiseSettings.commentsPerProfile': 'profile',
   'cruiseSettings.likesPerProfile': 'profile',
@@ -329,6 +331,8 @@ export function readCruiseSweep(historyPath = CRUISE_HISTORY_PATH) {
     const toIso = value => (Number.isFinite(Number(value)) && Number(value) > 0)
       ? new Date(Number(value) * 1000).toISOString()
       : null;
+    const today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+    const sameDay = String(data?.date || '') === today;
     return {
       pending,
       total: Number.isFinite(Number(sweep.total)) ? Number(sweep.total) : 0,
@@ -336,6 +340,11 @@ export function readCruiseSweep(historyPath = CRUISE_HISTORY_PATH) {
       startedAt: toIso(sweep.startedAt),
       lastFinishedAt: toIso(sweep.lastFinishedAt),
       nextHandle: pending > 0 ? String(sweep.pending[0] || '') : '',
+      date: String(data?.date || ''),
+      // The worker resets this counter at midnight; a stale date means zero.
+      dailyCount: sameDay ? Number(data?.daily_count || 0) : 0,
+      visitedCount: data?.visited && typeof data.visited === 'object' ? Object.keys(data.visited).length : 0,
+      knownCount: Array.isArray(data?.known) ? data.known.length : 0,
     };
   } catch {
     return { pending: 0, total: 0, done: 0, lastFinishedAt: null, startedAt: null };
@@ -1781,6 +1790,9 @@ const DEFAULT_CONFIG = Object.freeze({
   cruiseSettings: {
     enabled: true,
     dailyTargetCount: 50,
+    // Seconds to wait between two profile visits: the real throughput knob.
+    visitGapMinSeconds: 120,
+    visitGapMaxSeconds: 240,
     crawlFollowing: true,
     crawlFollowers: true,
     interactionCooldownHours: 48,
@@ -2467,6 +2479,16 @@ function validateConfig(input) {
       const daily = Number(copy.cruiseSettings.dailyTargetCount);
       if (!Number.isInteger(daily) || daily < 1 || daily > 500) throw new TypeError('每日巡航上限次数需为 1~500 之间的整数');
       copy.cruiseSettings.dailyTargetCount = daily;
+    }
+    if (copy.cruiseSettings.visitGapMinSeconds !== undefined) {
+      const gap = Number(copy.cruiseSettings.visitGapMinSeconds);
+      if (!Number.isInteger(gap) || gap < 15 || gap > 1800) throw new TypeError('巡航两次拜访的最小间隔需为 15~1800 秒');
+      copy.cruiseSettings.visitGapMinSeconds = gap;
+    }
+    if (copy.cruiseSettings.visitGapMaxSeconds !== undefined) {
+      const gap = Number(copy.cruiseSettings.visitGapMaxSeconds);
+      if (!Number.isInteger(gap) || gap < 15 || gap > 1800) throw new TypeError('巡航两次拜访的最大间隔需为 15~1800 秒');
+      copy.cruiseSettings.visitGapMaxSeconds = gap;
     }
     if (copy.cruiseSettings.interactionCooldownHours !== undefined) {
       const cd = Number(copy.cruiseSettings.interactionCooldownHours);

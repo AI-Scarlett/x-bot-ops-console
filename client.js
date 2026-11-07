@@ -2951,11 +2951,43 @@ window.__ModuleLoader__.load({
             }),
             h('label', { style: { ...labelStyle, marginTop: 10 } }, '主页巡航互动提示词（自定义 Prompt）：', h(SideBadge, { side: 'profile' })),
             h('textarea', { style: { ...inputStyle, minHeight: 90 }, value: config?.cruiseSettings?.customPrompt || '', onChange: e => updateConfig(c => ({ ...c, cruiseSettings: { ...(c.cruiseSettings || {}), customPrompt: e.target.value } })) }),
-            h('label', { style: { ...labelStyle, marginTop: 10 } }, '每日巡航互动上限次数：', h(SideBadge, { side: 'profile' })),
-            h('input', { type: 'number', min: 1, max: 200, style: inputStyle, value: config?.cruiseSettings?.dailyTargetCount ?? 50, onChange: e => {
-              const val = e.target.value === '' ? '' : Number(e.target.value);
-              updateConfig(c => ({ ...c, cruiseSettings: { ...(c.cruiseSettings || {}), dailyTargetCount: val } }));
-            } }),
+            h('label', { style: { ...labelStyle, marginTop: 10 } }, '每日巡航互动上限（今天最多拜访多少个主页）：', h(SideBadge, { side: 'profile' })),
+            (() => {
+              const cap = config?.cruiseSettings?.dailyTargetCount ?? 50;
+              const gapMin = config?.cruiseSettings?.visitGapMinSeconds ?? 120;
+              const gapMax = config?.cruiseSettings?.visitGapMaxSeconds ?? 240;
+              const avgGap = (Number(gapMin) + Number(gapMax)) / 2;
+              // A visit costs page loads + a model call + the gap, ~3.5 minutes.
+              const perVisit = 210 + avgGap;
+              const ceiling = Math.max(1, Math.floor(86400 / perVisit));
+              const used = state?.cruiseSweep?.dailyCount ?? 0;
+              const pool = state?.cruiseSweep?.knownCount || state?.cruiseSweep?.visitedCount || 0;
+              return h('div', null,
+                h('input', { type: 'number', min: 1, max: 500, style: inputStyle, value: cap, onChange: e => {
+                  const val = e.target.value === '' ? '' : Number(e.target.value);
+                  updateConfig(c => ({ ...c, cruiseSettings: { ...(c.cruiseSettings || {}), dailyTargetCount: val } }));
+                } }),
+                h('div', { style: { fontSize: 11, color: C.faint, margin: '-4px 0 8px', lineHeight: 1.7 } },
+                  `今天已拜访 ${used} 个主页${pool ? `｜已建立候选池 ${pool} 个` : ''}。`
+                  + `这个上限是给 X 反自动化风控留的余量：每次拜访 = 打开主页 + 读帖 + 写评论 + 点赞，`
+                  + `跑太快会被判定"looks automated"（评论/回复已经被限流过）。`,
+                  h('br', null),
+                  `当前节奏下单个主页约 ${Math.round(perVisit / 60)} 分钟，理论上限约 ${ceiling} 个/天；`
+                  + `真要扩面，调小下面的「拜访间隔」比调大这个上限更有效——上限只是刹车，间隔才是油门。`));
+            })(),
+            h('div', { style: { display: 'flex', gap: 16, marginTop: 6, flexWrap: 'wrap' } },
+              h('label', { style: { ...labelStyle, flex: '1 1 160px', margin: 0 } }, '拜访间隔下限（秒）：', h(SideBadge, { side: 'profile' }),
+                h('input', {
+                  type: 'number', min: 15, max: 1800, style: inputStyle,
+                  value: config?.cruiseSettings?.visitGapMinSeconds ?? 120,
+                  onChange: e => updateConfig(c => ({ ...c, cruiseSettings: { ...(c.cruiseSettings || {}), visitGapMinSeconds: e.target.value === '' ? 120 : Number(e.target.value) } })),
+                })),
+              h('label', { style: { ...labelStyle, flex: '1 1 160px', margin: 0 } }, '拜访间隔上限（秒）：', h(SideBadge, { side: 'profile' }),
+                h('input', {
+                  type: 'number', min: 15, max: 1800, style: inputStyle,
+                  value: config?.cruiseSettings?.visitGapMaxSeconds ?? 240,
+                  onChange: e => updateConfig(c => ({ ...c, cruiseSettings: { ...(c.cruiseSettings || {}), visitGapMaxSeconds: e.target.value === '' ? 240 : Number(e.target.value) } })),
+                }))),
             h('label', { style: { ...labelStyle, marginTop: 10 } }, '同一主页重复互动冷却时长（小时）：', h(SideBadge, { side: 'profile' })),
             h('input', { type: 'number', min: 1, max: 720, style: inputStyle, value: config?.cruiseSettings?.interactionCooldownHours ?? 48, onChange: e => {
               const val = e.target.value === '' ? '' : Number(e.target.value);

@@ -2569,3 +2569,40 @@ test('the learning tab exposes the knowledge base panel', async () => {
   assert.match(source, /知识库文件夹路径/);
   assert.match(source, /附带图片/);
 });
+
+test('the cruise cap explains itself and the visit gap is configurable', async () => {
+  const { DEFAULT_CONFIG, validateConfig, readCruiseSweep } = await import('../index.js');
+  const config = structuredClone(DEFAULT_CONFIG);
+  assert.equal(config.cruiseSettings.visitGapMinSeconds, 120);
+  assert.equal(config.cruiseSettings.visitGapMaxSeconds, 240);
+
+  const tuned = structuredClone(DEFAULT_CONFIG);
+  tuned.cruiseSettings.visitGapMinSeconds = 45;
+  tuned.cruiseSettings.visitGapMaxSeconds = 90;
+  assert.equal(validateConfig(tuned).cruiseSettings.visitGapMinSeconds, 45);
+
+  const tooFast = structuredClone(DEFAULT_CONFIG);
+  tooFast.cruiseSettings.visitGapMinSeconds = 1;
+  assert.throws(() => validateConfig(tooFast), /最小间隔需为 15~1800 秒/);
+
+  // The daily counter is only trusted for today's date.
+  const dir = mkdtempSync(join(tmpdir(), 'xbot-cruise-'));
+  const historyPath = join(dir, 'profile_cruise_history.json');
+  const today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+  writeFileSync(historyPath, JSON.stringify({ date: today, daily_count: 37, visited: { a: 1, b: 2 }, known: ['a', 'b', 'c'], sweep: { pending: [], total: 3, done: 3 } }));
+  const sweep = readCruiseSweep(historyPath);
+  assert.equal(sweep.dailyCount, 37);
+  assert.equal(sweep.visitedCount, 2);
+  assert.equal(sweep.knownCount, 3);
+
+  writeFileSync(historyPath, JSON.stringify({ date: '2000-01-01', daily_count: 99, visited: {}, sweep: {} }));
+  assert.equal(readCruiseSweep(historyPath).dailyCount, 0, 'a stale day must not report yesterday as today');
+});
+
+test('the cruise panel shows the quota explanation and the gap inputs', async () => {
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.match(source, /今天最多拜访多少个主页/);
+  assert.match(source, /上限只是刹车，间隔才是油门/);
+  assert.match(source, /拜访间隔下限/);
+  assert.match(source, /visitGapMaxSeconds/);
+});
