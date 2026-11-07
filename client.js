@@ -120,6 +120,13 @@ window.__ModuleLoader__.load({
     // delete all happen in the UI. Older configs only carried apex/yijing
     // objects, so the editor migrates those into rows as well — otherwise the
     // list would look empty until the first save.
+    // A rule that says 白话 + 翻译/译文 means the same thing as the checkbox, so
+    // configs written before the checkbox existed keep working.
+    function wantsBilingualStyle(style) {
+      const text = String(style || '');
+      return text.includes('白话') && /(翻译|译文|译成|译作)/.test(text);
+    }
+
     function normalizeSpecialRows(people) {
       const source = people && typeof people === 'object' ? people : {};
       if (Array.isArray(source.list)) {
@@ -129,6 +136,7 @@ window.__ModuleLoader__.load({
           handle: String(row.handle || '').toLowerCase(),
           enabled: row.enabled !== false,
           replyStyle: String(row.replyStyle || ''),
+          bilingual: row.bilingual === true || (row.bilingual === undefined && wantsBilingualStyle(row.replyStyle)),
           rules: row.rules && typeof row.rules === 'object' ? row.rules : {},
         }));
       }
@@ -142,6 +150,7 @@ window.__ModuleLoader__.load({
           handle: String(legacy.handle).toLowerCase(),
           enabled: legacy.enabled !== false,
           replyStyle: String(legacy.replyStyle || ''),
+          bilingual: legacy.bilingual === true || wantsBilingualStyle(legacy.replyStyle),
           rules: legacy.rules && typeof legacy.rules === 'object' ? legacy.rules : {},
         });
       }
@@ -758,7 +767,19 @@ window.__ModuleLoader__.load({
                   h('label', { style: labelStyle }, '显示名称（只影响界面）',
                     h('input', { style: inputStyle, maxLength: 40, value: person.label || '', onChange: e => updateSpecialRow(person.id, { label: e.target.value }) })),
                   h('label', { style: { ...labelStyle, display: 'flex', gap: 8, alignItems: 'center', marginTop: 28, fontSize: 13 } },
-                    h('input', { type: 'checkbox', checked: person.enabled !== false, onChange: e => updateSpecialRow(person.id, { enabled: e.target.checked }) }), '启用该人物特例')),
+                    h('input', { type: 'checkbox', checked: person.enabled !== false, onChange: e => updateSpecialRow(person.id, { enabled: e.target.checked }) }), '启用该人物特例'),
+                  h('label', { style: { ...labelStyle, display: 'flex', gap: 8, alignItems: 'center', marginTop: 28, fontSize: 13 } },
+                    h('input', {
+                      type: 'checkbox',
+                      checked: person.bilingual === true,
+                      onChange: e => updateSpecialRow(person.id, { bilingual: e.target.checked }),
+                    }),
+                    '两行：文言 + 白话',
+                    h(SideBadge, { side: 'both' }))),
+                person.bilingual === true
+                  ? h('div', { style: { marginTop: -2, fontSize: 12, color: C.muted, lineHeight: 1.6 } },
+                    '已开启：对这个人的回复和评论都发两行 —— 第一行文言文，第二行是它的白话译文。不用再在下面的规则里重复写。')
+                  : null,
                 h('div', { style: { fontSize: 12, color: C.muted } }, specialRowNote(person.id)),
                 h('label', { style: labelStyle }, '专属回复规则 / 附加提示词（空白则只用 Worker 内置规则）',
                   h('textarea', {
@@ -3097,6 +3118,7 @@ window.__ModuleLoader__.load({
                 legacyPeople[row.id] = {
                   handle: row.handle, enabled: row.enabled !== false,
                   replyStyle: row.replyStyle || '', rules: row.rules || {},
+                  bilingual: row.bilingual === true,
                 };
               }
               // A deleted row must actually stop contributing rules, otherwise the
@@ -3116,6 +3138,7 @@ window.__ModuleLoader__.load({
                   list: keptRows.map(row => ({
                     id: row.id, label: row.label, handle: row.handle,
                     enabled: row.enabled !== false, replyStyle: row.replyStyle || '',
+                    bilingual: row.bilingual === true,
                   })),
                   skipReplyHandles: splitList(skipHandlesText),
                 },

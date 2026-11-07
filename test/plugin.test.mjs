@@ -1842,6 +1842,21 @@ test('special person rows are operator-managed: migrate, validate, add, delete',
   assert.throws(() => validateConfig(tooLongRow), /4000 字/);
 });
 
+test('specific people can ask for one classical line plus one vernacular line', () => {
+  // The switch is optional: rows written before it existed stay valid and off.
+  const plain = structuredClone(DEFAULT_CONFIG);
+  plain.specialPersons.list = [{ id: 'a', label: 'A', handle: 'white_talk', enabled: true, replyStyle: '' }];
+  assert.equal(validateConfig(plain).specialPersons.list[0].bilingual, false);
+
+  const on = structuredClone(DEFAULT_CONFIG);
+  on.specialPersons.list = [{ id: 'a', label: 'A', handle: 'white_talk', enabled: true, replyStyle: '', bilingual: true }];
+  assert.equal(validateConfig(on).specialPersons.list[0].bilingual, true);
+
+  const wrong = structuredClone(DEFAULT_CONFIG);
+  wrong.specialPersons.list = [{ id: 'a', label: 'A', handle: 'white_talk', enabled: true, replyStyle: '', bilingual: 'yes' }];
+  assert.throws(() => validateConfig(wrong), /文言\+白话/);
+});
+
 test('reply tab ships the special-person editor with add and delete controls', async () => {
   const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
   assert.match(source, /normalizeSpecialRows/);
@@ -1853,6 +1868,10 @@ test('reply tab ships the special-person editor with add and delete controls', a
   assert.match(source, /专属回复规则 \/ 附加提示词/);
   // Legacy objects stay in sync so tier logic in the workers still resolves.
   assert.match(source, /legacyPeople/);
+  // Per-person 文言+白话 switch, carried into the saved config.
+  assert.match(source, /两行：文言 \+ 白话/);
+  assert.match(source, /wantsBilingualStyle/);
+  assert.match(source, /bilingual: row\.bilingual === true/);
 });
 
 test('post skeleton fingerprint is stable and drives the 48h cooldown', async () => {

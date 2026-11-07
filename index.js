@@ -69,7 +69,7 @@ export const FIELD_SIDE = Object.freeze({
   'specialPersons.yijing.handle': 'both',
   'specialPersons.replyStyle': 'both',
   'specialPersons.skipReplyHandles': 'reply',
-  'specialPersons.list': 'reply',
+  'specialPersons.list': 'both',
   'specialReplies': 'none',
   'rules.skipFinanceComments': 'comment',
   'rules.mentionPauseDuringQuiet': 'reply',
@@ -2191,6 +2191,7 @@ function validateConfig(input) {
           handle: legacy.handle.trim().toLowerCase(),
           enabled: legacy.enabled !== false,
           replyStyle: typeof legacy.replyStyle === 'string' ? legacy.replyStyle : '',
+          bilingual: legacy.bilingual === true,
         });
       }
     }
@@ -2209,7 +2210,11 @@ function validateConfig(input) {
       const replyStyle = String(entry.replyStyle || '');
       if (replyStyle.length > 4000) throw new TypeError('特例人物专属规则不能超过 4000 字');
       if (typeof entry.enabled !== 'boolean') throw new TypeError('特例人物启用状态无效');
-      return { id, label: String(entry.label || handle).slice(0, 40), handle, enabled: entry.enabled, replyStyle };
+      if (entry.bilingual !== undefined && typeof entry.bilingual !== 'boolean') throw new TypeError('特例人物「文言+白话」开关无效');
+      return {
+        id, label: String(entry.label || handle).slice(0, 40), handle, enabled: entry.enabled, replyStyle,
+        bilingual: entry.bilingual === true,
+      };
     });
   }
   if (copy.commentSettings !== undefined) {
