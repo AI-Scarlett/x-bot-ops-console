@@ -405,6 +405,7 @@ window.__ModuleLoader__.load({
           if (!response.ok || data.ok !== true) throw new Error(data.error || `请求失败，状态码 ${response.status}`);
           const value = data.value || {};
           if (action === 'save-config') { setNotice(value.note || t('saved')); setConfig(value.config); setConfigHash(value.configHash ?? null); latestSaveHash.current = value.configHash ?? null; setDraftDirty(false); }
+          else if (action === 'restore-config-backup') { setNotice(value.note || '配置已从备份恢复'); setConfig(value.config); setConfigHash(value.configHash ?? null); latestSaveHash.current = value.configHash ?? null; setDraftDirty(false); }
           else if (action === 'update-plugin') { /* handled by caller */ }
           else if (value.launchRequested) setNotice(t('launchRequested'));
           else if (value.note) setNotice(value.note);
@@ -3061,6 +3062,20 @@ window.__ModuleLoader__.load({
 
         // 统一保存按钮栏
         h('footer', { style: { display: 'flex', gap: 12, alignItems: 'center', marginTop: 12, padding: '12px 0', borderTop: `1px solid ${C.border}`, flexWrap: 'wrap' } },
+          state?.configSource === 'invalid' ? h('div', {
+            role: 'alert',
+            style: { flex: '1 1 100%', margin: 0, padding: '10px 12px', borderRadius: 8, border: `1px solid ${C.error}`, background: C.raised, color: C.text, fontSize: 12, lineHeight: 1.7 },
+          },
+            h('strong', { style: { color: C.error } }, '⚠️ 配置文件校验没通过，所以界面显示的是默认值（磁盘上的原配置没有被覆盖，也没有丢）'),
+            h('div', { style: { marginTop: 4, color: C.muted } }, `原因：${state.configError || '未知'}`),
+            h('div', { style: { marginTop: 4, color: C.muted } },
+              '在这种状态下「保存」是故意禁用的：一旦保存，就会用默认值覆盖你真正的配置。先按上面的原因把数值改回合法范围，或直接点右边的按钮从备份恢复。'),
+            h('button', {
+              type: 'button',
+              disabled: busy,
+              style: { ...buttonStyle(true), marginTop: 8, padding: '6px 14px', fontSize: 12 },
+              onClick: () => askConfirmText('从最近一份能通过校验的备份恢复配置？当前这份无效文件会先被另存为备份。', () => act('restore-config-backup')),
+            }, '🩹 从最近可用备份恢复')) : null,
           error ? h('p', { role: 'alert', style: { flex: '1 1 100%', margin: 0, padding: '8px 10px', borderRadius: 8, background: C.raised, color: C.error, fontSize: 12, lineHeight: 1.6 } },
             `保存未成功：${error.replace(/^[^：]*：/, '')}`) : null,
           state?.saveLog?.last ? h('p', { style: { flex: '1 1 100%', margin: 0, fontSize: 11, color: C.faint } },

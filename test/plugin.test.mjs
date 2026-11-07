@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:net';
@@ -2635,4 +2635,40 @@ test('the format inputs accept up to 2000 characters', async () => {
   const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
   assert.match(source, /type: 'number', min: 1, max: 2000, style: inputStyle/);
   assert.match(source, /本账号实测可以直接发 1200 字/);
+});
+
+test('an invalid config is reported, protected and recoverable', async () => {
+  const { restoreLatestValidBackup, DEFAULT_CONFIG } = await import('../index.js');
+  const dir = mkdtempSync(join(tmpdir(), 'xbot-restore-'));
+  const backupDir = join(dir, 'history');
+  const configPath = join(dir, 'config.json');
+  mkdirSync(backupDir);
+  // Newest backup is unusable, the previous one is fine.
+  writeFileSync(join(backupDir, 'config-2026-11-07T12-00-00-000Z.json'), JSON.stringify({ postSettings: { format: { maxChars: 99999 } } }));
+  const valid = structuredClone(DEFAULT_CONFIG);
+  valid.postSettings.format.maxChars = 321;
+  writeFileSync(join(backupDir, 'config-2026-11-07T11-00-00-000Z.json'), JSON.stringify(valid));
+  writeFileSync(configPath, '{ not json');
+
+  const restored = restoreLatestValidBackup(backupDir, configPath);
+  assert.equal(restored.ok, true);
+  assert.match(restored.from, /T11-00-00/);
+  assert.equal(restored.config.postSettings.format.maxChars, 321);
+  assert.equal(JSON.parse(readFileSync(configPath, 'utf8')).postSettings.format.maxChars, 321);
+  // The broken file was kept as a backup, not deleted.
+  assert.ok(readdirSync(backupDir).length > 2);
+
+  const empty = restoreLatestValidBackup(join(dir, 'nope'), configPath);
+  assert.equal(empty.ok, false);
+  assert.match(empty.error, /没有可用的配置备份目录/);
+});
+
+test('the panel explains an invalid config instead of silently showing defaults', async () => {
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.match(source, /配置文件校验没通过/);
+  assert.match(source, /磁盘上的原配置没有被覆盖，也没有丢/);
+  assert.match(source, /从最近可用备份恢复/);
+  assert.match(source, /restore-config-backup/);
+  const host = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
+  assert.match(host, /configError: shared\.error/);
 });

@@ -373,6 +373,33 @@ export function backupConfigFile(configPath = CONFIG_PATH, backupDir = CONFIG_BA
   }
 }
 
+export function restoreLatestValidBackup(backupDir = CONFIG_BACKUP_DIR, configPath = CONFIG_PATH) {
+  let names = [];
+  try { names = readdirSync(backupDir).filter(name => name.startsWith('config-') && name.endsWith('.json')).sort().reverse(); }
+  catch { return { ok: false, error: '没有可用的配置备份目录' }; }
+  for (const name of names) {
+    const full = join(backupDir, name);
+    let parsed;
+    try { parsed = JSON.parse(readFileSync(full, 'utf8')); } catch { continue; }
+    let validated;
+    try { validated = validateConfig(parsed); } catch { continue; }
+    // Keep the broken file around before replacing it.
+    backupConfigFile(configPath, backupDir);
+    try {
+      mkdirSync(dirname(configPath), { recursive: true, mode: 0o700 });
+      const tmp = `${configPath}.${process.pid}.restore.tmp`;
+      writeFileSync(tmp, `${JSON.stringify(validated, null, 2)}\n`, { mode: 0o600 });
+      renameSync(tmp, configPath);
+    } catch (error) {
+      return { ok: false, error: `恢复失败：${error?.message || error}` };
+    }
+    let hash = null;
+    try { hash = createHash('sha256').update(readFileSync(configPath)).digest('hex'); } catch { /* ignore */ }
+    return { ok: true, from: name, config: validated, hash };
+  }
+  return { ok: false, error: '备份里没有一份能通过校验' };
+}
+
 export function listConfigBackups(backupDir = CONFIG_BACKUP_DIR) {
   try {
     if (!existsSync(backupDir)) return [];
@@ -2624,8 +2651,13 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
     let parsed;
     try { parsed = JSON.parse(raw); }
     catch { return { config: clone(DEFAULT_CONFIG), source: 'invalid' }; }
-    try { return { config: validateConfig(parsed), source: 'shared' }; }
-    catch { return { config: clone(DEFAULT_CONFIG), source: 'invalid' }; }
+    try { return { config: validateConfig(parsed), source: 'shared', error: '' }; }
+    catch (error) {
+      // Falling back to defaults silently is dangerous: the operator sees their
+      // whole configuration "reset" and may save the defaults over it. Carry the
+      // reason through to the panel instead.
+      return { config: clone(DEFAULT_CONFIG), source: 'invalid', error: String(error?.message || error || '配置校验失败') };
+    }
   };
   const getConfig = () => readSharedConfig().config;
   const runtimeCapabilities = {
@@ -2747,7 +2779,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       }
     } catch {}
     return {
-      ok: true, pluginVersion: readPluginVersion(), config: maskTrendCookies(shared.config), configSource: shared.source, configPath: activeConfigPath, configHash,
+      ok: true, pluginVersion: readPluginVersion(), config: maskTrendCookies(shared.config), configSource: shared.source, configError: shared.error || '', configPath: activeConfigPath, configHash,
       runtimeConfigApplied: shared.source === 'shared', runtimeCapabilities, fieldSide: FIELD_SIDE,
       dshModels,
       postQueue: postQueue.queue,
@@ -3075,6 +3107,21 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
     }
     if (request.action === 'restore-config-backup') {
       const name = String(request.name || '');
+      if (!name) {
+        // No name given: take the newest backup that still validates, so a
+        // half-written or outdated snapshot cannot be restored over a good one.
+        const restored = restoreLatestValidBackup(activeBackupDir, activeConfigPath);
+        if (!restored.ok) throw new Error(restored.error);
+        return {
+          ok: true,
+          action: 'restore-config-backup',
+          config: maskTrendCookies(restored.config),
+          configHash: restored.hash,
+          workerAcceptance: workerAcceptance(restored.config),
+          from: restored.from,
+          note: `已从最近可用备份 ${restored.from} 恢复配置。`,
+        };
+      }
       // No slashes allowed, so a crafted name can never escape the backup directory.
       if (!/^config-[A-Za-z0-9._-]+\.json$/.test(name) || name.includes('..')) throw new TypeError('备份文件名无效');
       const source = join(activeBackupDir, name);
