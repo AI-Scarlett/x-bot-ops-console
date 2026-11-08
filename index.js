@@ -922,7 +922,14 @@ export function postSettingsSignature(postCfg) {
     .join(';');
   const mix = (Array.isArray(pc.topicMix) ? pc.topicMix : [])
     .filter(item => isRecord(item))
-    .map(item => `${item.label}:${item.weight}:${item.prompt || ''}`)
+    .map(item => {
+      const style = String(item.style || '').trim();
+      const model = String(item.model || '').trim();
+      // Only a theme that picks its own style or model changes the fingerprint,
+      // so an untouched config keeps the same signature as before.
+      const suffix = (style || model) ? `::${style}::${model}` : '';
+      return `${item.label}:${item.weight}:${item.prompt || ''}${suffix}`;
+    })
     .join(';');
   const influence = pc.learningInfluence === undefined || pc.learningInfluence === null ? 100 : pc.learningInfluence;
   const parts = [
@@ -2497,6 +2504,17 @@ function validateConfig(input) {
         if (!Number.isInteger(weight) || weight < 0 || weight > 100) throw new TypeError('主题比例需为 0~100 的整数');
         item.weight = weight;
         if (item.prompt !== undefined && (typeof item.prompt !== 'string' || item.prompt.length > 2000)) throw new TypeError('主题提示词需为不超过 2000 字的文本');
+        const THEME_STYLES = ['default', 'classical', 'vernacular', 'english', 'chuci'];
+        if (item.style !== undefined && item.style !== null) {
+          const style = String(item.style).trim().toLowerCase();
+          if (style && !THEME_STYLES.includes(style)) throw new TypeError('主题文风只能是 全局默认/文言文/白话文/英文/楚辞');
+          item.style = style === 'default' ? '' : style;
+        }
+        if (item.model !== undefined && item.model !== null) {
+          const model = String(item.model).trim().slice(0, 60);
+          if (model && !/^[A-Za-z0-9._:-]+$/.test(model)) throw new TypeError('主题模型名只能包含字母、数字、点、下划线、冒号和短横线');
+          item.model = model;
+        }
       }
       const total = mix.reduce((sum, item) => sum + item.weight, 0);
       if (mix.length && total !== 100) throw new TypeError(`主题比例合计必须等于 100%（当前 ${total}%）`);

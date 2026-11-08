@@ -1842,6 +1842,40 @@ test('special person rows are operator-managed: migrate, validate, add, delete',
   assert.throws(() => validateConfig(tooLongRow), /4000 字/);
 });
 
+test('each theme can pick its own 文风 and model', async () => {
+  const { postSettingsSignature } = await import('../index.js');
+  const base = structuredClone(DEFAULT_CONFIG);
+  base.postSettings.topicMix = [
+    { id: 'a', label: '香艳', weight: 60, prompt: '古典艳诗' },
+    { id: 'b', label: '批判', weight: 40, prompt: '' },
+  ];
+  const plain = validateConfig(base);
+  // Untouched themes carry no style/model, so the fingerprint stays as before.
+  assert.equal(plain.postSettings.topicMix[0].style, undefined);
+  assert.equal(plain.postSettings.topicMix[0].model, undefined);
+  const plainSig = postSettingsSignature(plain.postSettings);
+
+  const styled = structuredClone(base);
+  styled.postSettings.topicMix[0] = { ...styled.postSettings.topicMix[0], style: 'chuci', model: 'gpt-6-luna' };
+  const kept = validateConfig(styled);
+  assert.equal(kept.postSettings.topicMix[0].style, 'chuci');
+  assert.equal(kept.postSettings.topicMix[0].model, 'gpt-6-luna');
+  assert.notEqual(postSettingsSignature(kept.postSettings), plainSig, 'a style must invalidate old drafts');
+
+  // "全局默认" normalises to an empty string so it never fingerprints as a choice.
+  const fallback = structuredClone(base);
+  fallback.postSettings.topicMix[0] = { ...fallback.postSettings.topicMix[0], style: 'default' };
+  assert.equal(validateConfig(fallback).postSettings.topicMix[0].style, '');
+  assert.equal(postSettingsSignature(validateConfig(fallback).postSettings), plainSig);
+
+  const badStyle = structuredClone(base);
+  badStyle.postSettings.topicMix[0] = { ...badStyle.postSettings.topicMix[0], style: 'klingon' };
+  assert.throws(() => validateConfig(badStyle), /全局默认\/文言文/);
+  const badModel = structuredClone(base);
+  badModel.postSettings.topicMix[0] = { ...badModel.postSettings.topicMix[0], model: 'bad model!' };
+  assert.throws(() => validateConfig(badModel), /主题模型名/);
+});
+
 test('liking on comment and on reply are switches, not hard-wired', () => {
   // Both default to on, so upgrading does not silently change behaviour.
   const defaults = structuredClone(DEFAULT_CONFIG);
@@ -1915,6 +1949,10 @@ test('reply tab ships the special-person editor with add and delete controls', a
   assert.match(source, /两行：文言 \+ 白话/);
   assert.match(source, /wantsBilingualStyle/);
   assert.match(source, /bilingual: row\.bilingual === true/);
+  // Each theme row offers 文风 and 模型.
+  assert.match(source, /文风：全局默认/);
+  assert.match(source, /value: 'chuci' \}, '楚辞'/);
+  assert.match(source, /留空=全局默认/);
   // The likes are switchable from the two panels that own them.
   assert.match(source, /likeOnComment/);
   assert.match(source, /likeOnReply/);

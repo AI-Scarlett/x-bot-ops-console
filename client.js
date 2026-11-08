@@ -1946,7 +1946,8 @@ window.__ModuleLoader__.load({
           h('section', { style: cardStyle },
             h('h2', { style: { margin: 0, fontSize: 15 } }, '🎚️ 生成配比（提示词 / 学习规则 / 主题）'),
             h('p', { style: { margin: '6px 0 10px', fontSize: 12, color: C.faint, lineHeight: 1.6 } },
-              '每条文由三层组成：① 上面的发帖提示词与时段文风（骨架，始终生效）② 学习规则（按下方强度注入）③ 主题方向（按权重随机抽取）。'),
+              '每条文由三层组成：① 上面的发帖提示词与时段文风（骨架，始终生效）② 学习规则（按下方强度注入）③ 主题方向（按权重随机抽取）。'
+              + '每条主题还能单独指定文风（全局默认/文言文/白话文/英文/楚辞）和模型；不改就是全局设置。'),
 
             h('label', { style: { ...labelStyle, marginTop: 4 } }, '学习规则强度（0=完全不用学习成果，100=全量注入）：', h(SideBadge, { side: 'post' })),
             h('div', { style: { display: 'flex', gap: 12, alignItems: 'center' } },
@@ -2021,6 +2022,25 @@ window.__ModuleLoader__.load({
                         postSettings: { ...(c.postSettings || {}), topicMix: (c.postSettings?.topicMix || []).filter(x => x.id !== item.id) },
                       })),
                     }, '✕ 删除')),
+                  h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' } },
+                    h('select', {
+                      title: '这一条主题单独用哪种语言/文风，选「全局默认」就跟着上面的文风设置走',
+                      style: { ...inputStyle, flex: '0 0 132px', margin: 0, padding: '6px 8px', fontSize: 12, cursor: 'pointer' },
+                      value: item.style || '',
+                      onChange: e => patch(item.id, { style: e.target.value }),
+                    },
+                      h('option', { value: '' }, '文风：全局默认'),
+                      h('option', { value: 'classical' }, '文言文'),
+                      h('option', { value: 'vernacular' }, '白话文'),
+                      h('option', { value: 'english' }, '英文'),
+                      h('option', { value: 'chuci' }, '楚辞')),
+                    h('input', {
+                      title: '这一条主题单独用哪个模型，留空就用全局模型',
+                      style: { ...inputStyle, flex: '1 1 220px', margin: 0, padding: '6px 8px', fontSize: 12 },
+                      placeholder: `大模型（留空=全局默认：${config?.postSettings?.model || config?.model?.name || 'gpt-6-luna'}）`,
+                      value: item.model || '',
+                      onChange: e => patch(item.id, { model: e.target.value }),
+                    })),
                   h('textarea', {
                     style: { ...inputStyle, minHeight: 48, marginTop: 8, fontSize: 12 },
                     placeholder: '这个主题的写法和侧重点，例如：围绕搞钱与追求异性展开，风趣不低俗…',
