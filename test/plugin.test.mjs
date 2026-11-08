@@ -1953,7 +1953,8 @@ test('reply tab ships the special-person editor with add and delete controls', a
   assert.match(source, /文风：全局默认/);
   assert.match(source, /value: 'chuci' \}, '楚辞'/);
   assert.match(source, /这一条主题用的大模型/);
-  // The likes are switchable from the two panels that own them.
+  // Both likes switches live in one card on the 通用 tab, so they are findable.
+  assert.match(source, /互动时顺手点赞（评论 \/ 回复）/);
   assert.match(source, /likeOnComment/);
   assert.match(source, /likeOnReply/);
   // The 重点名单 rows carry the same switch, right after 昵称/性别/备注.
