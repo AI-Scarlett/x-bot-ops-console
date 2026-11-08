@@ -40,7 +40,7 @@ window.__ModuleLoader__.load({
       missingFiles: '未找到配置位置的工作进程或监控脚本；请在设置中核对脚本目录。',
       pidForeign: '发现进程身份未确认，控制已禁用', logEmpty: '暂无日志', heartbeatStatus: '心跳状态',
       detailMissing: '未找到进程编号文件', detailDead: '进程编号已失效', detailVerified: '身份已验证', detailForeign: '进程身份未确认',
-      tabTiers: '👥 重点名单与个性化', tabGeneral: '🌐 通用与公共配置', tabComment: '💬 自动评论', tabReply: '↩️ 提及回复', tabPost: '📝 自动发帖', tabProfile: '🧭 主页巡航',
+      tabTiers: '👥 重点名单与个性化', tabGeneral: '🌐 通用与公共配置', tabComment: '💬 自动评论', tabReply: '↩️ 提及回复', tabPost: '📝 自动发帖', tabManualGen: '✍️ 手动AI创作', tabProfile: '🧭 主页巡航',
       addHandle: '＋ 添加', remove: '移除', removeHandle: '移除此名单', saveHint: '保存后各个 worker 会在下一轮读取时生效。',
     };
     const t = key => zh[key] || key;
@@ -386,6 +386,8 @@ window.__ModuleLoader__.load({
       const [draftReference, setDraftReference] = React.useState(typeof genPrefs.reference === 'string' ? genPrefs.reference : '');
       const [draftAnalysis, setDraftAnalysis] = React.useState('');
       const [analyzingReference, setAnalyzingReference] = React.useState(false);
+      // 手动生成出的候选草稿（不直接进队列，先在界面展示，供单条勾选入队）
+      const [previewDrafts, setPreviewDrafts] = React.useState([]);
       // Free-text drafts for comma/space separated fields. These inputs keep the
       // raw text locally so a typed separator is never swallowed by re-parsing
       // on every keystroke; the parsed array is committed on blur and on save.
@@ -751,6 +753,7 @@ window.__ModuleLoader__.load({
           h('button', { type: 'button', style: tabItemStyle('comment'), onClick: () => setActiveTab('comment') }, t('tabComment')),
           h('button', { type: 'button', style: tabItemStyle('reply'), onClick: () => setActiveTab('reply') }, t('tabReply')),
           h('button', { type: 'button', style: tabItemStyle('post'), onClick: () => setActiveTab('post') }, t('tabPost')),
+          h('button', { type: 'button', style: tabItemStyle('manualGen'), onClick: () => setActiveTab('manualGen') }, t('tabManualGen')),
           h('button', { type: 'button', style: tabItemStyle('learning'), onClick: () => setActiveTab('learning') }, '🧠 发帖学习'),
           h('button', { type: 'button', style: tabItemStyle('profile'), onClick: () => setActiveTab('profile') }, t('tabProfile')),
           h('button', { type: 'button', style: tabItemStyle('tiers'), onClick: () => setActiveTab('tiers') }, t('tabTiers'))),
@@ -1487,12 +1490,6 @@ window.__ModuleLoader__.load({
             h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 10 } },
               h('h2', { style: { margin: 0, fontSize: 16 } }, '📋 待发推文队列看板（按序或加急发布）'),
               h('div', { style: { display: 'flex', gap: 8 } },
-                h('button', {
-                  type: 'button',
-                  disabled: busy || generatingDrafts,
-                  style: { ...buttonStyle(false), fontSize: 12, padding: '4px 10px', background: 'rgba(99, 102, 241, 0.15)', borderColor: '#6366f1', color: '#818cf8' },
-                  onClick: () => setShowGenPanel(v => !v)
-                }, showGenPanel ? '✕ 收起生成面板' : '🤖 AI 批量生成草稿'),
                 state?.postQueue && state.postQueue.length > 0 ? h('button', {
                   type: 'button',
                   disabled: busy,
@@ -1508,161 +1505,6 @@ window.__ModuleLoader__.load({
                 }, '🗑️ 清空队列') : null
               )
             ),
-
-            // AI 草稿生成面板：数量 + 一次性独立提示词
-            showGenPanel ? h('div', { style: { background: C.layerTwo, padding: '12px 14px', borderRadius: 10, border: `1px solid ${C.border}`, marginBottom: 14 } },
-              h('label', { style: { fontSize: 13, fontWeight: '600', display: 'block', marginBottom: 6 } },
-                '🤖 AI 批量生成待发草稿：',
-                h('span', { style: { fontSize: 11, fontWeight: '400', color: C.faint, marginLeft: 8 } }, '条数 / 文字类型 / 字数 / 模型 / 参考帖会自动记住上次的选择')),
-              h('div', { style: { display: 'flex', gap: 14, flexWrap: 'wrap', marginBottom: 10 } },
-                h('label', { style: { ...labelStyle, flex: '0 0 130px', margin: 0 } },
-                  '本次生成条数：',
-                  h('input', {
-                    type: 'number', min: 1, max: 50, style: inputStyle,
-                    value: draftGenCount,
-                    onChange: e => {
-                      const next = e.target.value === '' ? 1 : Math.max(1, Math.min(50, Number(e.target.value)));
-                      setDraftGenCount(next);
-                      saveGenPrefs({ count: next });
-                    },
-                  })
-                ),
-                h('label', { style: { ...labelStyle, flex: '0 0 150px', margin: 0 } },
-                  '文字类型：', h(SideBadge, { side: 'post' }),
-                  h('select', {
-                    style: { ...inputStyle, cursor: 'pointer' },
-                    value: draftGenStyle,
-                    onChange: e => {
-                      setDraftGenStyle(e.target.value);
-                      saveGenPrefs({ style: e.target.value });
-                    },
-                  },
-                    h('option', { value: '' }, '跟随全局'),
-                    h('option', { value: 'classical' }, '文言文'),
-                    h('option', { value: 'vernacular' }, '白话文'),
-                    h('option', { value: 'english' }, '英文'),
-                    h('option', { value: 'chuci' }, '楚辞'))
-                ),
-                h('label', { style: { ...labelStyle, flex: '0 0 170px', margin: 0 } },
-                  '最长稿件字数：',
-                  h('input', {
-                    type: 'number', min: 10, max: 2000, style: inputStyle,
-                    placeholder: `留空跟随全局（当前 ${config?.postSettings?.format?.maxChars ?? 500} 字）`,
-                    value: draftGenMaxChars,
-                    onChange: e => {
-                      const next = e.target.value === '' ? '' : Math.max(10, Math.min(2000, Number(e.target.value) || 10));
-                      setDraftGenMaxChars(next);
-                      saveGenPrefs({ maxChars: next });
-                    },
-                  })
-                )),
-              draftGenStyle === 'english'
-                ? h('div', { style: { fontSize: 11, color: C.muted, marginBottom: 6, lineHeight: 1.6 } },
-                  '⚠️ 英文稿会等到 01:00–07:00 的英文时段才发（发帖 worker 按时段放行）。想马上发，可以临时把「分时段文风」改成英文，或在队列里设为加急。')
-                : null,
-              h(ModelPicker, {
-                value: draftGenModel,
-                onChange: value => {
-                  setDraftGenModel(value);
-                  saveGenPrefs({ model: value });
-                },
-                side: 'post',
-                label: '本次生成用的大模型（留空=跟随全局）',
-              }),
-              h('div', { style: { marginTop: 10 } },
-                h('div', { style: { fontSize: 12, color: C.faint, marginBottom: 4 } }, '本次使用的提示词（留空则使用下方「自动发帖文案提示词」的全局设置）：'),
-                h('textarea', {
-                  style: { ...inputStyle, minHeight: 70, resize: 'vertical' },
-                  placeholder: '例如：写一条关于「周朝美食」的幽默文言推文，30~90字...',
-                  value: draftGenPrompt,
-                  onChange: e => setDraftGenPrompt(e.target.value),
-                })
-              ),
-              h('div', { style: { marginTop: 10, padding: '10px 12px', borderRadius: 8, background: C.raised, border: `1px solid ${C.border}` } },
-                h('div', { style: { fontSize: 12, fontWeight: '600', marginBottom: 4 } }, '📋 粘贴一条帖子，照它的写法写（可选）'),
-                h('div', { style: { fontSize: 11, color: C.faint, marginBottom: 6, lineHeight: 1.6 } },
-                  '把想模仿的帖子整段粘进来。先点「拆解这条帖子」看它怎么写的，再生成；就算不点拆解，生成时也会先拆再照着写。内容会换成新写的，不会照抄原句。'),
-                h('textarea', {
-                  style: { ...inputStyle, minHeight: 70, resize: 'vertical', marginBottom: 6 },
-                  placeholder: '粘贴参考帖子全文…',
-                  value: draftReference,
-                  onChange: e => {
-                    setDraftReference(e.target.value);
-                    saveGenPrefs({ reference: e.target.value.slice(0, 4000) });
-                    setDraftAnalysis('');
-                  },
-                }),
-                h('div', { style: { display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' } },
-                  h('button', {
-                    type: 'button',
-                    disabled: busy || analyzingReference || !draftReference.trim(),
-                    style: { ...buttonStyle(false), padding: '5px 12px', fontSize: 12 },
-                    onClick: async () => {
-                      setAnalyzingReference(true);
-                      setError('');
-                      try {
-                        const res = await act('analyze-reference-post', undefined, {
-                          text: draftReference.trim(),
-                          model: draftGenModel,
-                        });
-                        setDraftAnalysis(res?.analysis || '');
-                        setNotice('已拆解参考帖的写法，生成时会照这个写法写。');
-                      } catch (err) {
-                        setError(`拆解失败：${err.message || String(err)}`);
-                      } finally {
-                        setAnalyzingReference(false);
-                      }
-                    },
-                  }, analyzingReference ? '⏳ 拆解中...' : '🔍 拆解这条帖子'),
-                  draftAnalysis ? h('span', { style: { fontSize: 12, color: C.success } }, '✓ 已拆解') : null,
-                  draftAnalysis ? h('button', {
-                    type: 'button',
-                    style: { ...buttonStyle(false), padding: '3px 8px', fontSize: 11 },
-                    onClick: () => setDraftAnalysis(''),
-                  }, '清空拆解') : null),
-                draftAnalysis
-                  ? h('pre', {
-                    style: { margin: '8px 0 0', padding: '8px 10px', borderRadius: 6, background: C.layerTwo, border: `1px solid ${C.border}`, fontSize: 12, lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: C.text },
-                  }, draftAnalysis)
-                  : null),
-              h('div', { style: { display: 'flex', gap: 10, justifyContent: 'flex-end', alignItems: 'center', marginTop: 10 } },
-                h('span', { style: { fontSize: 12, color: C.faint } },
-                  `将生成 ${Math.max(1, Math.min(50, Number(draftGenCount) || 1))} 条并追加到队列末尾`
-                  + (draftGenStyle ? `｜文风：${{ classical: '文言文', vernacular: '白话文', english: '英文', chuci: '楚辞' }[draftGenStyle]}` : '')
-                  + (draftGenModel ? `｜模型：${draftGenModel}` : '')
-                  + (draftReference.trim() ? '｜模仿参考帖' : '')),
-                h('button', {
-                  type: 'button',
-                  disabled: busy || generatingDrafts,
-                  style: { ...buttonStyle(true), padding: '6px 16px', fontSize: 13 },
-                  onClick: async () => {
-                    const count = Math.max(1, Math.min(50, Number(draftGenCount) || 1));
-                    setGeneratingDrafts(true);
-                    setError('');
-                    setNotice(`正在请求大模型生成 ${count} 条原创推文草稿，请稍候...`);
-                    try {
-                      const res = await act('generate-draft-posts', undefined, {
-                        count,
-                        prompt: draftGenPrompt.trim(),
-                        model: draftGenModel,
-                        style: draftGenStyle,
-                        maxChars: draftGenMaxChars === '' ? 0 : Number(draftGenMaxChars),
-                        reference: draftReference.trim(),
-                        referenceAnalysis: draftAnalysis,
-                      });
-                      if (res && res.generated) {
-                        setNotice(`🎉 成功生成 ${res.generated.length} 条推文草稿并加入队列！`);
-                        setDraftGenPrompt('');
-                      }
-                    } catch (err) {
-                      setError(`生成草稿失败：${err.message || String(err)}`);
-                    } finally {
-                      setGeneratingDrafts(false);
-                    }
-                  }
-                }, generatingDrafts ? '⏳ 正在生成...' : '🚀 生成并加入队列')
-              )
-            ) : null,
 
             // 手动编辑与插队区域
             h('div', { style: { background: C.layerTwo, padding: '12px 14px', borderRadius: 10, border: `1px solid ${C.border}`, marginBottom: 14 } },
@@ -2356,6 +2198,271 @@ window.__ModuleLoader__.load({
               ))
             )
           ) : null
+        ) : null,
+
+        // TAB: ✍️ 手动AI创作（独立生成与拆解模仿）
+        activeTab === 'manualGen' ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
+          h('section', { style: cardStyle },
+            h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 6 } },
+              h('div', null,
+                h('h2', { style: { margin: 0, fontSize: 16 } }, '✍️ 手动AI创作 · 拆解模仿与定向批量生成'),
+                h('p', { style: { margin: '4px 0 0', fontSize: 12, color: C.faint, lineHeight: 1.6 } },
+                  '可按提示词或粘贴参考帖拆解模仿生成。生成结果不会直接进入发布队列，你可以在下方预览、挑选单条推文加入待发队列或立即加急发送。'))
+            ),
+
+            h('div', { style: { background: C.layerTwo, padding: '14px', borderRadius: 10, border: `1px solid ${C.border}`, marginTop: 10 } },
+              h('label', { style: { fontSize: 13, fontWeight: '600', display: 'block', marginBottom: 6 } },
+                '⚙️ 生成参数设置：',
+                h('span', { style: { fontSize: 11, fontWeight: '400', color: C.faint, marginLeft: 8 } }, '条数 / 文字类型 / 字数 / 模型 / 参考帖会自动记住上次的选择')),
+              h('div', { style: { display: 'flex', gap: 14, flexWrap: 'wrap', marginBottom: 10 } },
+                h('label', { style: { ...labelStyle, flex: '0 0 130px', margin: 0 } },
+                  '本次生成条数：',
+                  h('input', {
+                    type: 'number', min: 1, max: 50, style: inputStyle,
+                    value: draftGenCount,
+                    onChange: e => {
+                      const next = e.target.value === '' ? 1 : Math.max(1, Math.min(50, Number(e.target.value)));
+                      setDraftGenCount(next);
+                      saveGenPrefs({ count: next });
+                    },
+                  })
+                ),
+                h('label', { style: { ...labelStyle, flex: '0 0 150px', margin: 0 } },
+                  '文字类型：', h(SideBadge, { side: 'post' }),
+                  h('select', {
+                    style: { ...inputStyle, cursor: 'pointer' },
+                    value: draftGenStyle,
+                    onChange: e => {
+                      setDraftGenStyle(e.target.value);
+                      saveGenPrefs({ style: e.target.value });
+                    },
+                  },
+                    h('option', { value: '' }, '跟随全局默认'),
+                    h('option', { value: 'classical' }, '文言文'),
+                    h('option', { value: 'vernacular' }, '白话文'),
+                    h('option', { value: 'english' }, '英文'),
+                    h('option', { value: 'chuci' }, '楚辞'))
+                ),
+                h('label', { style: { ...labelStyle, flex: '0 0 170px', margin: 0 } },
+                  '最长稿件字数：',
+                  h('input', {
+                    type: 'number', min: 10, max: 2000, style: inputStyle,
+                    placeholder: `留空跟随全局（当前 ${config?.postSettings?.format?.maxChars ?? 500} 字）`,
+                    value: draftGenMaxChars,
+                    onChange: e => {
+                      const next = e.target.value === '' ? '' : Math.max(10, Math.min(2000, Number(e.target.value) || 10));
+                      setDraftGenMaxChars(next);
+                      saveGenPrefs({ maxChars: next });
+                    },
+                  })
+                )),
+              draftGenStyle === 'english'
+                ? h('div', { style: { fontSize: 11, color: C.muted, marginBottom: 6, lineHeight: 1.6 } },
+                  '⚠️ 英文稿会等到 01:00–07:00 的英文时段才发（发帖 worker 按时段放行）。想马上发，可在加入队列后在列表中设为加急置顶。')
+                : null,
+              h(ModelPicker, {
+                value: draftGenModel,
+                onChange: value => {
+                  setDraftGenModel(value);
+                  saveGenPrefs({ model: value });
+                },
+                side: 'post',
+                label: '本次生成用的大模型（留空=跟随全局默认）：',
+              }),
+              h('div', { style: { marginTop: 10 } },
+                h('div', { style: { fontSize: 12, color: C.faint, marginBottom: 4 } }, '本次使用的提示词（留空则使用「自动发帖」里的全局提示词）：'),
+                h('textarea', {
+                  style: { ...inputStyle, minHeight: 70, resize: 'vertical' },
+                  placeholder: '例如：写一条关于「周朝美食」的幽默文言推文，30~90字...',
+                  value: draftGenPrompt,
+                  onChange: e => setDraftGenPrompt(e.target.value),
+                })
+              ),
+              h('div', { style: { marginTop: 12, padding: '12px 14px', borderRadius: 8, background: C.raised, border: `1px solid ${C.border}` } },
+                h('div', { style: { fontSize: 13, fontWeight: '600', marginBottom: 4 } }, '📋 粘贴一条参考帖子，照它的写法写（可选）：'),
+                h('div', { style: { fontSize: 12, color: C.faint, marginBottom: 8, lineHeight: 1.6 } },
+                  '把想模仿的推文整段粘在下方。先点「拆解这条帖子」查看提取出的体裁和句式；生成时会照着它的逻辑与钩子写全新内容，不会照抄原句。'),
+                h('textarea', {
+                  style: { ...inputStyle, minHeight: 75, resize: 'vertical', marginBottom: 8 },
+                  placeholder: '粘贴参考帖子全文…',
+                  value: draftReference,
+                  onChange: e => {
+                    setDraftReference(e.target.value);
+                    saveGenPrefs({ reference: e.target.value.slice(0, 4000) });
+                    setDraftAnalysis('');
+                  },
+                }),
+                h('div', { style: { display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' } },
+                  h('button', {
+                    type: 'button',
+                    disabled: busy || analyzingReference || !draftReference.trim(),
+                    style: { ...buttonStyle(false), padding: '6px 14px', fontSize: 12 },
+                    onClick: async () => {
+                      setAnalyzingReference(true);
+                      setError('');
+                      try {
+                        const res = await act('analyze-reference-post', undefined, {
+                          text: draftReference.trim(),
+                          model: draftGenModel,
+                        });
+                        setDraftAnalysis(res?.analysis || '');
+                        setNotice('已拆解参考帖的写法，点击下方按钮即可生成对应风格的草稿。');
+                      } catch (err) {
+                        setError(`拆解失败：${err.message || String(err)}`);
+                      } finally {
+                        setAnalyzingReference(false);
+                      }
+                    },
+                  }, analyzingReference ? '⏳ 正在拆解中...' : '🔍 拆解这条帖子'),
+                  draftAnalysis ? h('span', { style: { fontSize: 12, color: C.success } }, '✓ 已完成拆解分析') : null,
+                  draftAnalysis ? h('button', {
+                    type: 'button',
+                    style: { ...buttonStyle(false), padding: '4px 8px', fontSize: 11 },
+                    onClick: () => setDraftAnalysis(''),
+                  }, '清空拆解') : null),
+                draftAnalysis
+                  ? h('pre', {
+                    style: { margin: '10px 0 0', padding: '10px 12px', borderRadius: 6, background: C.layerTwo, border: `1px solid ${C.border}`, fontSize: 12, lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: C.text },
+                  }, draftAnalysis)
+                  : null),
+
+              h('div', { style: { display: 'flex', gap: 12, justifyContent: 'flex-end', alignItems: 'center', marginTop: 14 } },
+                h('span', { style: { fontSize: 12, color: C.faint } },
+                  `将生成 ${Math.max(1, Math.min(50, Number(draftGenCount) || 1))} 条草稿`
+                  + (draftGenStyle ? `｜文风：${{ classical: '文言文', vernacular: '白话文', english: '英文', chuci: '楚辞' }[draftGenStyle]}` : '')
+                  + (draftGenModel ? `｜模型：${draftGenModel}` : '')
+                  + (draftReference.trim() ? '｜模仿参考帖' : '')),
+                h('button', {
+                  type: 'button',
+                  disabled: busy || generatingDrafts,
+                  style: { ...buttonStyle(true), padding: '8px 20px', fontSize: 13 },
+                  onClick: async () => {
+                    const count = Math.max(1, Math.min(50, Number(draftGenCount) || 1));
+                    setGeneratingDrafts(true);
+                    setError('');
+                    setNotice(`正在请求大模型生成 ${count} 条推文草稿，请稍候...`);
+                    try {
+                      const res = await act('generate-draft-posts', undefined, {
+                        count,
+                        prompt: draftGenPrompt.trim(),
+                        model: draftGenModel,
+                        style: draftGenStyle,
+                        maxChars: draftGenMaxChars === '' ? 0 : Number(draftGenMaxChars),
+                        reference: draftReference.trim(),
+                        referenceAnalysis: draftAnalysis,
+                        commitToQueue: false,
+                      });
+                      if (res && Array.isArray(res.generated)) {
+                        setPreviewDrafts(res.generated);
+                        setNotice(`🎉 成功生成 ${res.generated.length} 条推文草稿！请在下方预览并挑选满意的条目加入待发队列。`);
+                      }
+                    } catch (err) {
+                      setError(`生成草稿失败：${err.message || String(err)}`);
+                    } finally {
+                      setGeneratingDrafts(false);
+                    }
+                  }
+                }, generatingDrafts ? '⏳ 正在生成中...' : '🚀 开始批量生成（不直接入队）')
+              )
+            )
+          ),
+
+          // 候选草稿预览与挑选入队看板
+          h('section', { style: cardStyle },
+            h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 10 } },
+              h('h2', { style: { margin: 0, fontSize: 15 } }, `📝 候选草稿预览 (${previewDrafts.length} 条待处理)`),
+              previewDrafts.length > 0 ? h('div', { style: { display: 'flex', gap: 8 } },
+                h('button', {
+                  type: 'button',
+                  disabled: busy,
+                  style: { ...buttonStyle(true), fontSize: 12, padding: '4px 12px' },
+                  onClick: async () => {
+                    setBusy(true);
+                    try {
+                      for (const item of previewDrafts) {
+                        await act('enqueue-post', undefined, { text: item.text, urgent: false, source: item.source || 'ai_draft' });
+                      }
+                      setPreviewDrafts([]);
+                      setNotice('全部候选草稿已加入待发队列！');
+                    } catch (err) {
+                      setError(err.message || String(err));
+                    } finally {
+                      setBusy(false);
+                    }
+                  }
+                }, '📥 全部加入待发队列'),
+                h('button', {
+                  type: 'button',
+                  disabled: busy,
+                  style: { ...buttonStyle(false), fontSize: 12, padding: '4px 10px', color: C.error, borderColor: C.error },
+                  onClick: () => setPreviewDrafts([]),
+                }, '✕ 清空候选')
+              ) : null
+            ),
+            previewDrafts.length === 0
+              ? h('div', { style: { padding: '24px 14px', textAlign: 'center', color: C.faint, fontSize: 13, background: C.layerTwo, borderRadius: 8 } },
+                '暂无生成的候选推文。请在上方设置好参数或粘贴参考帖，点击「开始批量生成」。生成出的稿件会展示在这里，你可以逐条确认后再挑选加入队列。')
+              : h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
+                ...previewDrafts.map((item, idx) => h('div', {
+                  key: item.id || idx,
+                  style: {
+                    padding: '12px 14px', background: C.layerTwo, borderRadius: 8, border: `1px solid ${C.border}`,
+                    display: 'flex', flexDirection: 'column', gap: 8,
+                  }
+                },
+                  h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 } },
+                    h('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
+                      h('span', { style: { fontWeight: '600', fontSize: 13, color: C.accent } }, `#${idx + 1}`),
+                      item.theme ? h('span', { style: { fontSize: 11, background: C.raised, padding: '2px 6px', borderRadius: 4, color: C.muted } }, item.theme) : null,
+                      h('span', { style: { fontSize: 11, color: C.faint } }, `约 ${(item.text || '').length} 字`)
+                    ),
+                    h('div', { style: { display: 'flex', gap: 8 } },
+                      h('button', {
+                        type: 'button',
+                        disabled: busy,
+                        style: { ...buttonStyle(true), padding: '4px 12px', fontSize: 12 },
+                        onClick: async () => {
+                          setBusy(true);
+                          try {
+                            await act('enqueue-post', undefined, { text: item.text, urgent: false, source: item.source || 'ai_draft' });
+                            setPreviewDrafts(prev => prev.filter((_, i) => i !== idx));
+                            setNotice('该条推文已加入待发队列！');
+                          } catch (err) {
+                            setError(err.message || String(err));
+                          } finally {
+                            setBusy(false);
+                          }
+                        }
+                      }, '＋ 加入待发队列'),
+                      h('button', {
+                        type: 'button',
+                        disabled: busy,
+                        style: { ...buttonStyle(false), padding: '4px 10px', fontSize: 12, borderColor: '#f59e0b', color: '#f59e0b' },
+                        onClick: async () => {
+                          setBusy(true);
+                          try {
+                            await act('enqueue-post', undefined, { text: item.text, urgent: true, source: item.source || 'ai_draft' });
+                            setPreviewDrafts(prev => prev.filter((_, i) => i !== idx));
+                            setNotice('⚡ 已将该条推文设置为【加急置顶发送】！');
+                          } catch (err) {
+                            setError(err.message || String(err));
+                          } finally {
+                            setBusy(false);
+                          }
+                        }
+                      }, '⚡ 加急置顶'),
+                      h('button', {
+                        type: 'button',
+                        disabled: busy,
+                        style: { ...buttonStyle(false), padding: '4px 8px', fontSize: 12, color: C.error, borderColor: C.error },
+                        onClick: () => setPreviewDrafts(prev => prev.filter((_, i) => i !== idx))
+                      }, '✕ 丢弃')
+                    )
+                  ),
+                  h('div', { style: { fontSize: 13, color: C.text, lineHeight: 1.6, whiteSpace: 'pre-wrap', background: C.surface, padding: '10px 12px', borderRadius: 6, border: `1px solid ${C.border}` } }, item.text)
+                ))
+              )
+          )
         ) : null,
 
         // TAB: 🧠 发帖学习

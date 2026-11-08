@@ -442,12 +442,9 @@ test('the priority list lets you mark a nickname and a gender', async () => {
 });
 
 test('the manual batch panel renders style, model, length and reference controls', async () => {
-  const app = mount({ tab: 'post' });
+  const app = mount({ tab: 'manualGen' });
   try {
     let tree = app.render();
-    assert.ok(!flatText(tree).includes('文字类型'), 'panel starts collapsed');
-    await app.click(tree, 'AI 批量生成草稿');
-    tree = app.render();
     const text = flatText(tree);
     assert.match(text, /文字类型/);
     assert.match(text, /最长稿件字数/);
@@ -456,7 +453,7 @@ test('the manual batch panel renders style, model, length and reference controls
       && String(node.props?.label || '').includes('本次生成用的大模型'));
     assert.ok(picker, 'the panel offers a model picker');
     assert.match(text, /拆解这条帖子/);
-    assert.match(text, /粘贴一条帖子，照它的写法写/);
+    assert.match(text, /粘贴一条参考帖子，照它的写法写/);
     // The style select really carries the five choices.
     const styleSelect = elements(tree).find(node => node.type === 'select'
       && elements(node).some(child => String(child.props?.value) === 'chuci'));
@@ -476,14 +473,12 @@ test('the manual batch panel renders style, model, length and reference controls
 });
 
 test('the manual batch panel remembers last time\'s choices', async () => {
-  const app = mount({ tab: 'post' });
+  const app = mount({ tab: 'manualGen' });
   try {
     app.storage.set('xbot-gen-prefs', JSON.stringify({
       count: 7, style: 'chuci', maxChars: 120, model: 'grok-4.7', reference: '我妈昨天又把我拉黑了。',
     }));
     let tree = app.render();
-    await app.click(tree, 'AI 批量生成草稿');
-    tree = app.render();
 
     const countInput = elements(tree).find(node => node.type === 'input' && node.props?.type === 'number'
       && node.props?.value === 7);

@@ -2978,6 +2978,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       const count = Math.max(1, Math.min(50, Number.isFinite(requested) && requested > 0 ? Math.floor(requested) : batchSize));
       // A one-off prompt overrides the global style prompt for this batch only.
       const oneOffPrompt = typeof request.prompt === 'string' && request.prompt.trim() ? request.prompt.trim() : '';
+      const commitToQueue = request.commitToQueue !== false;
       // Per-batch overrides from the manual generation panel.
       const batchModel = typeof request.model === 'string' ? request.model.trim().slice(0, 60) : '';
       const THEME_STYLE_KEYS = ['classical', 'vernacular', 'english', 'chuci'];
@@ -3140,9 +3141,17 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
             + '要求：学它的体裁、结构、每行的作用、开头钩子、收尾方式、人称与用词，写一条全新的推文；'
             + '不要照抄任何原句，不要复述同一件事，换一个具体内容。'
           : '';
-        const prompt = reference
-          ? basePrompt + referenceBlock + learningBlock + formatRule
-          : basePrompt + themeBlock + learningBlock + subjectBlock + formatRule;
+      // 有参考帖时，以参考帖的体裁为准，不要强制灌注全局的文言文要求。
+      let effectiveBasePrompt = basePrompt;
+      if (reference) {
+        effectiveBasePrompt = (oneOffPrompt || slotPrompt || '') + personaText + (styleBlock ? `\n\n${styleBlock}` : '');
+        if (!effectiveBasePrompt.trim()) {
+          effectiveBasePrompt = '你在推特(X)上发一条原创推文。' + personaText;
+        }
+      }
+      const prompt = reference
+        ? effectiveBasePrompt + referenceBlock + learningBlock + formatRule
+        : basePrompt + themeBlock + learningBlock + subjectBlock + formatRule;
         const styleProblem = text => draftStyleProblem(text, styleKey);
         try {
           let rawDraft = await generateTweetViaLmh(prompt, { model: genModel, port });
@@ -3222,19 +3231,28 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         }
       }
       if (generated.length === 0) throw new Error(`未能成功生成推文草稿，请检查 LocalModelHub 服务状态${failures[0] ? `（${failures[0]}）` : ''}`);
-      // These headlines are now spoken for: never offer them again.
-      const usedNow = generated.map(item => item.hotTopic).filter(Boolean);
-      if (usedNow.length) rememberUsedHotTopics(usedNow);
-      const { payload } = mutatePostQueue((current) => {
-        current.queue.push(...generated);
-      }, activeQueuePath, { maxSize });
+      if (commitToQueue) {
+        // These headlines are now spoken for: never offer them again.
+        const usedNow = generated.map(item => item.hotTopic).filter(Boolean);
+        if (usedNow.length) rememberUsedHotTopics(usedNow);
+        const { payload } = mutatePostQueue((current) => {
+          current.queue.push(...generated);
+        }, activeQueuePath, { maxSize });
+        return {
+          ok: true,
+          action: 'generate-draft-posts',
+          generated,
+          queue: payload.queue,
+          failed: failures.length,
+          note: `已成功由大模型生成并追加 ${generated.length} 条推文草稿入队！${failures.length ? `另有 ${failures.length} 条生成失败。` : ''}`,
+        };
+      }
       return {
         ok: true,
         action: 'generate-draft-posts',
         generated,
-        queue: payload.queue,
         failed: failures.length,
-        note: `已成功由大模型生成并追加 ${generated.length} 条推文草稿入队！${failures.length ? `另有 ${failures.length} 条生成失败。` : ''}`,
+        note: `已成功生成 ${generated.length} 条推文草稿！可预览并挑选需要的内容加入队列。`,
       };
     }
     if (request.action === 'restore-config-backup') {
