@@ -435,7 +435,7 @@ window.__ModuleLoader__.load({
         if (action === 'save-config' && saveLock.current) return;
         if (action === 'save-config') saveLock.current = true;
         setBusy(true); setError('');
-        if (action !== 'update-plugin') setNotice('');
+        if (action !== 'update-plugin' && action !== 'generate-draft-posts') setNotice('');
         try {
           const response = await fetch(ROUTE, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action, target, ...extra }) });
           const data = await response.json();
@@ -2331,7 +2331,8 @@ window.__ModuleLoader__.load({
                   `将生成 ${Math.max(1, Math.min(50, Number(draftGenCount) || 1))} 条草稿`
                   + (draftGenStyle ? `｜文风：${{ classical: '文言文', vernacular: '白话文', english: '英文', chuci: '楚辞' }[draftGenStyle]}` : '')
                   + (draftGenModel ? `｜模型：${draftGenModel}` : '')
-                  + (draftReference.trim() ? '｜模仿参考帖' : '')),
+                  + (draftReference.trim() ? '｜模仿参考帖' : '')
+                  + '。慢模型（如 grok）建议先生成 1~3 条。'),
                 h('button', {
                   type: 'button',
                   disabled: busy || generatingDrafts,
@@ -2352,11 +2353,13 @@ window.__ModuleLoader__.load({
                         referenceAnalysis: draftAnalysis,
                         commitToQueue: false,
                       });
-                      if (res && Array.isArray(res.generated)) {
+                      if (res && Array.isArray(res.generated) && res.generated.length) {
                         setPreviewDrafts(res.generated);
-                        setNotice(`🎉 成功生成 ${res.generated.length} 条推文草稿！请在下方预览并挑选满意的条目加入待发队列。`);
+                        setNotice(`🎉 成功生成 ${res.generated.length} 条推文草稿！请在下方预览并挑选满意的条目加入待发队列。${res.failed ? `（另有 ${res.failed} 条失败）` : ''}`);
                       } else if (!res) {
-                        setError('生成草稿失败：未收到大模型响应，可能是请求超时或大模型未返回内容');
+                        setError('生成草稿失败：未收到大模型响应。常见原因是所选模型超时（grok 等慢模型建议先用 gpt-6-luna，或把条数改成 1~3）。');
+                      } else {
+                        setError(`生成草稿失败：大模型没有产出可用正文${res.note ? `（${res.note}）` : ''}`);
                       }
                     } catch (err) {
                       setError(`生成草稿失败：${err.message || String(err)}`);
@@ -2461,6 +2464,9 @@ window.__ModuleLoader__.load({
                       }, '✕ 丢弃')
                     )
                   ),
+                  Array.isArray(item.previewNotes) && item.previewNotes.length
+                    ? h('div', { style: { fontSize: 11, color: C.muted, lineHeight: 1.5 } }, `校验提示（预览不拦截）：${item.previewNotes.join('；')}`)
+                    : null,
                   h('div', { style: { fontSize: 13, color: C.text, lineHeight: 1.6, whiteSpace: 'pre-wrap', background: C.surface, padding: '10px 12px', borderRadius: 6, border: `1px solid ${C.border}` } }, item.text)
                 ))
               )

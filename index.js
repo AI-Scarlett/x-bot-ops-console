@@ -1453,7 +1453,7 @@ export function personaViolations(text, config = {}) {
 
 // Generic local-model chat call: one prompt in, raw text out. Kept separate from
 // the tweet generator so screening can ask for JSON without quote stripping.
-export async function localModelChat(prompt, { model = 'gpt-6-luna', port = 3040, temperature = 0.2, maxTokens = null, timeoutMs = 30000 } = {}) {
+export async function localModelChat(prompt, { model = 'gpt-6-luna', port = 3040, temperature = 0.2, maxTokens = null, timeoutMs = 120000 } = {}) {
   const configPath = join(APP_HOME, 'Library/Application Support/LocalModelHub/data/config.json');
   let apiKey = 'local-key';
   let targetPort = port;
@@ -2886,7 +2886,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
     if (request.action === 'enqueue-post') {
       const text = String(request.text || '').trim();
       if (!text) throw new TypeError('推文内容不能为空');
-      if (text.length > 500) throw new TypeError('推文长度不能超过 500 字');
+      if (text.length > 2000) throw new TypeError('推文长度不能超过 2000 字');
       const urgent = request.urgent === true;
       const sharedCfg = getConfig();
       const maxSize = Number(sharedCfg.postSettings?.queueMaxSize) || 100;
@@ -2995,8 +2995,8 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       const fmtCfg = { ...DEFAULT_CONFIG.postSettings.format, ...(postCfg.format || {}) };
       // 本次生成的最长字数只在这一次生效，不改全局配置。
       if (batchMaxChars) fmtCfg.maxChars = batchMaxChars;
-      // 全局「禁白话虚词」是给文言文设的；既然这次明确要白话/英文，就不能再拿它否决。
-      if (styleKey === 'vernacular' || styleKey === 'english') fmtCfg.forbidColloquial = [];
+      // 全局「禁白话虚词」是给文言文设的。白话/英文、模仿参考帖、预览挑选都不能被它否决。
+      if (styleKey === 'vernacular' || styleKey === 'english' || reference || !commitToQueue) fmtCfg.forbidColloquial = [];
       const dedupeCfg = { ...DEFAULT_CONFIG.postSettings.dedupe, ...(postCfg.dedupe || {}) };
       const capCfg = { ...DEFAULT_CONFIG.postSettings.politicalCap, ...(postCfg.politicalCap || {}) };
       const styleCfg = { ...DEFAULT_CONFIG.postSettings.style, ...(postCfg.style || {}) };
@@ -3029,7 +3029,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       // The operator's own ban list joins the learned one before anything reads it.
       const bannedList = mergeBannedTopics(rawLearnings, postCfg);
       const learnings = { ...rawLearnings, bannedTopics: bannedList };
-      const learningBlock = (learningCfg.injectIntoPost === false || influence === 0)
+      const learningBlock = (learningCfg.injectIntoPost === false || influence === 0 || !commitToQueue || reference)
         ? ''
         : buildLearningPromptBlock(learnings, { influence });
       const banned = new Set(bannedList.map(topic => topic.toLowerCase()));
@@ -3043,7 +3043,8 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       const port = sharedCfg.model?.endpointPort || 3040;
       const screenFilter = effectiveHotFilter(postCfg, { bannedTopics: bannedList });
       let preferred = rawWinners;
-      if (rawWinners.length) {
+      // 手动预览/模仿生成不要先跑一轮主题筛选，那会多一次模型调用，还容易把真正的生成拖超时。
+      if (rawWinners.length && commitToQueue && !reference) {
         let cache = readPreferredTopicCache();
         if (!preferredTopicCacheFresh(cache, rawWinners)) {
           const screened = await screenPreferredTopics(rawWinners, screenFilter, { model, port });
@@ -3077,7 +3078,9 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         const stored = JSON.parse(readFileSync(POST_HISTORY_PATH, 'utf8'));
         if (stored && Array.isArray(stored.posts)) historyPosts = stored.posts;
       } catch { historyPosts = []; }
-      const hotQuota = Math.max(0, Math.min(Math.max(Number(postCfg.hotTopicPerBatch) || 0, shareQuota), count));
+      const hotQuota = (!commitToQueue || reference)
+        ? 0
+        : Math.max(0, Math.min(Math.max(Number(postCfg.hotTopicPerBatch) || 0, shareQuota), count));
       // Political topics are rationed: today's quota and one post per event.
       const politicalWords = (capCfg.keywords || []).map(word => String(word).toLowerCase());
       const todayKey = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
@@ -3164,7 +3167,9 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
             verdict.ok = false;
             verdict.reasons = [firstStyleIssue, ...(verdict.reasons || [])];
           }
-          for (let attempt = 0; attempt < 2 && !verdict.ok; attempt += 1) {
+          // 预览挑选不反复重写：超时和校验拦截正是手动生成“点了没稿”的主因。
+          const retryLimit = commitToQueue ? 2 : 0;
+          for (let attempt = 0; attempt < retryLimit && !verdict.ok; attempt += 1) {
             // Corrective retries that name every violation.
             const retryPrompt = `${prompt}\n\n【上一次不合格，必须逐条修正】\n- ${verdict.reasons.join('\n- ')}`
               + (fmtCfg.lineCount === 0 ? '' : `\n- 严格保持 ${fmtCfg.lineCount} 行`);
@@ -3178,6 +3183,27 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
               verdict.ok = false;
               verdict.reasons = [retryStyleIssue, ...(verdict.reasons || [])];
             }
+          }
+          if (!commitToQueue) {
+            if (!draftText) {
+              failures.push(`第 ${i + 1} 条大模型没有返回正文`);
+              continue;
+            }
+            generated.push({
+              id: `post_ai_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 6)}`,
+              text: draftText,
+              topic: reference ? '模仿参考帖' : topic,
+              sig: postSettingsSignature(postCfg),
+              styleSlot: styleKey === 'english' ? '英文' : (styleLabel || slotLabel),
+              theme: reference ? '模仿参考帖' : (theme ? theme.label : ''),
+              hotTopic: '',
+              political: false,
+              source: reference ? 'ai_draft_reference' : (oneOffPrompt ? 'ai_draft_custom' : 'ai_draft'),
+              urgent: false,
+              createdAt: new Date().toISOString(),
+              previewNotes: verdict.ok ? [] : (verdict.reasons || []),
+            });
+            continue;
           }
           if (!verdict.ok) {
             failures.push(`结构不合规：${verdict.reasons.join('；')}`);

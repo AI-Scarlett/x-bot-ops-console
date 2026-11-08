@@ -429,7 +429,7 @@ test('client source is valid JavaScript and includes post queue controls', async
   assert.doesNotThrow(() => new Function(body));
   assert.match(source, /待发推文队列看板/);
   assert.match(source, /立即插队置顶发送/);
-  assert.match(source, /AI 批量生成草稿/);
+  assert.match(source, /手动AI创作/);
   assert.match(source, /待发队列补仓策略/);
 });
 
