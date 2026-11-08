@@ -442,6 +442,12 @@ test('handles post queue operations (enqueue, urgent, remove, clear)', async () 
       queuePath: join(f.dir, 'post_queue.json'),
       platform: 'darwin',
     });
+    const longText = '余'.repeat(2200);
+    const longRes = await service.action({ action: 'enqueue-post', text: longText, urgent: false });
+    assert.equal(longRes.ok, true);
+    assert.equal(longRes.item.text.length, 2200);
+    await service.action({ action: 'clear-post-queue' });
+
     const res1 = await service.action({ action: 'enqueue-post', text: '第一条普通测试推文', urgent: false });
     assert.equal(res1.ok, true);
     assert.equal(res1.queue.length, 1);
@@ -1450,7 +1456,8 @@ test('writer rule settings are editable and validated', async () => {
   const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
   assert.match(source, /写作规则（三行结构/);
   assert.match(source, /末行引导字/);
-  assert.match(source, /套用文档配比/);
+  assert.match(source, /套用出厂配比/);
+  assert.match(source, /当前生效配比/);
 });
 
 test('style prompt fragments are editable and drive the structure block', async () => {

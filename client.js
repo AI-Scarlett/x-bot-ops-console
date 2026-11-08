@@ -1867,21 +1867,29 @@ window.__ModuleLoader__.load({
                   onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), hotTopicShareMinPercent: e.target.value === '' ? 0 : Number(e.target.value) } })),
                 }))),
             h('div', { style: { marginTop: 12, paddingTop: 10, borderTop: `1px solid ${C.border}` } },
-              h('button', {
-                type: 'button',
-                style: { ...buttonStyle(true), padding: '7px 14px', fontSize: 12 },
-                onClick: () => {
-                  const preset = [
-                    { id: 'hook_xy', label: '香艳', weight: 60, prompt: '古典艳诗/宫体诗气质，写虚构成年女子，称卿、佳人、娘子。闺房双关、调情、暧昧动作，用一句双关收束。不写琴、月、帘、花之类氛围小品。' },
-                    { id: 'hook_pp', label: '批判', weight: 20, prompt: '骂一件具体的事（热点、制度动作、平台坑、看客、伪君子），要有具体人物/动作/数字。' },
-                    { id: 'hook_gn', label: '搞女人', weight: 20, prompt: '成年人自愿的暧昧、男女博弈、相亲彩礼、渣男渣女、嘴上装身体诚实。' },
-                  ];
-                  updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), topicMix: preset } }));
-                  setNotice('已套用文档配比：香艳 60% / 批判 20% / 搞女人 20%，记得保存。');
-                },
-              }, '⚡ 套用文档配比（香艳60/批判20/搞女人20）'),
-              h('small', { style: { display: 'block', marginTop: 6, fontSize: 11, color: C.faint } },
-                '替换当前「主题配比」。楚辞占比可在主题里单独加一条，或在时段文风里控制。')),
+              (() => {
+                const mix = config?.postSettings?.topicMix || [];
+                const liveLabel = mix.length
+                  ? mix.map(item => `${item.label || '未命名'}${Number(item.weight) || 0}`).join('/')
+                  : '尚未配置';
+                return h('div', null,
+                  h('div', { style: { fontSize: 12, color: C.text, marginBottom: 6 } }, `当前生效配比：${liveLabel}`),
+                  h('button', {
+                    type: 'button',
+                    style: { ...buttonStyle(false), padding: '7px 14px', fontSize: 12 },
+                    onClick: () => {
+                      const preset = [
+                        { id: 'hook_xy', label: '香艳', weight: 60, prompt: '古典艳诗/宫体诗气质，写虚构成年女子，称卿、佳人、娘子。闺房双关、调情、暧昧动作，用一句双关收束。不写琴、月、帘、花之类氛围小品。' },
+                        { id: 'hook_pp', label: '批判', weight: 20, prompt: '骂一件具体的事（热点、制度动作、平台坑、看客、伪君子），要有具体人物/动作/数字。' },
+                        { id: 'hook_gn', label: '搞女人', weight: 20, prompt: '成年人自愿的暧昧、男女博弈、相亲彩礼、渣男渣女、嘴上装身体诚实。' },
+                      ];
+                      updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), topicMix: preset } }));
+                      setNotice('已套用出厂配比：香艳 60% / 批判 20% / 搞女人 20%。这会覆盖你现在的主题配比，记得保存。');
+                    },
+                  }, '⚡ 套用出厂配比（香艳60/批判20/搞女人20）'),
+                  h('small', { style: { display: 'block', marginTop: 6, fontSize: 11, color: C.faint } },
+                    '这只是出厂预设，不是当前生效值。真正在用的是下面「主题配比」那几行；改完点保存才会写入。'));
+              })()),
           ),
 
           // 格式硬性要求
@@ -2383,14 +2391,20 @@ window.__ModuleLoader__.load({
                   style: { ...buttonStyle(true), fontSize: 12, padding: '4px 12px' },
                   onClick: async () => {
                     setBusy(true);
+                    const remaining = [];
+                    let added = 0;
                     try {
                       for (const item of previewDrafts) {
-                        await act('enqueue-post', undefined, { text: item.text, urgent: false, source: item.source || 'ai_draft' });
+                        const res = await act('enqueue-post', undefined, { text: item.text, urgent: false, source: item.source || 'ai_draft' });
+                        if (res && res.ok !== false && res.item) added += 1;
+                        else remaining.push(item);
                       }
-                      setPreviewDrafts([]);
-                      setNotice('全部候选草稿已加入待发队列！');
+                      setPreviewDrafts(remaining);
+                      if (remaining.length) setError(`已加入 ${added} 条，还有 ${remaining.length} 条没进去。稿件还在预览里，可以复制或改完再入队。`);
+                      else setNotice('全部候选草稿已加入待发队列！');
                     } catch (err) {
-                      setError(err.message || String(err));
+                      setPreviewDrafts(remaining.length ? remaining : previewDrafts);
+                      setError(`${err.message || String(err)}。预览稿还在，不会因为入队失败被清掉。`);
                     } finally {
                       setBusy(false);
                     }
@@ -2429,11 +2443,12 @@ window.__ModuleLoader__.load({
                         onClick: async () => {
                           setBusy(true);
                           try {
-                            await act('enqueue-post', undefined, { text: item.text, urgent: false, source: item.source || 'ai_draft' });
+                            const res = await act('enqueue-post', undefined, { text: item.text, urgent: false, source: item.source || 'ai_draft' });
+                            if (!res) throw new Error('入队没有成功');
                             setPreviewDrafts(prev => prev.filter((_, i) => i !== idx));
                             setNotice('该条推文已加入待发队列！');
                           } catch (err) {
-                            setError(err.message || String(err));
+                            setError(`${err.message || String(err)}。这条还在预览里，可以直接复制。`);
                           } finally {
                             setBusy(false);
                           }
@@ -2446,16 +2461,29 @@ window.__ModuleLoader__.load({
                         onClick: async () => {
                           setBusy(true);
                           try {
-                            await act('enqueue-post', undefined, { text: item.text, urgent: true, source: item.source || 'ai_draft' });
+                            const res = await act('enqueue-post', undefined, { text: item.text, urgent: true, source: item.source || 'ai_draft' });
+                            if (!res) throw new Error('入队没有成功');
                             setPreviewDrafts(prev => prev.filter((_, i) => i !== idx));
                             setNotice('⚡ 已将该条推文设置为【加急置顶发送】！');
                           } catch (err) {
-                            setError(err.message || String(err));
+                            setError(`${err.message || String(err)}。这条还在预览里，可以直接复制。`);
                           } finally {
                             setBusy(false);
                           }
                         }
                       }, '⚡ 加急置顶'),
+                      h('button', {
+                        type: 'button',
+                        style: { ...buttonStyle(false), padding: '4px 10px', fontSize: 12 },
+                        onClick: async () => {
+                          try {
+                            await navigator.clipboard.writeText(item.text || '');
+                            setNotice('已复制这条草稿，可以直接去发。');
+                          } catch {
+                            setError('复制失败，请直接选中正文复制。');
+                          }
+                        }
+                      }, '📋 复制'),
                       h('button', {
                         type: 'button',
                         disabled: busy,

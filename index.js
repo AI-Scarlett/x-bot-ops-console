@@ -2886,9 +2886,11 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
     if (request.action === 'enqueue-post') {
       const text = String(request.text || '').trim();
       if (!text) throw new TypeError('推文内容不能为空');
-      if (text.length > 2000) throw new TypeError('推文长度不能超过 2000 字');
-      const urgent = request.urgent === true;
       const sharedCfg = getConfig();
+      // 手动创作可以比自动发帖长；入队上限单独放宽，失败也不清预览。
+      const enqueueMax = 25000;
+      if (text.length > enqueueMax) throw new TypeError(`推文长度不能超过 ${enqueueMax} 字（当前这篇 ${text.length} 字）。稿件还在预览里，可以直接复制。`);
+      const urgent = request.urgent === true;
       const maxSize = Number(sharedCfg.postSettings?.queueMaxSize) || 100;
       const newItem = {
         id: `post_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
