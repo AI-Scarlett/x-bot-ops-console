@@ -1952,7 +1952,7 @@ test('reply tab ships the special-person editor with add and delete controls', a
   // Each theme row offers 文风 and 模型.
   assert.match(source, /文风：全局默认/);
   assert.match(source, /value: 'chuci' \}, '楚辞'/);
-  assert.match(source, /留空=全局默认/);
+  assert.match(source, /这一条主题用的大模型/);
   // The likes are switchable from the two panels that own them.
   assert.match(source, /likeOnComment/);
   assert.match(source, /likeOnReply/);

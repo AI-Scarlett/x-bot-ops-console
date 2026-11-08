@@ -2034,13 +2034,13 @@ window.__ModuleLoader__.load({
                       h('option', { value: 'vernacular' }, '白话文'),
                       h('option', { value: 'english' }, '英文'),
                       h('option', { value: 'chuci' }, '楚辞')),
-                    h('input', {
-                      title: '这一条主题单独用哪个模型，留空就用全局模型',
-                      style: { ...inputStyle, flex: '1 1 220px', margin: 0, padding: '6px 8px', fontSize: 12 },
-                      placeholder: `大模型（留空=全局默认：${config?.postSettings?.model || config?.model?.name || 'gpt-6-luna'}）`,
-                      value: item.model || '',
-                      onChange: e => patch(item.id, { model: e.target.value }),
-                    })),
+                  ),
+                  h(ModelPicker, {
+                    value: item.model || '',
+                    onChange: v => patch(item.id, { model: v }),
+                    side: 'post',
+                    label: '这一条主题用的大模型（留空=全局默认）',
+                  }),
                   h('textarea', {
                     style: { ...inputStyle, minHeight: 48, marginTop: 8, fontSize: 12 },
                     placeholder: '这个主题的写法和侧重点，例如：围绕搞钱与追求异性展开，风趣不低俗…',
