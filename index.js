@@ -87,6 +87,7 @@ export const FIELD_SIDE = Object.freeze({
   'replySettings.thinReplyExtra': 'reply',
   'replySettings.personaOverride': 'reply',
   'replySettings.stopKeywords': 'reply',
+  'replySettings.likeOnReply': 'reply',
   'replySettings.forbiddenPhrases': 'reply',
   'postSettings.enabled': 'post',
   'postSettings.intervalMinutes': 'post',
@@ -125,6 +126,7 @@ export const FIELD_SIDE = Object.freeze({
   'cruiseSettings.tierSweepHours': 'profile',
   'cruiseSettings.commentsPerProfile': 'profile',
   'cruiseSettings.likesPerProfile': 'profile',
+  'cruiseSettings.likeOnComment': 'profile',
   'persona.enabled': 'both',
   'persona.summary': 'both',
   'persona.forbidden': 'both',
@@ -1662,6 +1664,8 @@ const DEFAULT_CONFIG = Object.freeze({
     personaOverride: '',
     // Extra phrases that mean "stop replying to me".
     stopKeywords: [],
+    // 回复完顺手给原帖点个赞。
+    likeOnReply: true,
   },
   timing: { commentWindowHours: 6, mentionWindowHours: 12, quietHoursStart: 0, quietHoursEnd: 7, fullStopStart: 1, fullStopEnd: 6, publishMinSeconds: 30, publishMaxSeconds: 100, replyMinSeconds: 0, replyMaxSeconds: 0, authorCooldownSeconds: 1800, postingWorkMinutes: 20, postingRestMinutes: 5, rateLimitMinutes: 5, rateLimitLongMinutes: 15 },
   tiers: [
@@ -1827,6 +1831,8 @@ const DEFAULT_CONFIG = Object.freeze({
     commentsPerProfile: 1,
     // How many posts of a visited profile to like. 0 disables liking.
     likesPerProfile: 0,
+    // 评论某条帖子时顺手也给它点个赞（固定流程，主开关在这里）。
+    likeOnComment: true,
     autoVisitInvited: true,
     model: '',
     customPrompt: '你在推特(X)上用周天子姬霸的人设回复好友主页的最新推文。\n要求：用文言文或微言大义轻幽默回应对方的话题，亲切称呼对方，不要任何问句，不要现代粗俗脏话，字数在12到30字之间。直接输出纯文本。',
@@ -2238,6 +2244,7 @@ function validateConfig(input) {
   if (copy.replySettings !== undefined) {
     if (!isRecord(copy.replySettings) || (copy.replySettings.model !== undefined && typeof copy.replySettings.model !== 'string') || (copy.replySettings.customPrompt !== undefined && typeof copy.replySettings.customPrompt !== 'string')) throw new TypeError('回复个性化设置无效');
     if (copy.replySettings.personaOverride !== undefined && (typeof copy.replySettings.personaOverride !== 'string' || copy.replySettings.personaOverride.length > 2000)) throw new TypeError('人设覆盖文本无效');
+    if (copy.replySettings.likeOnReply !== undefined && typeof copy.replySettings.likeOnReply !== 'boolean') throw new TypeError('回复后顺手点赞开关无效');
     if (copy.replySettings.stopKeywords !== undefined) {
       if (!Array.isArray(copy.replySettings.stopKeywords) || copy.replySettings.stopKeywords.length > 200) throw new TypeError('停止回复关键词名单无效');
       copy.replySettings.stopKeywords = [...new Set(copy.replySettings.stopKeywords.map(item => String(item || '').trim()).filter(Boolean))];
@@ -2554,6 +2561,7 @@ function validateConfig(input) {
     if (copy.cruiseSettings.crawlFollowing !== undefined && typeof copy.cruiseSettings.crawlFollowing !== 'boolean') throw new TypeError('巡航关注列表开关无效');
     if (copy.cruiseSettings.crawlFollowers !== undefined && typeof copy.cruiseSettings.crawlFollowers !== 'boolean') throw new TypeError('巡航粉丝列表开关无效');
     if (copy.cruiseSettings.autoVisitInvited !== undefined && typeof copy.cruiseSettings.autoVisitInvited !== 'boolean') throw new TypeError('自动优先消费回踩邀请开关无效');
+    if (copy.cruiseSettings.likeOnComment !== undefined && typeof copy.cruiseSettings.likeOnComment !== 'boolean') throw new TypeError('评论时顺手点赞开关无效');
     if (copy.cruiseSettings.model !== undefined && typeof copy.cruiseSettings.model !== 'string') throw new TypeError('巡航模型设置无效');
     if (copy.cruiseSettings.customPrompt !== undefined && typeof copy.cruiseSettings.customPrompt !== 'string') throw new TypeError('巡航提示词无效');
   }

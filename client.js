@@ -1375,6 +1375,19 @@ window.__ModuleLoader__.load({
             (config?.replySettings?.customPrompt || '').trim()
               ? h('small', { style: { color: C.success, fontSize: 12 } }, `✓ 已设置（${config.replySettings.customPrompt.length} 字），生效于提及回复 Worker`)
               : h('small', { style: { color: C.error, fontSize: 12 } }, '⚠️ 当前为空：提及回复将只使用 Worker 内置文风，不会应用任何自定义补充要求。'),
+            h('label', {
+              style: { display: 'flex', gap: 8, alignItems: 'center', marginTop: 14, fontSize: 13, color: C.text, cursor: 'pointer' },
+              title: '关掉以后：只回复，不给原帖点赞',
+            },
+              h('input', {
+                type: 'checkbox',
+                checked: config?.replySettings?.likeOnReply !== false,
+                onChange: e => updateConfig(c => ({ ...c, replySettings: { ...(c.replySettings || {}), likeOnReply: e.target.checked } })),
+              }),
+              '回复成功后顺手给原帖点个赞',
+              h(SideBadge, { side: 'reply' })),
+            h('div', { style: { fontSize: 12, color: C.faint, lineHeight: 1.6, marginTop: 2 } },
+              '默认开。勾着的时候，每条回复提交成功后都会给被回复的那条帖子点赞；关掉就只回复、不点赞。'),
             h('div', { style: { marginTop: 14, padding: '10px 12px', borderRadius: 8, background: C.layerTwo, border: `1px solid ${C.border}` } },
               h('div', { style: { fontSize: 13, fontWeight: '600', marginBottom: 6 } }, '⚙️ 内置回复规则（原先写死在 Worker 里，现在可改）'),
               h('label', { style: { ...labelStyle, marginTop: 4 } }, '长度要求（覆盖内置默认）：'),
@@ -3071,6 +3084,19 @@ window.__ModuleLoader__.load({
                 })),
               h('div', { style: { flex: '1 1 260px', fontSize: 12, color: C.faint, lineHeight: 1.6, paddingTop: 22 } },
                 'Worker 会记住已评论/已点赞的帖子 ID，重复拜访同一个人时自动往下找没处理过的，不会重复刷同一条。点赞在评论之前执行，两者额度互相独立。')),
+            h('label', {
+              style: { display: 'flex', gap: 8, alignItems: 'center', marginTop: 12, fontSize: 13, color: C.text, cursor: 'pointer' },
+              title: '关掉以后：只在评论框里评论，不点那个赞',
+            },
+              h('input', {
+                type: 'checkbox',
+                checked: config?.cruiseSettings?.likeOnComment !== false,
+                onChange: e => updateConfig(c => ({ ...c, cruiseSettings: { ...(c.cruiseSettings || {}), likeOnComment: e.target.checked } })),
+              }),
+              '评论时顺手给这条帖子点个赞',
+              h(SideBadge, { side: 'profile' })),
+            h('div', { style: { fontSize: 12, color: C.faint, lineHeight: 1.6, marginTop: 2 } },
+              '默认开。勾着的时候，每次评论某条帖子前都会先给它点赞；不占上面「点赞几条」的额度。关掉就只评论、不点赞。'),
             (() => {
               const sweep = state?.cruiseSweep;
               const every = config?.cruiseSettings?.tierSweepHours ?? 6;

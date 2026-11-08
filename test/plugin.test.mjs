@@ -1842,6 +1842,27 @@ test('special person rows are operator-managed: migrate, validate, add, delete',
   assert.throws(() => validateConfig(tooLongRow), /4000 字/);
 });
 
+test('liking on comment and on reply are switches, not hard-wired', () => {
+  // Both default to on, so upgrading does not silently change behaviour.
+  const defaults = structuredClone(DEFAULT_CONFIG);
+  assert.equal(validateConfig(defaults).cruiseSettings.likeOnComment, true);
+  assert.equal(validateConfig(defaults).replySettings.likeOnReply, true);
+
+  const off = structuredClone(DEFAULT_CONFIG);
+  off.cruiseSettings.likeOnComment = false;
+  off.replySettings.likeOnReply = false;
+  const kept = validateConfig(off);
+  assert.equal(kept.cruiseSettings.likeOnComment, false);
+  assert.equal(kept.replySettings.likeOnReply, false);
+
+  const badComment = structuredClone(DEFAULT_CONFIG);
+  badComment.cruiseSettings.likeOnComment = 'yes';
+  assert.throws(() => validateConfig(badComment), /评论时顺手点赞/);
+  const badReply = structuredClone(DEFAULT_CONFIG);
+  badReply.replySettings.likeOnReply = 1;
+  assert.throws(() => validateConfig(badReply), /回复后顺手点赞/);
+});
+
 test('the 重点名单 row itself can request one classical plus one vernacular line', () => {
   const cfg = structuredClone(DEFAULT_CONFIG);
   cfg.handleProfiles = {
@@ -1894,6 +1915,9 @@ test('reply tab ships the special-person editor with add and delete controls', a
   assert.match(source, /两行：文言 \+ 白话/);
   assert.match(source, /wantsBilingualStyle/);
   assert.match(source, /bilingual: row\.bilingual === true/);
+  // The likes are switchable from the two panels that own them.
+  assert.match(source, /likeOnComment/);
+  assert.match(source, /likeOnReply/);
   // The 重点名单 rows carry the same switch, right after 昵称/性别/备注.
   assert.match(source, /'文言\+白话'/);
   assert.match(source, /setProfile\(\{ bilingual: e\.target\.checked \}\)/);
