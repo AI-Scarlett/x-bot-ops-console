@@ -77,6 +77,22 @@ window.__ModuleLoader__.load({
     });
     const sideText = side => (side === 'both' ? t('both') : side === 'comment' ? t('commentSide') : side === 'reply' ? t('replySide') : side === 'post' ? t('postSide') : side === 'profile' ? t('profileSide') : t('none'));
 
+    // 手动批量生成面板的选择记住上次用过的（浏览器本地存储，不进配置文件）。
+    const GEN_PREFS_KEY = 'xbot-gen-prefs';
+    function readGenPrefs() {
+      try {
+        const raw = window.localStorage.getItem(GEN_PREFS_KEY);
+        const parsed = raw ? JSON.parse(raw) : null;
+        return parsed && typeof parsed === 'object' ? parsed : {};
+      } catch { return {}; }
+    }
+    function saveGenPrefs(patch) {
+      try {
+        const next = { ...readGenPrefs(), ...patch };
+        window.localStorage.setItem(GEN_PREFS_KEY, JSON.stringify(next));
+      } catch { /* private mode or quota: the panel still works, just forgets */ }
+    }
+
     const tierInfo = {
       apex: {
         title: '👑 Apex 档位（最高优先级 · 专属对象）',
@@ -358,13 +374,16 @@ window.__ModuleLoader__.load({
       const [manualPostText, setManualPostText] = React.useState('');
       const [generatingDrafts, setGeneratingDrafts] = React.useState(false);
       const [showGenPanel, setShowGenPanel] = React.useState(false);
-      const [draftGenCount, setDraftGenCount] = React.useState(10);
+      // 手动批量生成：模型 / 文风 / 字数上限 / 参考帖都取上次保存的选择。
+      const genPrefs = readGenPrefs();
+      const [draftGenCount, setDraftGenCount] = React.useState(
+        Number(genPrefs.count) > 0 ? Math.max(1, Math.min(50, Number(genPrefs.count))) : 10);
       const [draftGenPrompt, setDraftGenPrompt] = React.useState('');
       // 手动批量生成：本次生成单独用的模型 / 文风 / 字数上限，以及"照这条写"的参考帖。
-      const [draftGenModel, setDraftGenModel] = React.useState('');
-      const [draftGenStyle, setDraftGenStyle] = React.useState('');
-      const [draftGenMaxChars, setDraftGenMaxChars] = React.useState('');
-      const [draftReference, setDraftReference] = React.useState('');
+      const [draftGenModel, setDraftGenModel] = React.useState(typeof genPrefs.model === 'string' ? genPrefs.model : '');
+      const [draftGenStyle, setDraftGenStyle] = React.useState(typeof genPrefs.style === 'string' ? genPrefs.style : '');
+      const [draftGenMaxChars, setDraftGenMaxChars] = React.useState(genPrefs.maxChars === undefined || genPrefs.maxChars === null ? '' : genPrefs.maxChars);
+      const [draftReference, setDraftReference] = React.useState(typeof genPrefs.reference === 'string' ? genPrefs.reference : '');
       const [draftAnalysis, setDraftAnalysis] = React.useState('');
       const [analyzingReference, setAnalyzingReference] = React.useState(false);
       // Free-text drafts for comma/space separated fields. These inputs keep the
@@ -1492,14 +1511,20 @@ window.__ModuleLoader__.load({
 
             // AI 草稿生成面板：数量 + 一次性独立提示词
             showGenPanel ? h('div', { style: { background: C.layerTwo, padding: '12px 14px', borderRadius: 10, border: `1px solid ${C.border}`, marginBottom: 14 } },
-              h('label', { style: { fontSize: 13, fontWeight: '600', display: 'block', marginBottom: 6 } }, '🤖 AI 批量生成待发草稿：'),
+              h('label', { style: { fontSize: 13, fontWeight: '600', display: 'block', marginBottom: 6 } },
+                '🤖 AI 批量生成待发草稿：',
+                h('span', { style: { fontSize: 11, fontWeight: '400', color: C.faint, marginLeft: 8 } }, '条数 / 文字类型 / 字数 / 模型 / 参考帖会自动记住上次的选择')),
               h('div', { style: { display: 'flex', gap: 14, flexWrap: 'wrap', marginBottom: 10 } },
                 h('label', { style: { ...labelStyle, flex: '0 0 130px', margin: 0 } },
                   '本次生成条数：',
                   h('input', {
                     type: 'number', min: 1, max: 50, style: inputStyle,
                     value: draftGenCount,
-                    onChange: e => setDraftGenCount(e.target.value === '' ? 1 : Math.max(1, Math.min(50, Number(e.target.value)))),
+                    onChange: e => {
+                      const next = e.target.value === '' ? 1 : Math.max(1, Math.min(50, Number(e.target.value)));
+                      setDraftGenCount(next);
+                      saveGenPrefs({ count: next });
+                    },
                   })
                 ),
                 h('label', { style: { ...labelStyle, flex: '0 0 150px', margin: 0 } },
@@ -1507,7 +1532,10 @@ window.__ModuleLoader__.load({
                   h('select', {
                     style: { ...inputStyle, cursor: 'pointer' },
                     value: draftGenStyle,
-                    onChange: e => setDraftGenStyle(e.target.value),
+                    onChange: e => {
+                      setDraftGenStyle(e.target.value);
+                      saveGenPrefs({ style: e.target.value });
+                    },
                   },
                     h('option', { value: '' }, '跟随全局'),
                     h('option', { value: 'classical' }, '文言文'),
@@ -1521,7 +1549,11 @@ window.__ModuleLoader__.load({
                     type: 'number', min: 10, max: 2000, style: inputStyle,
                     placeholder: `留空跟随全局（当前 ${config?.postSettings?.format?.maxChars ?? 500} 字）`,
                     value: draftGenMaxChars,
-                    onChange: e => setDraftGenMaxChars(e.target.value === '' ? '' : Math.max(10, Math.min(2000, Number(e.target.value) || 10))),
+                    onChange: e => {
+                      const next = e.target.value === '' ? '' : Math.max(10, Math.min(2000, Number(e.target.value) || 10));
+                      setDraftGenMaxChars(next);
+                      saveGenPrefs({ maxChars: next });
+                    },
                   })
                 )),
               draftGenStyle === 'english'
@@ -1530,7 +1562,10 @@ window.__ModuleLoader__.load({
                 : null,
               h(ModelPicker, {
                 value: draftGenModel,
-                onChange: setDraftGenModel,
+                onChange: value => {
+                  setDraftGenModel(value);
+                  saveGenPrefs({ model: value });
+                },
                 side: 'post',
                 label: '本次生成用的大模型（留空=跟随全局）',
               }),
@@ -1551,7 +1586,11 @@ window.__ModuleLoader__.load({
                   style: { ...inputStyle, minHeight: 70, resize: 'vertical', marginBottom: 6 },
                   placeholder: '粘贴参考帖子全文…',
                   value: draftReference,
-                  onChange: e => { setDraftReference(e.target.value); setDraftAnalysis(''); },
+                  onChange: e => {
+                    setDraftReference(e.target.value);
+                    saveGenPrefs({ reference: e.target.value.slice(0, 4000) });
+                    setDraftAnalysis('');
+                  },
                 }),
                 h('div', { style: { display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' } },
                   h('button', {

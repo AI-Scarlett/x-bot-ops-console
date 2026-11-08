@@ -103,8 +103,17 @@ function mount({ config = sampleConfig(), state = sampleState, tab = 'tiers' } =
   const ctx = { effect(fn) { fn(); }, locale, slots };
 
   const moduleFactory = new Function('window', 'require', `${body}; return __plugin;`);
+  const fakeWindow = {
+    location: { protocol: 'http:' },
+    __ModuleLoader__: { load() {} },
+    localStorage: {
+      getItem: key => (storage.has(key) ? storage.get(key) : null),
+      setItem: (key, value) => { storage.set(key, String(value)); },
+      removeItem: key => { storage.delete(key); },
+    },
+  };
   const plugin = moduleFactory(
-    { location: { protocol: 'http:' }, __ModuleLoader__: { load() {} } },
+    fakeWindow,
     id => (id === 'react' ? React : {}),
   );
   const exported = plugin.factory(id => (id === 'react' ? React : {}));
@@ -112,6 +121,7 @@ function mount({ config = sampleConfig(), state = sampleState, tab = 'tiers' } =
   assert.ok(rootComponent, 'client bundle must register a root component');
 
   const placeholders = [];
+  const storage = new Map();
   globalThis.fetch = async (url, options = {}) => {
     if (options && options.method === 'POST') {
       requests.push(JSON.parse(options.body));
@@ -142,7 +152,7 @@ function mount({ config = sampleConfig(), state = sampleState, tab = 'tiers' } =
   };
 
   const api = {
-    React, hooks, requests, render,
+    React, hooks, requests, render, storage, fakeWindow,
     config: () => hooks[5],
     find: (tree, predicate) => elements(tree).find(predicate),
     findByText: (tree, text) => elements(tree).find(node => node.type && typeof node.type !== 'function' && flatText(node).includes(text)),
@@ -462,5 +472,42 @@ test('the manual batch panel renders style, model, length and reference controls
     tree = app.render();
     const analyze = elements(tree).find(node => node.type === 'button' && flatText(node).includes('拆解这条帖子'));
     assert.equal(analyze.props.disabled, false, 'enabled once a post is pasted');
+  } finally { app.close(); }
+});
+
+test('the manual batch panel remembers last time\'s choices', async () => {
+  const app = mount({ tab: 'post' });
+  try {
+    app.storage.set('xbot-gen-prefs', JSON.stringify({
+      count: 7, style: 'chuci', maxChars: 120, model: 'grok-4.7', reference: '我妈昨天又把我拉黑了。',
+    }));
+    let tree = app.render();
+    await app.click(tree, 'AI 批量生成草稿');
+    tree = app.render();
+
+    const countInput = elements(tree).find(node => node.type === 'input' && node.props?.type === 'number'
+      && node.props?.value === 7);
+    assert.ok(countInput, 'count restored');
+
+    const styleSelect = elements(tree).find(node => node.type === 'select' && node.props?.value === 'chuci');
+    assert.ok(styleSelect, 'style restored');
+
+    const charInput = elements(tree).find(node => node.type === 'input' && node.props?.type === 'number'
+      && node.props?.value === 120);
+    assert.ok(charInput, 'max chars restored');
+
+    const picker = elements(tree).find(node => node.type && node.type.name === 'ModelPicker'
+      && node.props?.value === 'grok-4.7');
+    assert.ok(picker, 'model restored');
+
+    const ref = elements(tree).find(node => node.type === 'textarea'
+      && node.props?.value === '我妈昨天又把我拉黑了。');
+    assert.ok(ref, 'reference post restored');
+
+    // Every change is written back, so the next visit keeps it.
+    styleSelect.props.onChange({ target: { value: 'english' } });
+    assert.equal(JSON.parse(app.storage.get('xbot-gen-prefs')).style, 'english');
+    ref.props.onChange({ target: { value: '新的参考帖' } });
+    assert.equal(JSON.parse(app.storage.get('xbot-gen-prefs')).reference, '新的参考帖');
   } finally { app.close(); }
 });
