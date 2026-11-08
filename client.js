@@ -424,11 +424,12 @@ window.__ModuleLoader__.load({
           }
           setConfigHash(data.configHash ?? null);
           latestSaveHash.current = data.configHash ?? null;
+          if (Array.isArray(data.manualDrafts) && !generatingDrafts) setPreviewDrafts(data.manualDrafts);
           setError('');
         } catch (err) {
           setError(`${t('unavailable')} ${err.message || ''}`);
         }
-      }, [draftDirty]);
+      }, [draftDirty, generatingDrafts]);
       React.useEffect(() => { void refresh(); const timer = setInterval(() => void refresh(), 15000); return () => clearInterval(timer); }, [refresh]);
 
       const act = async (action, target, extra = {}) => {
@@ -2362,8 +2363,9 @@ window.__ModuleLoader__.load({
                         commitToQueue: false,
                       });
                       if (res && Array.isArray(res.generated) && res.generated.length) {
-                        setPreviewDrafts(res.generated);
-                        setNotice(`🎉 成功生成 ${res.generated.length} 条推文草稿！请在下方预览并挑选满意的条目加入待发队列。${res.failed ? `（另有 ${res.failed} 条失败）` : ''}`);
+                        if (Array.isArray(res.manualDrafts)) setPreviewDrafts(res.manualDrafts);
+                        else setPreviewDrafts(res.generated);
+                        setNotice(`🎉 成功生成 ${res.generated.length} 条推文草稿！可挑选入队；草稿会在本页保留 24 小时，入队后也不会清掉。${res.failed ? `（另有 ${res.failed} 条失败）` : ''}`);
                       } else if (!res) {
                         setError('生成草稿失败：未收到大模型响应。常见原因是所选模型超时（grok 等慢模型建议先用 gpt-6-luna，或把条数改成 1~3）。');
                       } else {
@@ -2383,7 +2385,7 @@ window.__ModuleLoader__.load({
           // 候选草稿预览与挑选入队看板
           h('section', { style: cardStyle },
             h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 10 } },
-              h('h2', { style: { margin: 0, fontSize: 15 } }, `📝 候选草稿预览 (${previewDrafts.length} 条待处理)`),
+              h('h2', { style: { margin: 0, fontSize: 15 } }, `📝 候选草稿预览 (${previewDrafts.length} 条，入队后仍保留 24 小时)`),
               previewDrafts.length > 0 ? h('div', { style: { display: 'flex', gap: 8 } },
                 h('button', {
                   type: 'button',
@@ -2399,9 +2401,8 @@ window.__ModuleLoader__.load({
                         if (res && res.ok !== false && res.item) added += 1;
                         else remaining.push(item);
                       }
-                      setPreviewDrafts(remaining);
                       if (remaining.length) setError(`已加入 ${added} 条，还有 ${remaining.length} 条没进去。稿件还在预览里，可以复制或改完再入队。`);
-                      else setNotice('全部候选草稿已加入待发队列！');
+                      else setNotice(`已加入 ${added} 条待发队列。原稿还在本页保留 24 小时，可手动删除。`);
                     } catch (err) {
                       setPreviewDrafts(remaining.length ? remaining : previewDrafts);
                       setError(`${err.message || String(err)}。预览稿还在，不会因为入队失败被清掉。`);
@@ -2414,13 +2415,26 @@ window.__ModuleLoader__.load({
                   type: 'button',
                   disabled: busy,
                   style: { ...buttonStyle(false), fontSize: 12, padding: '4px 10px', color: C.error, borderColor: C.error },
-                  onClick: () => setPreviewDrafts([]),
-                }, '✕ 清空候选')
+                  onClick: async () => {
+                    setBusy(true);
+                    try {
+                      for (const item of previewDrafts) {
+                        if (item.id) await act('remove-manual-draft', undefined, { id: item.id });
+                      }
+                      setPreviewDrafts([]);
+                      setNotice('已清空本页 24 小时草稿库。');
+                    } catch (err) {
+                      setError(err.message || String(err));
+                    } finally {
+                      setBusy(false);
+                    }
+                  },
+                }, '✕ 清空本页草稿')
               ) : null
             ),
             previewDrafts.length === 0
               ? h('div', { style: { padding: '24px 14px', textAlign: 'center', color: C.faint, fontSize: 13, background: C.layerTwo, borderRadius: 8 } },
-                '暂无生成的候选推文。请在上方设置好参数或粘贴参考帖，点击「开始批量生成」。生成出的稿件会展示在这里，你可以逐条确认后再挑选加入队列。')
+                '暂无草稿。生成或加入队列后都会在这里保留 24 小时；发帖队列丢了也可以从这里再入队或复制。')
               : h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
                 ...previewDrafts.map((item, idx) => h('div', {
                   key: item.id || idx,
@@ -2445,8 +2459,7 @@ window.__ModuleLoader__.load({
                           try {
                             const res = await act('enqueue-post', undefined, { text: item.text, urgent: false, source: item.source || 'ai_draft' });
                             if (!res) throw new Error('入队没有成功');
-                            setPreviewDrafts(prev => prev.filter((_, i) => i !== idx));
-                            setNotice('该条推文已加入待发队列！');
+                            setNotice('该条已加入待发队列，原稿还在本页保留 24 小时。');
                           } catch (err) {
                             setError(`${err.message || String(err)}。这条还在预览里，可以直接复制。`);
                           } finally {
@@ -2463,8 +2476,7 @@ window.__ModuleLoader__.load({
                           try {
                             const res = await act('enqueue-post', undefined, { text: item.text, urgent: true, source: item.source || 'ai_draft' });
                             if (!res) throw new Error('入队没有成功');
-                            setPreviewDrafts(prev => prev.filter((_, i) => i !== idx));
-                            setNotice('⚡ 已将该条推文设置为【加急置顶发送】！');
+                            setNotice('⚡ 已加急置顶发送。原稿还在本页保留 24 小时。');
                           } catch (err) {
                             setError(`${err.message || String(err)}。这条还在预览里，可以直接复制。`);
                           } finally {
@@ -2488,8 +2500,15 @@ window.__ModuleLoader__.load({
                         type: 'button',
                         disabled: busy,
                         style: { ...buttonStyle(false), padding: '4px 8px', fontSize: 12, color: C.error, borderColor: C.error },
-                        onClick: () => setPreviewDrafts(prev => prev.filter((_, i) => i !== idx))
-                      }, '✕ 丢弃')
+                        onClick: async () => {
+                          try {
+                            if (item.id) await act('remove-manual-draft', undefined, { id: item.id });
+                            setPreviewDrafts(prev => prev.filter((_, i) => i !== idx));
+                          } catch (err) {
+                            setError(err.message || String(err));
+                          }
+                        }
+                      }, '✕ 删除')
                     )
                   ),
                   Array.isArray(item.previewNotes) && item.previewNotes.length

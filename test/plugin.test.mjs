@@ -452,6 +452,7 @@ test('handles post queue operations (enqueue, urgent, remove, clear)', async () 
     assert.equal(res1.ok, true);
     assert.equal(res1.queue.length, 1);
     assert.equal(res1.item.urgent, false);
+    assert.ok(res1.manualDrafts.some(item => item.text === '第一条普通测试推文'));
 
     const res2 = await service.action({ action: 'enqueue-post', text: '加急插队推文', urgent: true });
     assert.equal(res2.ok, true);
@@ -466,6 +467,30 @@ test('handles post queue operations (enqueue, urgent, remove, clear)', async () 
     const res4 = await service.action({ action: 'clear-post-queue' });
     assert.equal(res4.ok, true);
     assert.equal(res4.queue.length, 0);
+    const kept = await service.inspect();
+    assert.ok(kept.manualDrafts.length >= 2, 'clearing the send queue must not wipe the 24h manual drafts');
+    const removed = await service.action({ action: 'remove-manual-draft', id: kept.manualDrafts[0].id });
+    assert.equal(removed.manualDrafts.length, kept.manualDrafts.length - 1);
+  } finally { f.cleanup(); }
+});
+
+test('manual drafts expire after 24 hours and can be deleted by id', async () => {
+  const f = fixture();
+  const draftsPath = join(f.dir, 'manual_drafts.json');
+  let now = Date.parse('2026-11-08T12:00:00+08:00');
+  try {
+    const service = createService({
+      paths: f.paths,
+      configPath: join(f.dir, 'config.json'),
+      queuePath: join(f.dir, 'post_queue.json'),
+      manualDraftsPath: draftsPath,
+      clock: () => now,
+      platform: 'darwin',
+    });
+    await service.action({ action: 'enqueue-post', text: '昨天生成的长稿还在', urgent: false });
+    now += 25 * 60 * 60 * 1000;
+    const later = await service.inspect();
+    assert.equal(later.manualDrafts.length, 0);
   } finally { f.cleanup(); }
 });
 
@@ -1975,6 +2000,8 @@ test('reply tab ships the special-person editor with add and delete controls', a
   assert.match(source, /拆解这条帖子/);
   assert.match(source, /analyze-reference-post/);
   assert.match(source, /referenceAnalysis/);
+  assert.match(source, /remove-manual-draft/);
+  assert.match(source, /保留 24 小时/);
   // Each theme row offers 文风 and 模型.
   assert.match(source, /文风：全局默认/);
   assert.match(source, /value: 'chuci' \}, '楚辞'/);

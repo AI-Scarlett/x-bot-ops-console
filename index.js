@@ -28,6 +28,9 @@ export const DEFAULT_TARGETS = Object.freeze({
 export const CONFIG_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/config.json');
 export const TARGETS_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/console-targets.json');
 export const POST_QUEUE_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/post_queue.json');
+export const MANUAL_DRAFTS_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/manual_drafts.json');
+export const MANUAL_DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
+export const MANUAL_DRAFT_MAX = 80;
 export const POST_HISTORY_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/post_history.json');
 export const LEARNINGS_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/learnings.json');
 export const POST_METRICS_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/post_metrics.json');
@@ -272,6 +275,72 @@ function withFileLock(fn, lockPath, label = '共享状态') {
 
 function withQueueLock(fn, queuePath = POST_QUEUE_PATH) {
   return withFileLock(fn, `${queuePath}.lock`, '发帖队列');
+}
+
+function withManualDraftLock(fn, draftsPath = MANUAL_DRAFTS_PATH) {
+  return withFileLock(fn, `${draftsPath}.lock`, '手动草稿库');
+}
+
+function parseIsoMs(value) {
+  const stamp = Date.parse(String(value || ''));
+  return Number.isFinite(stamp) ? stamp : 0;
+}
+
+export function pruneManualDrafts(items, nowMs = Date.now(), ttlMs = MANUAL_DRAFT_TTL_MS) {
+  const cutoff = nowMs - ttlMs;
+  return (Array.isArray(items) ? items : []).filter(item => {
+    if (!item || typeof item !== 'object') return false;
+    const created = parseIsoMs(item.createdAt);
+    return created >= cutoff && String(item.text || '').trim();
+  });
+}
+
+export function readManualDrafts(draftsPath = MANUAL_DRAFTS_PATH, nowMs = Date.now()) {
+  let items = [];
+  try {
+    if (existsSync(draftsPath)) {
+      const data = JSON.parse(readFileSync(draftsPath, 'utf8'));
+      if (Array.isArray(data)) items = data;
+      else if (isRecord(data) && Array.isArray(data.items)) items = data.items;
+    }
+  } catch { items = []; }
+  return pruneManualDrafts(items, nowMs);
+}
+
+export function writeManualDrafts(items, draftsPath = MANUAL_DRAFTS_PATH, nowMs = Date.now()) {
+  const dir = dirname(draftsPath);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  const kept = pruneManualDrafts(items, nowMs).slice(0, MANUAL_DRAFT_MAX);
+  const payload = { items: kept, updatedAt: new Date(nowMs).toISOString() };
+  const tempPath = `${draftsPath}.tmp.${process.pid}.${Date.now()}`;
+  writeFileSync(tempPath, JSON.stringify(payload, null, 2), { mode: 0o600 });
+  renameSync(tempPath, draftsPath);
+  return kept;
+}
+
+export function mutateManualDrafts(mutator, draftsPath = MANUAL_DRAFTS_PATH, nowMs = Date.now()) {
+  return withManualDraftLock(() => {
+    const current = { items: readManualDrafts(draftsPath, nowMs) };
+    const result = mutator(current);
+    const items = writeManualDrafts(current.items, draftsPath, nowMs);
+    return { result, items };
+  }, draftsPath);
+}
+
+function rememberManualDraft(item, draftsPath = MANUAL_DRAFTS_PATH, nowMs = Date.now()) {
+  if (!item || !String(item.text || '').trim()) return;
+  mutateManualDrafts(current => {
+    const id = String(item.id || `manual_${nowMs}_${Math.random().toString(36).slice(2, 6)}`);
+    const next = {
+      id,
+      text: String(item.text || '').trim(),
+      source: item.source || 'manual',
+      theme: item.theme || '',
+      createdAt: item.createdAt || new Date(nowMs).toISOString(),
+      queuedAt: new Date(nowMs).toISOString(),
+    };
+    current.items = [next, ...current.items.filter(entry => entry.id !== id && entry.text !== next.text)];
+  }, draftsPath, nowMs);
 }
 
 // Progress of the "walk the whole priority list" pass, read from the cruise
@@ -2689,9 +2758,10 @@ export function readPluginVersion(packageUrl = new URL('./package.json', import.
   }
 }
 
-export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGETS, configPath = CONFIG_PATH, targetsPath = null, platform = process.platform, spawnProcess = spawn, queuePath = POST_QUEUE_PATH, learningsPath = LEARNINGS_PATH, backupDir = CONFIG_BACKUP_DIR, trendsPath = TRENDS_PATH } = {}) {
+export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGETS, configPath = CONFIG_PATH, targetsPath = null, platform = process.platform, spawnProcess = spawn, queuePath = POST_QUEUE_PATH, learningsPath = LEARNINGS_PATH, backupDir = CONFIG_BACKUP_DIR, trendsPath = TRENDS_PATH, manualDraftsPath = MANUAL_DRAFTS_PATH } = {}) {
   let activeConfigPath = configPath;
   const activeQueuePath = queuePath;
+  const activeManualDraftsPath = manualDraftsPath;
   const activeLearningsPath = learningsPath;
   const activeTrendsPath = trendsPath;
   const activeBackupDir = backupDir;
@@ -2838,6 +2908,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       runtimeConfigApplied: shared.source === 'shared', runtimeCapabilities, fieldSide: FIELD_SIDE,
       dshModels,
       postQueue: postQueue.queue,
+      manualDrafts: readManualDrafts(activeManualDraftsPath, clock()),
       postHistory: postHistory.slice(-20),
       learnings: readLearnings(activeLearningsPath),
       trends: readTrends(activeTrendsPath),
@@ -2893,23 +2964,33 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       const urgent = request.urgent === true;
       const maxSize = Number(sharedCfg.postSettings?.queueMaxSize) || 100;
       const newItem = {
-        id: `post_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        id: `post_${clock()}_${Math.random().toString(36).slice(2, 6)}`,
         text,
         source: request.source || 'manual',
         urgent,
-        createdAt: new Date().toISOString(),
+        createdAt: new Date(clock()).toISOString(),
       };
       const { payload } = mutatePostQueue((current) => {
         if (urgent) current.queue.unshift(newItem);
         else current.queue.push(newItem);
       }, activeQueuePath, { maxSize });
+      rememberManualDraft(newItem, activeManualDraftsPath, clock());
       return {
         ok: true,
         action: 'enqueue-post',
         item: newItem,
         queue: payload.queue,
-        note: urgent ? '已成功将推文设置为【立即插队发送】！发帖 Worker 会在当前周期优先发出。' : '推文已加入待发队列！',
+        manualDrafts: readManualDrafts(activeManualDraftsPath, clock()),
+        note: urgent ? '已成功将推文设置为【立即插队发送】！发帖 Worker 会在当前周期优先发出。' : '推文已加入待发队列，并在手动创作页保留 24 小时。',
       };
+    }
+    if (request.action === 'remove-manual-draft') {
+      const id = String(request.id || '');
+      if (!id) throw new TypeError('缺少待删除草稿 ID');
+      const { items } = mutateManualDrafts(current => {
+        current.items = current.items.filter(item => item.id !== id);
+      }, activeManualDraftsPath, clock());
+      return { ok: true, action: 'remove-manual-draft', manualDrafts: items, note: '已从 24 小时草稿库删除。' };
     }
     if (request.action === 'remove-queued-post') {
       const id = String(request.id || '');
@@ -3191,7 +3272,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
               failures.push(`第 ${i + 1} 条大模型没有返回正文`);
               continue;
             }
-            generated.push({
+            const previewItem = {
               id: `post_ai_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 6)}`,
               text: draftText,
               topic: reference ? '模仿参考帖' : topic,
@@ -3204,7 +3285,9 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
               urgent: false,
               createdAt: new Date().toISOString(),
               previewNotes: verdict.ok ? [] : (verdict.reasons || []),
-            });
+            };
+            rememberManualDraft(previewItem, activeManualDraftsPath, clock());
+            generated.push(previewItem);
             continue;
           }
           if (!verdict.ok) {
@@ -3280,7 +3363,8 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         action: 'generate-draft-posts',
         generated,
         failed: failures.length,
-        note: `已成功生成 ${generated.length} 条推文草稿！可预览并挑选需要的内容加入队列。`,
+        manualDrafts: readManualDrafts(activeManualDraftsPath, clock()),
+        note: `已成功生成 ${generated.length} 条推文草稿！可预览并挑选需要的内容加入队列。草稿会在本页保留 24 小时。`,
       };
     }
     if (request.action === 'restore-config-backup') {
