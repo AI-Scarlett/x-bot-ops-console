@@ -2355,6 +2355,8 @@ window.__ModuleLoader__.load({
                       if (res && Array.isArray(res.generated)) {
                         setPreviewDrafts(res.generated);
                         setNotice(`🎉 成功生成 ${res.generated.length} 条推文草稿！请在下方预览并挑选满意的条目加入待发队列。`);
+                      } else if (!res) {
+                        setError('生成草稿失败：未收到大模型响应，可能是请求超时或大模型未返回内容');
                       }
                     } catch (err) {
                       setError(`生成草稿失败：${err.message || String(err)}`);

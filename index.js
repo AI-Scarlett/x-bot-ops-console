@@ -1638,7 +1638,7 @@ export function draftStyleProblem(text, styleKey) {
 }
 
 export async function generateTweetViaLmh(prompt, { model = 'gpt-6-luna', port = 3040 } = {}) {
-  const reply = await localModelChat(prompt, { model, port, temperature: 0.75 });
+  const reply = await localModelChat(prompt, { model, port, temperature: 0.75, timeoutMs: 120000 });
   return reply.replace(/^["'“”‘’]+|["'“”‘’]+$/g, '');
 }
 
