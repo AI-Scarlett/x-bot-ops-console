@@ -1842,6 +1842,19 @@ test('special person rows are operator-managed: migrate, validate, add, delete',
   assert.throws(() => validateConfig(tooLongRow), /4000 字/);
 });
 
+test('the manual batch panel can pick a style, and drafts are checked against it', async () => {
+  const { draftStyleProblem } = await import('../index.js');
+  assert.equal(draftStyleProblem('随便写点什么', ''), '');
+  assert.equal(draftStyleProblem('今天跑到晚上，腿都断了，账单还在那里。', 'vernacular'), '');
+  assert.match(draftStyleProblem('余今日跑单至夜，腿已断，账单犹在。', 'vernacular'), /仍在用文言/);
+  assert.equal(draftStyleProblem('The soup went cold and the bill is still here.', 'english'), '');
+  assert.match(draftStyleProblem('The soup went cold.\n我还在等单。', 'english'), /仍含/);
+  assert.equal(draftStyleProblem('余今日跑单至夜矣，腿已断焉。', 'classical'), '');
+  assert.match(draftStyleProblem('今天跑到晚上，腿都断了，账单还在了。', 'classical'), /口语助词/);
+  assert.equal(draftStyleProblem('蕙风拂江兮，思君未已。', 'chuci'), '');
+  assert.match(draftStyleProblem('蕙风拂江，思君未已。', 'chuci'), /没有「兮」/);
+});
+
 test('each theme can pick its own 文风 and model', async () => {
   const { postSettingsSignature } = await import('../index.js');
   const base = structuredClone(DEFAULT_CONFIG);
@@ -1949,6 +1962,12 @@ test('reply tab ships the special-person editor with add and delete controls', a
   assert.match(source, /两行：文言 \+ 白话/);
   assert.match(source, /wantsBilingualStyle/);
   assert.match(source, /bilingual: row\.bilingual === true/);
+  // The manual batch panel offers style, model, max length and a reference post.
+  assert.match(source, /文字类型/);
+  assert.match(source, /最长稿件字数/);
+  assert.match(source, /拆解这条帖子/);
+  assert.match(source, /analyze-reference-post/);
+  assert.match(source, /referenceAnalysis/);
   // Each theme row offers 文风 and 模型.
   assert.match(source, /文风：全局默认/);
   assert.match(source, /value: 'chuci' \}, '楚辞'/);

@@ -1615,6 +1615,28 @@ export async function aiScreenHotTopics(topics, filter = {}, { model = 'gpt-6-lu
   };
 }
 
+// 手动/自动生成共用的文风验收：模型有时会无视文风要求，这里把它变成可命名的
+// 违规项，交给原有的「逐条修正」重试处理。
+export function draftStyleProblem(text, styleKey) {
+  if (!styleKey) return '';
+  const body = String(text || '');
+  const han = (body.match(/[\u4e00-\u9fff]/g) || []).length;
+  if (styleKey === 'english') {
+    return han > Math.max(4, Math.floor(body.length / 10)) ? `要求全英文，但仍含 ${han} 个汉字` : '';
+  }
+  if (styleKey === 'vernacular') {
+    const pronouns = (body.match(/[余吾汝君卿]/g) || []).length;
+    const particles = (body.match(/[之乎者也矣焉哉兮]/g) || []).length;
+    return (pronouns || particles >= 3) ? '要求白话文，但仍在用文言' : '';
+  }
+  if (styleKey === 'classical') {
+    const modern = (body.match(/[的了吗呢吧]/g) || []).length;
+    return modern >= 2 ? '要求文言文，但口语助词太多' : '';
+  }
+  if (styleKey === 'chuci') return body.includes('兮') ? '' : '要求楚辞体，但没有「兮」';
+  return '';
+}
+
 export async function generateTweetViaLmh(prompt, { model = 'gpt-6-luna', port = 3040 } = {}) {
   const reply = await localModelChat(prompt, { model, port, temperature: 0.75 });
   return reply.replace(/^["'“”‘’]+|["'“”‘’]+$/g, '');
@@ -2918,6 +2940,35 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         note: '待发队列已清空。',
       };
     }
+    if (request.action === 'analyze-reference-post') {
+      const text = String(request.text || '').trim();
+      if (!text) throw new TypeError('请先粘贴一条要拆解的帖子');
+      if (text.length > 5000) throw new TypeError('参考帖子不能超过 5000 字');
+      const sharedCfg = getConfig();
+      const model = String(request.model || '').trim() || sharedCfg.postSettings?.model || sharedCfg.model?.name || 'gpt-6-luna';
+      const port = sharedCfg.model?.endpointPort || 3040;
+      const prompt = [
+        '你在拆解一条推文的写法，接下来要照着这套写法写新推文（不是复述内容）。',
+        '',
+        '【要拆解的推文】',
+        text,
+        '',
+        '请只输出 6 行以内的拆解，每行一个短句，不要客套、不要重复原文：',
+        '1. 体裁与语言（文言/白话/中英混/诗体等）',
+        '2. 结构（几行、每行各干什么）',
+        '3. 开头怎么勾人（具体手法）',
+        '4. 收尾怎么落（提问/反转/金句/留白）',
+        '5. 人称、称呼与用词特征（举 2~3 个原词）',
+        '6. 可复用的句式模板（用〔〕占位，不要照抄原句）',
+      ].join('\n');
+      const analysis = await localModelChat(prompt, { model, port, temperature: 0.3, maxTokens: 400, timeoutMs: 60000 });
+      return {
+        ok: true,
+        action: 'analyze-reference-post',
+        model,
+        analysis: String(analysis || '').trim(),
+      };
+    }
     if (request.action === 'generate-draft-posts') {
       const sharedCfg = getConfig();
       const postCfg = sharedCfg.postSettings || {};
@@ -2927,8 +2978,24 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       const count = Math.max(1, Math.min(50, Number.isFinite(requested) && requested > 0 ? Math.floor(requested) : batchSize));
       // A one-off prompt overrides the global style prompt for this batch only.
       const oneOffPrompt = typeof request.prompt === 'string' && request.prompt.trim() ? request.prompt.trim() : '';
+      // Per-batch overrides from the manual generation panel.
+      const batchModel = typeof request.model === 'string' ? request.model.trim().slice(0, 60) : '';
+      const THEME_STYLE_KEYS = ['classical', 'vernacular', 'english', 'chuci'];
+      const rawStyle = String(request.style || '').trim().toLowerCase();
+      const styleKey = THEME_STYLE_KEYS.includes(rawStyle) ? rawStyle : '';
+      const styleLabel = { classical: '文言文', vernacular: '白话文', english: '英文', chuci: '楚辞' }[styleKey] || '';
+      const requestedMax = Number(request.maxChars);
+      const batchMaxChars = Number.isFinite(requestedMax) && requestedMax > 0
+        ? Math.max(10, Math.min(2000, Math.floor(requestedMax))) : 0;
+      const reference = typeof request.reference === 'string' ? request.reference.trim().slice(0, 4000) : '';
+      const referenceAnalysis = typeof request.referenceAnalysis === 'string'
+        ? request.referenceAnalysis.trim().slice(0, 2000) : '';
       const onePerLine = postCfg.oneSentencePerLine !== false;
       const fmtCfg = { ...DEFAULT_CONFIG.postSettings.format, ...(postCfg.format || {}) };
+      // 本次生成的最长字数只在这一次生效，不改全局配置。
+      if (batchMaxChars) fmtCfg.maxChars = batchMaxChars;
+      // 全局「禁白话虚词」是给文言文设的；既然这次明确要白话/英文，就不能再拿它否决。
+      if (styleKey === 'vernacular' || styleKey === 'english') fmtCfg.forbidColloquial = [];
       const dedupeCfg = { ...DEFAULT_CONFIG.postSettings.dedupe, ...(postCfg.dedupe || {}) };
       const capCfg = { ...DEFAULT_CONFIG.postSettings.politicalCap, ...(postCfg.politicalCap || {}) };
       const styleCfg = { ...DEFAULT_CONFIG.postSettings.style, ...(postCfg.style || {}) };
@@ -2943,10 +3010,18 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       const slotPrompt = oneOffPrompt ? '' : slot.prompt;
       const slotLabel = oneOffPrompt ? '' : slot.label;
       const personaText = personaBlock(sharedCfg);
+      // 本次批次单独选的文风，优先级高于全局文风与时段文风。
+      const STYLE_BLOCKS = {
+        classical: '【本条文风：文言文（硬性要求，优先于上面的文风描述）】通篇写成文言文：可用之、乎、者、也、矣、焉、乃、其；不要出现现代口语（的、了、吗、呢、吧、啊、我们、特别、其实）。',
+        vernacular: '【本条文风：现代白话文（硬性要求，优先于上面的文风描述）】用干净利落的现代汉语写，可以用「我、你、的、了」；称呼只用「你」，不要用「尔、君、卿、足下」这类文言称呼；不要堆砌之乎者也，不要冒充古文。',
+        english: '【本条文风：英文（硬性要求，优先于上面的文风描述）】Write the entire post in natural English. No Chinese characters at all, no translationese, no emoji spam. Keep the persona voice.',
+        chuci: '【本条文风：楚辞（硬性要求，优先于上面的文风描述）】用楚辞体写：必须有「兮」字句式，可用香草江岸（蕙、杜若、江离、芙蓉）作意象，婉转含蓄，不要写成现代口语。',
+      };
+      const styleBlock = styleKey ? STYLE_BLOCKS[styleKey] : '';
       const basePrompt = oneOffPrompt
-        ? oneOffPrompt
+        ? oneOffPrompt + (styleBlock ? `\n\n${styleBlock}` : '')
         : (slotPrompt ? `${globalPrompt}\n\n【当前时段文风：${slotLabel || '分时文风'}】${slotPrompt}` : globalPrompt)
-          + personaText;
+          + personaText + (styleBlock ? `\n\n${styleBlock}` : '');
       // Learned patterns steer topic choice and structure; the writing style above stays authoritative.
       const rawLearnings = readLearnings(activeLearningsPath);
       const influence = Number(postCfg.learningInfluence ?? 100);
@@ -2962,6 +3037,8 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       // The preferred topics are screened with the same model rules as the hot
       // board, so the benchmark's entertainment hits never reach a draft.
       const model = postCfg.model || sharedCfg.model?.name || 'gpt-6-luna';
+      // 面板上单独选的模型只管这次生成的草稿，不影响主题筛选与全局设置。
+      const genModel = batchModel || model;
       const port = sharedCfg.model?.endpointPort || 3040;
       const screenFilter = effectiveHotFilter(postCfg, { bannedTopics: bannedList });
       let preferred = rawWinners;
@@ -3056,22 +3133,42 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
             + (hotTopic ? `\n（借这条热榜标题当素材写一条原创推文，不要照搬标题）` : '')
             + `\n（请就上面这条话题写，主题方向只决定口吻与切入角度）`
           : '';
-        const prompt = basePrompt + themeBlock + learningBlock + subjectBlock + formatRule;
+        // 粘贴了参考帖就照着它的写法写，主题/热榜块此时会让位给模仿要求。
+        const referenceBlock = reference
+          ? `\n\n【模仿这条帖子的写法】\n<参考帖>\n${reference}\n</参考帖>\n`
+            + (referenceAnalysis ? `参考帖写法拆解：\n${referenceAnalysis}\n` : '')
+            + '要求：学它的体裁、结构、每行的作用、开头钩子、收尾方式、人称与用词，写一条全新的推文；'
+            + '不要照抄任何原句，不要复述同一件事，换一个具体内容。'
+          : '';
+        const prompt = reference
+          ? basePrompt + referenceBlock + learningBlock + formatRule
+          : basePrompt + themeBlock + learningBlock + subjectBlock + formatRule;
+        const styleProblem = text => draftStyleProblem(text, styleKey);
         try {
-          let rawDraft = await generateTweetViaLmh(prompt, { model, port });
+          let rawDraft = await generateTweetViaLmh(prompt, { model: genModel, port });
           let draftText = fmtCfg.lineCount > 0
             ? String(rawDraft || '').trim()
             : enforceOneSentencePerLine(rawDraft);
           let verdict = checkPostDraft(draftText, { ...fmtCfg, maxOverlapChars: dedupeCfg.maxOverlapChars }, recentTexts, skeletonTexts, skeletonHours);
+          const firstStyleIssue = styleProblem(draftText);
+          if (firstStyleIssue) {
+            verdict.ok = false;
+            verdict.reasons = [firstStyleIssue, ...(verdict.reasons || [])];
+          }
           for (let attempt = 0; attempt < 2 && !verdict.ok; attempt += 1) {
             // Corrective retries that name every violation.
             const retryPrompt = `${prompt}\n\n【上一次不合格，必须逐条修正】\n- ${verdict.reasons.join('\n- ')}`
               + (fmtCfg.lineCount === 0 ? '' : `\n- 严格保持 ${fmtCfg.lineCount} 行`);
-            rawDraft = await generateTweetViaLmh(retryPrompt, { model, port });
+            rawDraft = await generateTweetViaLmh(retryPrompt, { model: genModel, port });
             draftText = fmtCfg.lineCount > 0
               ? String(rawDraft || '').trim()
               : enforceOneSentencePerLine(rawDraft);
             verdict = checkPostDraft(draftText, { ...fmtCfg, maxOverlapChars: dedupeCfg.maxOverlapChars }, recentTexts, skeletonTexts, skeletonHours);
+            const retryStyleIssue = styleProblem(draftText);
+            if (retryStyleIssue) {
+              verdict.ok = false;
+              verdict.reasons = [retryStyleIssue, ...(verdict.reasons || [])];
+            }
           }
           if (!verdict.ok) {
             failures.push(`结构不合规：${verdict.reasons.join('；')}`);
@@ -3089,14 +3186,16 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
               continue;
             }
             const han = (draftText.match(/[\u4e00-\u9fff]/g) || []).length;
-            const wantsEnglish = slotLabel.includes('英文') || slotLabel.toLowerCase().includes('english');
-            const wantsChinese = slotLabel.includes('文言') || slotLabel.includes('楚辞') || slotLabel.includes('中文');
+            // 面板上明确选了文风时，以这个文风为准，而不是当前时段文风。
+            const checkLabel = styleLabel || slotLabel;
+            const wantsEnglish = checkLabel.includes('英文') || checkLabel.toLowerCase().includes('english');
+            const wantsChinese = checkLabel.includes('文言') || checkLabel.includes('楚辞') || checkLabel.includes('中文') || checkLabel.includes('白话');
             if (wantsEnglish && han > 0) {
-              failures.push(`第 ${i + 1} 条未遵守「${slotLabel}」时段要求（仍含中文）`);
+              failures.push(`第 ${i + 1} 条未遵守「${checkLabel}」要求（仍含中文）`);
               continue;
             }
             if (wantsChinese && han === 0) {
-              failures.push(`第 ${i + 1} 条未遵守「${slotLabel}」时段要求（没有中文）`);
+              failures.push(`第 ${i + 1} 条未遵守「${checkLabel}」要求（没有中文）`);
               continue;
             }
             recentTexts.unshift(draftText);
@@ -3108,11 +3207,11 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
               sig: postSettingsSignature(postCfg),
               // The worker uses this to keep English drafts out of the Chinese
               // window and vice versa.
-              styleSlot: slotLabel,
-              theme: theme ? theme.label : '',
+              styleSlot: styleKey === 'english' ? '英文' : slotLabel,
+              theme: reference ? '模仿参考帖' : (theme ? theme.label : ''),
               hotTopic: hotTopic || '',
               political: (capCfg.keywords || []).some(word => `${theme?.label || ''}${hotTopic}`.includes(word)),
-              source: oneOffPrompt ? 'ai_draft_custom' : 'ai_draft',
+              source: reference ? 'ai_draft_reference' : (oneOffPrompt ? 'ai_draft_custom' : 'ai_draft'),
               urgent: false,
               createdAt: new Date().toISOString(),
             });

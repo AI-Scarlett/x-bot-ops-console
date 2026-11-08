@@ -430,3 +430,37 @@ test('the priority list lets you mark a nickname and a gender', async () => {
     assert.equal(app.config().handleProfiles['4ggug'].gender, 'male');
   } finally { app.close(); }
 });
+
+test('the manual batch panel renders style, model, length and reference controls', async () => {
+  const app = mount({ tab: 'post' });
+  try {
+    let tree = app.render();
+    assert.ok(!flatText(tree).includes('文字类型'), 'panel starts collapsed');
+    await app.click(tree, 'AI 批量生成草稿');
+    tree = app.render();
+    const text = flatText(tree);
+    assert.match(text, /文字类型/);
+    assert.match(text, /最长稿件字数/);
+    // ModelPicker is a nested component: assert on its props, not on flattened text.
+    const picker = elements(tree).find(node => node.type && node.type.name === 'ModelPicker'
+      && String(node.props?.label || '').includes('本次生成用的大模型'));
+    assert.ok(picker, 'the panel offers a model picker');
+    assert.match(text, /拆解这条帖子/);
+    assert.match(text, /粘贴一条帖子，照它的写法写/);
+    // The style select really carries the five choices.
+    const styleSelect = elements(tree).find(node => node.type === 'select'
+      && elements(node).some(child => String(child.props?.value) === 'chuci'));
+    assert.ok(styleSelect, 'style select with 楚辞 option');
+    const labels = elements(styleSelect).map(child => flatText(child)).filter(Boolean);
+    assert.ok(labels.some(item => item.includes('白话文')), 'has 白话文');
+    assert.ok(labels.some(item => item.includes('跟随全局')), 'has 跟随全局');
+    // Typing a reference post enables the 拆解 button.
+    const refs = elements(tree).filter(node => node.type === 'textarea'
+      && String(node.props?.placeholder || '').includes('参考帖子'));
+    assert.equal(refs.length, 1);
+    refs[0].props.onChange({ target: { value: '我妈昨天又把我拉黑了。\n她说三十岁没结婚就是失败。' } });
+    tree = app.render();
+    const analyze = elements(tree).find(node => node.type === 'button' && flatText(node).includes('拆解这条帖子'));
+    assert.equal(analyze.props.disabled, false, 'enabled once a post is pasted');
+  } finally { app.close(); }
+});
