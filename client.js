@@ -447,6 +447,7 @@ window.__ModuleLoader__.load({
           else if (action === 'update-plugin') { /* handled by caller */ }
           else if (value.launchRequested) setNotice(t('launchRequested'));
           else if (value.note) setNotice(value.note);
+          if (Array.isArray(value.manualDrafts)) setPreviewDrafts(value.manualDrafts);
           await refresh();
           return value;
         } catch (err) {
@@ -1299,9 +1300,17 @@ window.__ModuleLoader__.load({
               placeholder: '例如：增加更多风趣幽默的比喻，自称寡人或周天子，语气微讽但友好，严禁现代网络低俗梗，直击推文要害...',
               onChange: e => updateConfig(c => ({ ...c, commentSettings: { ...(c.commentSettings || {}), customPrompt: e.target.value } }))
             }),
-            (config?.commentSettings?.customPrompt || '').trim()
-              ? h('small', { style: { color: C.success, fontSize: 12 } }, `✓ 已设置（${config.commentSettings.customPrompt.length} 字），生效于自动评论 Worker`)
-              : h('small', { style: { color: C.error, fontSize: 12 } }, '⚠️ 当前为空：自动评论将只使用 Worker 内置文风，不会应用任何自定义补充要求。'),
+            (() => {
+              const saved = String(state?.config?.commentSettings?.customPrompt || '').trim();
+              const draft = String(config?.commentSettings?.customPrompt || '').trim();
+              if (draftDirty && draft !== saved) {
+                return h('small', { style: { color: C.accent, fontSize: 12 } },
+                  `✎ 已改草稿（${draft.length} 字），点保存后 Worker 才会用。已保存版本：${saved ? `${saved.length} 字` : '空（内置文风）'}`);
+              }
+              return saved
+                ? h('small', { style: { color: C.success, fontSize: 12 } }, `✓ 已保存（${saved.length} 字），自动评论 Worker 下一轮读取`)
+                : h('small', { style: { color: C.error, fontSize: 12 } }, '⚠️ 已保存为空：自动评论将只使用 Worker 内置文风。');
+            })(),
             h('div', { style: { marginTop: 14, padding: '10px 12px', borderRadius: 8, background: C.layerTwo, border: `1px solid ${C.border}` } },
               h('div', { style: { fontSize: 13, fontWeight: '600', marginBottom: 6 } }, '⚙️ 内置评论规则（原先写死在 Worker 里，现在可改）'),
               h('label', { style: { ...labelStyle, marginTop: 4 } }, '跳过关键词（逗号分隔，命中即整条跳过）：', h(SideBadge, { side: 'comment' })),
@@ -1427,9 +1436,17 @@ window.__ModuleLoader__.load({
               placeholder: '所有提及回复均遵循的补充规则，例如：围绕对方最新发言展开，不要复述对方的话，多用诗词与文言意象...',
               onChange: e => updateConfig(c => ({ ...c, replySettings: { ...(c.replySettings || {}), customPrompt: e.target.value } }))
             }),
-            (config?.replySettings?.customPrompt || '').trim()
-              ? h('small', { style: { color: C.success, fontSize: 12 } }, `✓ 已设置（${config.replySettings.customPrompt.length} 字），生效于提及回复 Worker`)
-              : h('small', { style: { color: C.error, fontSize: 12 } }, '⚠️ 当前为空：提及回复将只使用 Worker 内置文风，不会应用任何自定义补充要求。'),
+            (() => {
+              const saved = String(state?.config?.replySettings?.customPrompt || '').trim();
+              const draft = String(config?.replySettings?.customPrompt || '').trim();
+              if (draftDirty && draft !== saved) {
+                return h('small', { style: { color: C.accent, fontSize: 12 } },
+                  `✎ 已改草稿（${draft.length} 字），点保存后 Worker 才会用。已保存版本：${saved ? `${saved.length} 字` : '空（内置文风）'}`);
+              }
+              return saved
+                ? h('small', { style: { color: C.success, fontSize: 12 } }, `✓ 已保存（${saved.length} 字），提及回复 Worker 下一轮读取`)
+                : h('small', { style: { color: C.error, fontSize: 12 } }, '⚠️ 已保存为空：提及回复将只使用 Worker 内置文风。');
+            })(),
 
             h('div', { style: { marginTop: 14, padding: '10px 12px', borderRadius: 8, background: C.layerTwo, border: `1px solid ${C.border}` } },
               h('div', { style: { fontSize: 13, fontWeight: '600', marginBottom: 6 } }, '⚙️ 内置回复规则（原先写死在 Worker 里，现在可改）'),
@@ -1869,12 +1886,25 @@ window.__ModuleLoader__.load({
                 }))),
             h('div', { style: { marginTop: 12, paddingTop: 10, borderTop: `1px solid ${C.border}` } },
               (() => {
-                const mix = config?.postSettings?.topicMix || [];
-                const liveLabel = mix.length
-                  ? mix.map(item => `${item.label || '未命名'}${Number(item.weight) || 0}`).join('/')
-                  : '尚未配置';
+                const mixLabel = mix => {
+                  const items = Array.isArray(mix) ? mix : [];
+                  if (!items.length) return '尚未配置';
+                  return items.map(item => {
+                    const low = Number(item.minChars) || 0;
+                    const high = Number(item.maxChars) || 0;
+                    // Only a theme with its own length shows one, so the line
+                    // stays readable.
+                    const range = (low || high) ? `·${low || ''}-${high || ''}` : '';
+                    return `${item.label || '未命名'}${Number(item.weight) || 0}${range}`;
+                  }).join('/');
+                };
+                const savedLabel = mixLabel(state?.config?.postSettings?.topicMix);
+                const draftLabel = mixLabel(config?.postSettings?.topicMix);
                 return h('div', null,
-                  h('div', { style: { fontSize: 12, color: C.text, marginBottom: 6 } }, `当前生效配比：${liveLabel}`),
+                  h('div', { style: { fontSize: 12, color: C.text, marginBottom: 6 } }, `已保存并生效：${savedLabel}`),
+                  draftDirty && draftLabel !== savedLabel
+                    ? h('div', { style: { fontSize: 12, color: C.accent, marginBottom: 6 } }, `编辑中（未保存，Worker 还在用上面那套）：${draftLabel}`)
+                    : null,
                   h('button', {
                     type: 'button',
                     style: { ...buttonStyle(false), padding: '7px 14px', fontSize: 12 },
@@ -1933,14 +1963,22 @@ window.__ModuleLoader__.load({
                   }
                 }))),
             h('small', { style: { color: C.faint, fontSize: 12, marginTop: 8, display: 'block' } },
-              `当前：${(config?.postSettings?.restEveryPosts ?? 8) === 0 ? '不按条数休息' : `每发 ${config?.postSettings?.restEveryPosts ?? 8} 条后休息 ${config?.postSettings?.restMinutes ?? 3} 分钟`}；计数器在 Worker 重启后继续累计，不会因为重启而永远不休息。`)),
+              (() => {
+                const savedEvery = state?.config?.postSettings?.restEveryPosts ?? 8;
+                const savedMinutes = state?.config?.postSettings?.restMinutes ?? 3;
+                const draftEvery = config?.postSettings?.restEveryPosts ?? 8;
+                const draftMinutes = config?.postSettings?.restMinutes ?? 3;
+                const savedText = savedEvery === 0 ? '不按条数休息' : `每发 ${savedEvery} 条后休息 ${savedMinutes} 分钟`;
+                const draftText = draftEvery === 0 ? '不按条数休息' : `每发 ${draftEvery} 条后休息 ${draftMinutes} 分钟`;
+                return `已保存：${savedText}。${draftDirty && draftText !== savedText ? `编辑中（未保存）：${draftText}。` : ''}计数器在 Worker 重启后继续累计。`;
+              })())),
 
           // 生成配比：学习规则强度 + 主题配比
           h('section', { style: cardStyle },
             h('h2', { style: { margin: 0, fontSize: 15 } }, '🎚️ 生成配比（提示词 / 学习规则 / 主题）'),
             h('p', { style: { margin: '6px 0 10px', fontSize: 12, color: C.faint, lineHeight: 1.6 } },
               '每条文由三层组成：① 上面的发帖提示词与时段文风（骨架，始终生效）② 学习规则（按下方强度注入）③ 主题方向（按权重随机抽取）。'
-              + '每条主题还能单独指定文风（全局默认/文言文/白话文/英文/楚辞）和模型；不改就是全局设置。'),
+              + '每条主题还能单独指定文风（全局默认/文言文/白话文/英文/楚辞）、模型和字数区间；不改就是全局设置。'),
 
             h('label', { style: { ...labelStyle, marginTop: 4 } }, '学习规则强度（0=完全不用学习成果，100=全量注入）：', h(SideBadge, { side: 'post' })),
             h('div', { style: { display: 'flex', gap: 12, alignItems: 'center' } },
@@ -1977,6 +2015,8 @@ window.__ModuleLoader__.load({
               })()),
             (() => {
               const mix = config?.postSettings?.topicMix || [];
+              const globalMinChars = config?.postSettings?.format?.minChars ?? 30;
+              const globalMaxChars = config?.postSettings?.format?.maxChars ?? 60;
               const patch = (id, patchValue) => updateConfig(c => ({
                 ...c,
                 postSettings: {
@@ -2027,6 +2067,27 @@ window.__ModuleLoader__.load({
                       h('option', { value: 'vernacular' }, '白话文'),
                       h('option', { value: 'english' }, '英文'),
                       h('option', { value: 'chuci' }, '楚辞')),
+                    h('label', {
+                      title: '这一条主题单独用多少字；留空就沿用上面的全局字数区间',
+                      style: { display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, color: C.muted },
+                    },
+                      '字数区间',
+                      h('input', {
+                        type: 'number', min: 1, max: 2000,
+                        style: { ...inputStyle, width: 88, margin: 0, padding: '4px 6px', fontSize: 12 },
+                        placeholder: `下限 ${globalMinChars}`,
+                        value: item.minChars ?? '',
+                        onChange: e => patch(item.id, { minChars: e.target.value === '' ? undefined : Number(e.target.value) }),
+                      }),
+                      h('span', null, '~'),
+                      h('input', {
+                        type: 'number', min: 1, max: 2000,
+                        style: { ...inputStyle, width: 88, margin: 0, padding: '4px 6px', fontSize: 12 },
+                        placeholder: `上限 ${globalMaxChars}`,
+                        value: item.maxChars ?? '',
+                        onChange: e => patch(item.id, { maxChars: e.target.value === '' ? undefined : Number(e.target.value) }),
+                      }),
+                      h('span', { style: { fontSize: 11, color: C.faint } }, '留空=跟随全局')),
                   ),
                   h(ModelPicker, {
                     value: item.model || '',
@@ -2108,7 +2169,7 @@ window.__ModuleLoader__.load({
                           onChange: e => patchSlot(slot.id, { endHour: e.target.value === '' ? 24 : Number(e.target.value) }),
                         }),
                         '时'),
-                      active ? h('span', { style: { fontSize: 11, padding: '2px 8px', borderRadius: 999, background: C.accent, color: C.onAccent, fontWeight: '600' } }, '当前生效') : null,
+                      active ? h('span', { style: { fontSize: 11, padding: '2px 8px', borderRadius: 999, background: C.accent, color: C.onAccent, fontWeight: '600' } }, '当前时段') : null,
                       h('button', {
                         type: 'button',
                         disabled: busy,
@@ -2418,10 +2479,8 @@ window.__ModuleLoader__.load({
                   onClick: async () => {
                     setBusy(true);
                     try {
-                      for (const item of previewDrafts) {
-                        if (item.id) await act('remove-manual-draft', undefined, { id: item.id });
-                      }
-                      setPreviewDrafts([]);
+                      const res = await act('clear-manual-drafts');
+                      setPreviewDrafts(Array.isArray(res?.manualDrafts) ? res.manualDrafts : []);
                       setNotice('已清空本页 24 小时草稿库。');
                     } catch (err) {
                       setError(err.message || String(err));
@@ -2501,11 +2560,18 @@ window.__ModuleLoader__.load({
                         disabled: busy,
                         style: { ...buttonStyle(false), padding: '4px 8px', fontSize: 12, color: C.error, borderColor: C.error },
                         onClick: async () => {
+                          setBusy(true);
                           try {
-                            if (item.id) await act('remove-manual-draft', undefined, { id: item.id });
-                            setPreviewDrafts(prev => prev.filter((_, i) => i !== idx));
+                            const res = await act('remove-manual-draft', undefined, {
+                              id: item.id || '',
+                              text: item.text || '',
+                            });
+                            if (Array.isArray(res?.manualDrafts)) setPreviewDrafts(res.manualDrafts);
+                            setNotice('已删除这条草稿。');
                           } catch (err) {
                             setError(err.message || String(err));
+                          } finally {
+                            setBusy(false);
                           }
                         }
                       }, '✕ 删除')

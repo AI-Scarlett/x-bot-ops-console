@@ -95,7 +95,9 @@ function mount({ config = sampleConfig(), state = sampleState, tab = 'tiers' } =
     // 4 updating, 5 config, 6 configHash, 7 draftDirty, 8 activeTab.
     __seed: undefined,
   };
-  const seed = { 0: state, 5: config, 6: 'hash-1', 8: tab };
+  // state.config is the last saved snapshot from inspect(); keep it a clone so
+  // in-page edits do not silently mutate the "already saved" copy.
+  const seed = { 0: { ...state, config: structuredClone(config) }, 5: config, 6: 'hash-1', 8: tab };
   for (const [index, value] of Object.entries(seed)) hooks[Number(index)] = value;
 
   const locale = { register() {}, bind() { return key => key; } };
@@ -504,5 +506,91 @@ test('the manual batch panel remembers last time\'s choices', async () => {
     assert.equal(JSON.parse(app.storage.get('xbot-gen-prefs')).style, 'english');
     ref.props.onChange({ target: { value: '新的参考帖' } });
     assert.equal(JSON.parse(app.storage.get('xbot-gen-prefs')).reference, '新的参考帖');
+  } finally { app.close(); }
+});
+
+test('topic mix labels distinguish saved ratios from unsaved drafts', async () => {
+  const config = sampleConfig({
+    postSettings: {
+      ...sampleConfig().postSettings,
+      topicMix: [
+        { id: 'a', label: '香艳', weight: 50, prompt: '' },
+        { id: 'b', label: '批判', weight: 30, prompt: '' },
+        { id: 'c', label: '搞女人', weight: 20, prompt: '' },
+      ],
+    },
+  });
+  const app = mount({ tab: 'post', config });
+  try {
+    let tree = app.render();
+    assert.match(flatText(tree), /已保存并生效：香艳50\/批判30\/搞女人20/);
+    assert.doesNotMatch(flatText(tree), /当前生效配比/);
+    assert.doesNotMatch(flatText(tree), /编辑中（未保存/);
+
+    const weight = elements(tree).find(node => node.type === 'input' && node.props?.type === 'number'
+      && node.props?.value === 50 && node.props?.min === 0 && node.props?.max === 100
+      && node.props?.style && node.props.style.width === 80);
+    assert.ok(weight, 'the 香艳 weight field is editable');
+    weight.props.onChange({ target: { value: '70' } });
+    tree = app.render();
+    assert.match(flatText(tree), /已保存并生效：香艳50\/批判30\/搞女人20/);
+    assert.match(flatText(tree), /编辑中（未保存，Worker 还在用上面那套）：香艳70\/批判30\/搞女人20/);
+    assert.equal(app.config().postSettings.topicMix[0].weight, 70);
+  } finally { app.close(); }
+});
+
+test('a theme row can pin its own character range, and clearing it falls back', async () => {
+  const config = sampleConfig({
+    postSettings: {
+      ...sampleConfig().postSettings,
+      format: { ...sampleConfig().postSettings.format, minChars: 30, maxChars: 60 },
+      topicMix: [{ id: 'a', label: '香艳', weight: 100, prompt: '' }],
+    },
+  });
+  const app = mount({ tab: 'post', config });
+  try {
+    let tree = app.render();
+    // The range inputs show the global bounds as their placeholder.
+    const rangeInputs = elements(tree).filter(node => node.type === 'input' && node.props?.type === 'number'
+      && node.props?.max === 2000 && String(node.props?.placeholder || '').includes('下限'));
+    assert.equal(rangeInputs.length, 1, 'a theme row owns one lower-bound field');
+    const lower = rangeInputs[0];
+    assert.equal(lower.props.placeholder, '下限 30');
+    assert.equal(lower.props.value, '', 'blank means "follow the global range"');
+
+    lower.props.onChange({ target: { value: '80' } });
+    tree = app.render();
+    assert.equal(app.config().postSettings.topicMix[0].minChars, 80);
+    const lower2 = elements(tree).filter(node => node.type === 'input' && node.props?.type === 'number'
+      && node.props?.max === 2000 && String(node.props?.placeholder || '').includes('下限'))[0];
+    assert.equal(lower2.props.value, 80);
+
+    // The saved view shows the range, so the operator can see it at a glance.
+    assert.match(flatText(tree), /香艳100·80-/);
+
+    // Clearing it hands the theme back to the global range.
+    lower2.props.onChange({ target: { value: '' } });
+    tree = app.render();
+    assert.equal(app.config().postSettings.topicMix[0].minChars, undefined);
+    assert.doesNotMatch(flatText(tree), /香艳100·/);
+  } finally { app.close(); }
+});
+
+test('manual draft delete posts the draft id and text instead of filtering by index', async () => {
+  const app = mount({ tab: 'manualGen' });
+  try {
+    // previewDrafts is the 23rd useState in Panel (0-based index 22).
+    app.hooks[22] = [
+      { id: 'draft_keep', text: '留下来的稿' },
+      { id: 'draft_drop', text: '要点掉的稿' },
+    ];
+    let tree = app.render();
+    const deletes = elements(tree).filter(node => node.type === 'button' && flatText(node) === '✕ 删除');
+    assert.equal(deletes.length, 2);
+    await deletes[1].props.onClick({ preventDefault() {}, target: {} });
+    const posted = app.requests.find(item => item.action === 'remove-manual-draft');
+    assert.ok(posted, 'delete must hit the backend');
+    assert.equal(posted.id, 'draft_drop');
+    assert.equal(posted.text, '要点掉的稿');
   } finally { app.close(); }
 });

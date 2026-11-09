@@ -471,6 +471,15 @@ test('handles post queue operations (enqueue, urgent, remove, clear)', async () 
     assert.ok(kept.manualDrafts.length >= 2, 'clearing the send queue must not wipe the 24h manual drafts');
     const removed = await service.action({ action: 'remove-manual-draft', id: kept.manualDrafts[0].id });
     assert.equal(removed.manualDrafts.length, kept.manualDrafts.length - 1);
+
+    const leftover = removed.manualDrafts[0];
+    const byText = await service.action({ action: 'remove-manual-draft', text: leftover.text });
+    assert.ok(!byText.manualDrafts.some(item => item.text === leftover.text));
+
+    await service.action({ action: 'enqueue-post', text: '待清空的草稿甲', urgent: false });
+    await service.action({ action: 'enqueue-post', text: '待清空的草稿乙', urgent: false });
+    const cleared = await service.action({ action: 'clear-manual-drafts' });
+    assert.equal(cleared.manualDrafts.length, 0);
   } finally { f.cleanup(); }
 });
 
@@ -1482,7 +1491,7 @@ test('writer rule settings are editable and validated', async () => {
   assert.match(source, /写作规则（三行结构/);
   assert.match(source, /末行引导字/);
   assert.match(source, /套用出厂配比/);
-  assert.match(source, /当前生效配比/);
+  assert.match(source, /已保存并生效/);
 });
 
 test('style prompt fragments are editable and drive the structure block', async () => {
@@ -1921,6 +1930,57 @@ test('each theme can pick its own 文风 and model', async () => {
   assert.throws(() => validateConfig(badModel), /主题模型名/);
 });
 
+test('a theme can pin its own character range, and blank means the global one', async () => {
+  const { themeCharRange, formatForTheme, postSettingsSignature } = await import('../index.js');
+  const base = structuredClone(DEFAULT_CONFIG);
+  base.postSettings.topicMix = [
+    { id: 'a', label: '香艳', weight: 60, prompt: '' },
+    { id: 'b', label: '批判', weight: 40, prompt: '' },
+  ];
+  const global = { minChars: 30, maxChars: 60 };
+
+  // A theme without a range follows the global one.
+  assert.deepEqual(themeCharRange({ id: 'a' }, global), { minChars: 30, maxChars: 60 });
+  assert.deepEqual(formatForTheme({ id: 'a' }, global), { minChars: 30, maxChars: 60 });
+
+  // Its own range wins, and only for that theme.
+  const ranged = structuredClone(base);
+  ranged.postSettings.topicMix[0] = { ...ranged.postSettings.topicMix[0], minChars: 80, maxChars: 140 };
+  const kept = validateConfig(ranged);
+  assert.equal(kept.postSettings.topicMix[0].minChars, 80);
+  assert.equal(kept.postSettings.topicMix[0].maxChars, 140);
+  assert.equal(kept.postSettings.topicMix[1].minChars, undefined);
+  assert.deepEqual(formatForTheme(kept.postSettings.topicMix[0], global), { minChars: 80, maxChars: 140 });
+  assert.deepEqual(formatForTheme(kept.postSettings.topicMix[1], global), { minChars: 30, maxChars: 60 });
+
+  // A half-filled range keeps the global bound on the other side.
+  const half = structuredClone(base);
+  half.postSettings.topicMix[0] = { ...half.postSettings.topicMix[0], maxChars: 200 };
+  const halfKept = validateConfig(half);
+  const halfFmt = formatForTheme(halfKept.postSettings.topicMix[0], global);
+  assert.equal(halfFmt.maxChars, 200);
+  assert.equal(halfFmt.minChars, 30);
+
+  // A blank value is not a range: it keeps following the global one.
+  const blank = structuredClone(base);
+  blank.postSettings.topicMix[0] = { ...blank.postSettings.topicMix[0], minChars: '', maxChars: '' };
+  const blankKept = validateConfig(blank);
+  assert.equal(blankKept.postSettings.topicMix[0].minChars, undefined);
+  assert.equal(blankKept.postSettings.topicMix[0].maxChars, undefined);
+
+  // Changing a range invalidates the drafts made under the old one.
+  const plainSig = postSettingsSignature(validateConfig(base).postSettings);
+  assert.notEqual(postSettingsSignature(kept.postSettings), plainSig);
+
+  // Out-of-range values are refused instead of silently ignored.
+  const tooLong = structuredClone(base);
+  tooLong.postSettings.topicMix[0] = { ...tooLong.postSettings.topicMix[0], maxChars: 5000 };
+  assert.throws(() => validateConfig(tooLong), /主题字数区间/);
+  const inverted = structuredClone(base);
+  inverted.postSettings.topicMix[0] = { ...inverted.postSettings.topicMix[0], minChars: 200, maxChars: 50 };
+  assert.throws(() => validateConfig(inverted), /下限不能大于上限/);
+});
+
 test('liking on comment and on reply are switches, not hard-wired', () => {
   // Both default to on, so upgrading does not silently change behaviour.
   const defaults = structuredClone(DEFAULT_CONFIG);
@@ -2001,6 +2061,7 @@ test('reply tab ships the special-person editor with add and delete controls', a
   assert.match(source, /analyze-reference-post/);
   assert.match(source, /referenceAnalysis/);
   assert.match(source, /remove-manual-draft/);
+  assert.match(source, /clear-manual-drafts/);
   assert.match(source, /保留 24 小时/);
   // Each theme row offers 文风 and 模型.
   assert.match(source, /文风：全局默认/);

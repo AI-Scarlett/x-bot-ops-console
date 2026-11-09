@@ -981,6 +981,52 @@ export function stylePromptFor(postCfg, hour = beijingHour()) {
   return { prompt: String(slot.prompt || '').trim(), label: String(slot.label || '').trim() };
 }
 
+// The character range a theme sets for itself, without any global fallback.
+export function themeOwnRange(theme) {
+  const out = { minChars: null, maxChars: null };
+  if (!isRecord(theme)) return out;
+  const read = value => {
+    if (value === undefined || value === null || value === '') return null;
+    const num = Number(value);
+    return Number.isFinite(num) && num > 0 ? Math.floor(num) : null;
+  };
+  out.minChars = read(theme.minChars);
+  out.maxChars = read(theme.maxChars);
+  return out;
+}
+
+// The character range of one content theme.
+//
+// A theme may pin its own length; whatever it leaves empty keeps the global
+// range, so "not set" means "same as everywhere else".
+export function themeCharRange(theme, format = {}) {
+  const fmt = isRecord(format) ? format : {};
+  const out = { minChars: null, maxChars: null };
+  if (!isRecord(theme)) return out;
+  const read = value => {
+    if (value === undefined || value === null || value === '') return null;
+    const num = Number(value);
+    return Number.isFinite(num) && num > 0 ? Math.floor(num) : null;
+  };
+  out.minChars = read(theme.minChars);
+  out.maxChars = read(theme.maxChars);
+  if (out.minChars === null && out.maxChars === null) {
+    out.minChars = Number(fmt.minChars) || null;
+    out.maxChars = Number(fmt.maxChars) || null;
+  }
+  return out;
+}
+
+// The format rules for one theme: the global ones with the theme's own length
+// range folded in.
+export function formatForTheme(theme, format = {}) {
+  const fmt = { ...(isRecord(format) ? format : {}) };
+  const range = themeCharRange(theme, format);
+  if (range.minChars) fmt.minChars = range.minChars;
+  if (range.maxChars) fmt.maxChars = range.maxChars;
+  return fmt;
+}
+
 // Must match post_worker.py's post_settings_signature byte for byte, so a draft
 // made here is recognised as current (or stale) by the worker.
 export function postSettingsSignature(postCfg) {
@@ -994,9 +1040,11 @@ export function postSettingsSignature(postCfg) {
     .map(item => {
       const style = String(item.style || '').trim();
       const model = String(item.model || '').trim();
-      // Only a theme that picks its own style or model changes the fingerprint,
-      // so an untouched config keeps the same signature as before.
-      const suffix = (style || model) ? `::${style}::${model}` : '';
+      // Only a theme that picks its own style, model or length range changes the
+      // fingerprint, so an untouched config keeps the same signature as before.
+      const range = themeOwnRange(item);
+      const rangeSuffix = range.minChars || range.maxChars ? `::${range.minChars || ''}:${range.maxChars || ''}` : '';
+      const suffix = (style || model || rangeSuffix) ? `::${style}::${model}${rangeSuffix}` : '';
       return `${item.label}:${item.weight}:${item.prompt || ''}${suffix}`;
     })
     .join(';');
@@ -2606,6 +2654,19 @@ function validateConfig(input) {
           if (model && !/^[A-Za-z0-9._:-]+$/.test(model)) throw new TypeError('主题模型名只能包含字母、数字、点、下划线、冒号和短横线');
           item.model = model;
         }
+        // Per-theme character range. Empty means "follow the global range".
+        for (const key of ['minChars', 'maxChars']) {
+          if (item[key] === undefined || item[key] === null || item[key] === '') {
+            delete item[key];
+            continue;
+          }
+          const value = Number(item[key]);
+          if (!Number.isInteger(value) || value < 1 || value > 2000) throw new TypeError('主题字数区间需为 1~2000 的整数');
+          item[key] = value;
+        }
+        if (item.minChars !== undefined && item.maxChars !== undefined && item.minChars > item.maxChars) {
+          throw new TypeError(`主题「${item.label}」的字数下限不能大于上限`);
+        }
       }
       const total = mix.reduce((sum, item) => sum + item.weight, 0);
       if (mix.length && total !== 100) throw new TypeError(`主题比例合计必须等于 100%（当前 ${total}%）`);
@@ -2985,12 +3046,26 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       };
     }
     if (request.action === 'remove-manual-draft') {
-      const id = String(request.id || '');
-      if (!id) throw new TypeError('缺少待删除草稿 ID');
+      const id = String(request.id || '').trim();
+      const text = String(request.text || '').trim();
+      if (!id && !text) throw new TypeError('缺少待删除草稿 ID');
       const { items } = mutateManualDrafts(current => {
-        current.items = current.items.filter(item => item.id !== id);
+        if (id) {
+          const next = current.items.filter(item => String(item.id || '') !== id);
+          if (next.length !== current.items.length) {
+            current.items = next;
+            return;
+          }
+        }
+        if (text) current.items = current.items.filter(item => String(item.text || '').trim() !== text);
       }, activeManualDraftsPath, clock());
       return { ok: true, action: 'remove-manual-draft', manualDrafts: items, note: '已从 24 小时草稿库删除。' };
+    }
+    if (request.action === 'clear-manual-drafts') {
+      const { items } = mutateManualDrafts(current => {
+        current.items = [];
+      }, activeManualDraftsPath, clock());
+      return { ok: true, action: 'clear-manual-drafts', manualDrafts: items, note: '已清空本页 24 小时草稿库。' };
     }
     if (request.action === 'remove-queued-post') {
       const id = String(request.id || '');
@@ -3075,7 +3150,8 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       const referenceAnalysis = typeof request.referenceAnalysis === 'string'
         ? request.referenceAnalysis.trim().slice(0, 2000) : '';
       const onePerLine = postCfg.oneSentencePerLine !== false;
-      const fmtCfg = { ...DEFAULT_CONFIG.postSettings.format, ...(postCfg.format || {}) };
+      const baseFmt = { ...DEFAULT_CONFIG.postSettings.format, ...(postCfg.format || {}) };
+      const fmtCfg = { ...baseFmt };
       // 本次生成的最长字数只在这一次生效，不改全局配置。
       if (batchMaxChars) fmtCfg.maxChars = batchMaxChars;
       // 全局「禁白话虚词」是给文言文设的。白话/英文、模仿参考帖、预览挑选都不能被它否决。
@@ -3086,8 +3162,31 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       // The active time window decides the language of this batch.
       const slot = stylePromptFor(postCfg);
       const windowLanguage = /英文|english/i.test(slot.label || '') ? 'english' : 'chinese';
-      const structureBlock = buildStructureBlock(fmtCfg, styleCfg, windowLanguage);
-      const formatRule = fmtCfg.lineCount > 0 ? structureBlock : (onePerLine ? `\n\n${ONE_SENTENCE_RULE}` : '');
+      // Every theme may pin its own length range. The prompt and the checker
+      // must use the same range, otherwise the theme's range only ever
+      // rejected drafts instead of shaping them.
+      // Order: global range -> theme range -> this batch's explicit override.
+      const draftFmtFor = (theme) => {
+        const next = formatForTheme(theme, baseFmt);
+        if (batchMaxChars) next.maxChars = batchMaxChars;
+        next.forbidColloquial = fmtCfg.forbidColloquial;
+        return next;
+      };
+      const formatRuleFor = (theme) => {
+        const themeFmt = draftFmtFor(theme);
+        if (themeFmt.lineCount > 0) return buildStructureBlock(themeFmt, styleCfg, windowLanguage);
+        const base = onePerLine ? `\n\n${ONE_SENTENCE_RULE}` : '';
+        const min = Number(themeFmt.minChars) || 0;
+        const max = Number(themeFmt.maxChars) || 0;
+        if (!min && !max) return base;
+        const low = min || 1;
+        const high = max || min;
+        const rangeText = windowLanguage === 'english'
+          ? `Keep it between ${low} and ${high} characters.`
+          : `汉字 ${low}-${high} 个。`;
+        return `${base}\n\n【字数要求】${rangeText}`;
+      };
+      const formatRule = formatRuleFor(null);
       const globalPrompt = postCfg.customPrompt || '你在推特(X)上用周天子姬霸的人设发一条原创推文。文风为幽默、古奥的文言文或诗词歌赋，自称周天子、姬霸或夫子，不要露骨，禁止提现代网络低俗梗，字数在30到90字之间。';
       // The active time window wins over the global prompt, exactly like the
       // worker's compose_post_prompt does.
@@ -3211,6 +3310,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         // longer fight each other and the preferred topics really get used.
         const topic = hotTopic || pool[Math.floor(Math.random() * pool.length)];
         const theme = themePlan[i] || pickTopicTheme(postCfg.topicMix);
+        const draftFmt = draftFmtFor(theme);
         const themeBlock = theme
           ? `\n\n【本条主题方向：${theme.label}】（约占 ${theme.weight}%）${theme.prompt ? ` ${theme.prompt}` : ''}`
           : '';
@@ -3236,15 +3336,15 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         }
       }
       const prompt = reference
-        ? effectiveBasePrompt + referenceBlock + learningBlock + formatRule
-        : basePrompt + themeBlock + learningBlock + subjectBlock + formatRule;
+        ? effectiveBasePrompt + referenceBlock + learningBlock + formatRuleFor(theme)
+        : basePrompt + themeBlock + learningBlock + subjectBlock + formatRuleFor(theme);
         const styleProblem = text => draftStyleProblem(text, styleKey);
         try {
           let rawDraft = await generateTweetViaLmh(prompt, { model: genModel, port });
-          let draftText = fmtCfg.lineCount > 0
+          let draftText = draftFmt.lineCount > 0
             ? String(rawDraft || '').trim()
             : enforceOneSentencePerLine(rawDraft);
-          let verdict = checkPostDraft(draftText, { ...fmtCfg, maxOverlapChars: dedupeCfg.maxOverlapChars }, recentTexts, skeletonTexts, skeletonHours);
+          let verdict = checkPostDraft(draftText, { ...draftFmt, maxOverlapChars: dedupeCfg.maxOverlapChars }, recentTexts, skeletonTexts, skeletonHours);
           const firstStyleIssue = styleProblem(draftText);
           if (firstStyleIssue) {
             verdict.ok = false;
@@ -3255,12 +3355,12 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
           for (let attempt = 0; attempt < retryLimit && !verdict.ok; attempt += 1) {
             // Corrective retries that name every violation.
             const retryPrompt = `${prompt}\n\n【上一次不合格，必须逐条修正】\n- ${verdict.reasons.join('\n- ')}`
-              + (fmtCfg.lineCount === 0 ? '' : `\n- 严格保持 ${fmtCfg.lineCount} 行`);
+              + (draftFmt.lineCount === 0 ? '' : `\n- 严格保持 ${draftFmt.lineCount} 行`);
             rawDraft = await generateTweetViaLmh(retryPrompt, { model: genModel, port });
-            draftText = fmtCfg.lineCount > 0
+            draftText = draftFmt.lineCount > 0
               ? String(rawDraft || '').trim()
               : enforceOneSentencePerLine(rawDraft);
-            verdict = checkPostDraft(draftText, { ...fmtCfg, maxOverlapChars: dedupeCfg.maxOverlapChars }, recentTexts, skeletonTexts, skeletonHours);
+            verdict = checkPostDraft(draftText, { ...draftFmt, maxOverlapChars: dedupeCfg.maxOverlapChars }, recentTexts, skeletonTexts, skeletonHours);
             const retryStyleIssue = styleProblem(draftText);
             if (retryStyleIssue) {
               verdict.ok = false;
