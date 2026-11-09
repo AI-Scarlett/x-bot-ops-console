@@ -315,6 +315,44 @@ test('start reports a request, not an unverified success', async () => {
   } finally { f.cleanup(); }
 });
 
+test('a dead watchdog is brought back automatically, but a stopped task is left alone', async () => {
+  const f = fixture(); const calls = [];
+  try {
+    writeFileSync(f.paths.comment.watchdog, '# fixture watchdog\n');
+    const python = join(f.dir, 'python'); writeFileSync(python, '');
+    const paths = structuredClone(f.paths);
+    Object.assign(paths.comment, {
+      python, interpreterPidArgvToken: python,
+      workerPidArgvToken: f.paths.comment.worker, watchdogPidArgvToken: f.paths.comment.watchdog,
+    });
+    const service = createService({
+      paths, configPath: join(f.dir, 'config.json'), platform: 'darwin',
+      spawnProcess: (command, args) => { calls.push({ command, args }); return { pid: 4242, unref() {} }; },
+    });
+    // No watchdog runs, so the console brings one back by itself.
+    const state = await service.inspect();
+    assert.equal(calls.length, 1, 'the dead watchdog is started again');
+    assert.equal(calls[0].args[1], '--loop');
+    assert.deepEqual(state.healedWatchdogs.map(entry => entry.key), ['comment']);
+
+    // A task that was deliberately stopped keeps its marker and stays down.
+    writeFileSync(f.paths.reply.watchdog, '# fixture watchdog\n');
+    const replyPaths = structuredClone(paths);
+    Object.assign(replyPaths.reply, {
+      python, interpreterPidArgvToken: python,
+      workerPidArgvToken: f.paths.reply.worker, watchdogPidArgvToken: f.paths.reply.watchdog,
+    });
+    writeFileSync(f.paths.reply.stop, 'stop\n');
+    const stopped = createService({
+      paths: replyPaths, configPath: join(f.dir, 'config.json'), platform: 'darwin',
+      spawnProcess: (command, args) => { calls.push({ command, args }); return { pid: 4343, unref() {} }; },
+    });
+    const stoppedState = await stopped.inspect();
+    assert.ok(!stoppedState.healedWatchdogs.some(entry => entry.key === 'reply'), 'a stopped task is not restarted');
+    assert.ok(existsSync(f.paths.reply.stop), 'the stop marker survives');
+  } finally { f.cleanup(); }
+});
+
 test('start refuses an unknown interpreter before clearing the stop marker', async () => {
   const f=fixture();
   try {

@@ -631,6 +631,8 @@ window.__ModuleLoader__.load({
         const foreign = (item.worker?.running && !item.worker.owned) || (item.watchdog?.running && !item.watchdog.owned);
         const disabledReason = foreign ? t('pidForeign') : t('missingFiles');
         const startNeedsPython = !item.watchdog?.running && !item.worker?.running && !item.pythonConfigured;
+        // Watchdogs the console just brought back after they died.
+        const healedKeys = (state?.healedWatchdogs || []).map(entry => entry.key);
         const run = (action, text, prompt, primary = false) => h('button', {
           disabled: busy || !controlsEnabled || (action === 'start' && startNeedsPython),
           onClick: () => askConfirm(prompt, () => act(action, key)),
@@ -651,6 +653,11 @@ window.__ModuleLoader__.load({
           pauseActive ? h('p', { role: 'status', style: { margin: '8px 0 0', fontSize: 13, color: C.muted } }, `⏸ ${item.worker?.running ? t('notActuallyPaused') : t('pausedUntil')} ${new Date(item.pausedUntil * 1000).toLocaleString()} · ${item.pauseReason === 'rate_limit' ? 'X 限流保护' : '手动暂停'}`) : null,
           pauseError ? h('p', { role: 'alert', style: { margin: '8px 0 0', fontSize: 13, color: C.error } }, (!item.watchdog?.running || !item.watchdog.owned) ? t('noWatchdog') : '检测到暂停标记，但无法确认工作进程身份；看门狗拒绝操作该 PID。请核对 PID 文件与进程命令。') : null,
           pauseExpired ? h('p', { role: 'alert', style: { margin: '8px 0 0', fontSize: 13, color: C.error } }, t('pauseExpired')) : null,
+          !item.watchdog?.running
+            ? h('p', { role: 'alert', style: { margin: '8px 0 0', fontSize: 13, color: C.error } },
+                '看门狗没有运行：工作进程没人看管，浏览器会一直闲在页面上什么也不做。'
+                + (healedKeys.includes(key) ? ' 已尝试自动恢复，若仍不出现请点「启动」或「重启全部看门狗」。' : ' 点「启动」或「重启全部看门狗」恢复。'))
+            : null,
           !controlsEnabled ? h('p', { role: 'alert', style: { margin: '8px 0 0', fontSize: 13, color: C.error } },
             `${disabledReason}（${t('worker')}：${item.workerScriptExists ? '存在' : '缺失'}；${t('watchdog')}：${item.watchdogScriptExists ? '存在' : '缺失'}）`) : null,
           startNeedsPython ? h('p', { role: 'alert', style: { margin: '8px 0 0', fontSize: 13, color: C.error } }, t('watchdogUnavailable')) : null,

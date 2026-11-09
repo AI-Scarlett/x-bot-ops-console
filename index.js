@@ -2856,6 +2856,54 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
     try { return createHash('sha256').update(readFileSync(activeConfigPath)).digest('hex'); }
     catch (error) { if (error.code === 'ENOENT') return null; throw error; }
   };
+  // Start the supervisor of one task. Shared by the manual actions and by the
+  // automatic heal in inspect().
+  const spawnWatchdog = (key, target, { clearStop = false } = {}) => {
+    if (!existsSync(target.watchdog)) return { ok: false, error: '未找到监控脚本，请先在设置中核对脚本路径' };
+    let python;
+    try { python = resolvePython(target); }
+    catch (error) { return { ok: false, error: error.message }; }
+    if (clearStop && existsSync(target.stop)) {
+      try { unlinkSync(target.stop); } catch { /* ignore */ }
+    }
+    const argv = key === 'comment' ? [python, target.watchdog, '--loop'] : [python, target.watchdog, '--supervise'];
+    const logPath = key === 'comment' ? join(target.dir, 'watchdog.log') : join(target.dir, `${key}_watchdog.stdout.log`);
+    let out;
+    try {
+      out = openSync(logPath, 'a');
+      const child = spawnProcess(argv[0], argv.slice(1), { cwd: target.dir, detached: true, stdio: ['ignore', out, out] });
+      if (child?.error) throw child.error;
+      if (typeof child?.unref === 'function') child.unref();
+      const pid = child?.pid ?? null;
+      if (pid == null) throw new Error('系统未返回新进程编号');
+      return { ok: true, pid };
+    } catch (error) {
+      return { ok: false, error: `启动监控进程失败：${error.message}` };
+    } finally {
+      if (out !== undefined) { try { closeSync(out); } catch { /* ignore */ } }
+    }
+  };
+  // A dead watchdog leaves its worker unsupervised, and the browser then sits
+  // on an idle page doing nothing. Remember the last attempt so a broken
+  // script cannot cause a spawn loop on every refresh.
+  const watchdogHealAt = new Map();
+  const healWatchdogs = (items, active) => {
+    const healed = [];
+    for (const key of ['comment', 'reply', 'post', 'profile']) {
+      const target = active[key] || DEFAULT_TARGETS[key];
+      if (!target) continue;
+      if (items[key]?.watchdog?.running) continue;
+      // A stop marker means the task was deliberately stopped: respect it.
+      if (existsSync(target.stop)) continue;
+      if (!existsSync(target.watchdog)) continue;
+      const last = watchdogHealAt.get(key) || 0;
+      if (Date.now() - last < 60000) continue;
+      watchdogHealAt.set(key, Date.now());
+      const result = spawnWatchdog(key, target);
+      if (result.ok) healed.push({ key, pid: result.pid });
+    }
+    return healed;
+  };
   // The UI only ever sees a sentinel for an existing cookie. On save, restore
   // the real value so a plain page save cannot wipe a working login.
   const restoreTrendCookies = (value) => {
@@ -2953,6 +3001,8 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         priorityHandles: readPriorityHandles(t.worker),
       };
     }
+    // A task without a supervisor is a task whose browser sits idle. Heal it.
+    const healedWatchdogs = healWatchdogs(items, active);
     const shared = readSharedConfig();
     const configHash = hashCurrentConfig();
     const dshModels = readDshModels();
@@ -2986,6 +3036,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       saveLog: readSaveLog(),
       learnTriggerPending: existsSync(LEARN_TRIGGER_PATH),
       workerAcceptance: workerAcceptance(shared.config), items, platform, checkedAt: new Date(clock()).toISOString(),
+      healedWatchdogs,
     };
   };
   async function action(request) {
@@ -3862,7 +3913,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       // Recovers from the case where a full disk or a crash killed the watchdog:
       // without it the console can no longer start, stop or restart the worker.
       if (!existsSync(target.watchdog)) throw new Error('未找到监控脚本，请先在设置中核对脚本路径');
-      const python = resolvePython(target);
+      // The stop marker is cleared when the supervisor is replaced.
       if (existsSync(target.stop)) unlinkSync(target.stop);
 
       let killed = false;
@@ -3882,32 +3933,16 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         }
       }
 
-      const argv = request.target === 'comment'
-        ? [python, target.watchdog, '--loop']
-        : [python, target.watchdog, '--supervise'];
-      const logPath = request.target === 'comment' ? join(target.dir, 'watchdog.log') : join(target.dir, `${request.target}_watchdog.stdout.log`);
-      let pid = null;
-      let out;
-      try {
-        out = openSync(logPath, 'a');
-        const child = spawnProcess(argv[0], argv.slice(1), { cwd: target.dir, detached: true, stdio: ['ignore', out, out] });
-        if (child?.error) throw child.error;
-        if (typeof child?.unref === 'function') child.unref();
-        pid = child?.pid ?? null;
-        if (pid == null) throw new Error('系统未返回新进程编号');
-      } catch (error) {
-        throw new Error(`启动监控进程失败：${error.message}`);
-      } finally {
-        if (out !== undefined) { try { closeSync(out); } catch { /* ignore */ } }
-      }
+      const started = spawnWatchdog(request.target, target, { clearStop: true });
+      if (!started.ok) throw new Error(started.error);
       return {
         ok: true,
         action: 'restart-watchdog',
         killed,
-        pid,
+        pid: started.pid,
         note: killed
-          ? `已替换监控进程（旧 PID ${watchdogStatus.pid} → 新 PID ${pid}），稍后刷新即可看到它拉起工作进程。`
-          : `监控进程此前未运行，已启动（PID ${pid}），稍后刷新即可。`,
+          ? `已替换监控进程（旧 PID ${watchdogStatus.pid} → 新 PID ${started.pid}），稍后刷新即可看到它拉起工作进程。`
+          : `监控进程此前未运行，已启动（PID ${started.pid}），稍后刷新即可。`,
       };
     }
     if (request.action === 'start') {
@@ -3915,25 +3950,10 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       if (watchdogStatus.running && watchdogStatus.owned) return { started: false, note: '监控进程已在运行，已拒绝重复启动。' };
       if (watchdogStatus.running || workerStatus.running) throw new Error('发现正在运行但身份未验证的进程，已拒绝启动');
       if (!existsSync(target.watchdog)) throw new Error('未找到监控脚本，请先在设置中核对脚本路径');
-      const python = resolvePython(target);
-      if (existsSync(target.stop)) unlinkSync(target.stop);
-      const argv = request.target === 'comment' ? [python, target.watchdog, '--loop'] : [python, target.watchdog, '--supervise'];
-      const logPath = request.target === 'comment' ? join(target.dir, 'watchdog.log') : join(target.dir, `${request.target}_watchdog.stdout.log`);
-      let pid = null;
-      let out;
-      try {
-        out = openSync(logPath, 'a');
-        const child = spawnProcess(argv[0], argv.slice(1), { cwd: target.dir, detached: true, stdio: ['ignore', out, out] });
-        if (child?.error) throw child.error;
-        if (typeof child?.unref === 'function') child.unref();
-        pid = child?.pid ?? null;
-        if (pid == null) throw new Error('系统未返回新进程编号');
-      } catch (error) {
-        throw new Error(`启动监控进程失败：${error.message}`);
-      } finally {
-        if (out !== undefined) { try { closeSync(out); } catch { /* ignore close failure */ } }
-      }
-      return { started: null, launchRequested: true, pid, note: '启动请求已提交，尚未确认成功。监控进程会自行拉起工作进程，请刷新状态核对进程与心跳。' };
+      // 启动 clears the stop marker: the operator asked for this task to run.
+      const started = spawnWatchdog(request.target, target, { clearStop: true });
+      if (!started.ok) throw new Error(started.error);
+      return { started: null, launchRequested: true, pid: started.pid, note: '启动请求已提交，尚未确认成功。监控进程会自行拉起工作进程，请刷新状态核对进程与心跳。' };
     }
     if (request.action === 'stop') {
       if (!watchdogStatus.running || !watchdogStatus.owned) throw new Error('监控进程身份未验证，拒绝停止；请先点「🛠 运维操作」里的「重启全部看门狗」。');
