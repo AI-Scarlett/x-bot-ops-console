@@ -865,7 +865,7 @@ test('time-window style schedule validates and is worker-owned', async () => {
 
   const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
   assert.match(source, /分时段文风调度/);
-  assert.match(source, /当前生效/);
+  assert.match(source, /当前时段/);
 });
 
 test('config history keeps only the most recent snapshots', async () => {
