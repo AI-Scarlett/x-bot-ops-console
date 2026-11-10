@@ -3511,7 +3511,12 @@ window.__ModuleLoader__.load({
               h('label', { style: { display: 'flex', gap: 6, alignItems: 'center', fontSize: 13 } },
                 h('input', { type: 'checkbox', checked: config?.cruiseSettings?.crawlFollowing !== false, onChange: e => updateConfig(c => ({ ...c, cruiseSettings: { ...(c.cruiseSettings || {}), crawlFollowing: e.target.checked } })) }), '巡航关注列表'),
               h('label', { style: { display: 'flex', gap: 6, alignItems: 'center', fontSize: 13 } },
-                h('input', { type: 'checkbox', checked: config?.cruiseSettings?.crawlFollowers !== false, onChange: e => updateConfig(c => ({ ...c, cruiseSettings: { ...(c.cruiseSettings || {}), crawlFollowers: e.target.checked } })) }), '巡航粉丝列表'))),
+                h('input', { type: 'checkbox', checked: config?.cruiseSettings?.crawlFollowers !== false, onChange: e => updateConfig(c => ({ ...c, cruiseSettings: { ...(c.cruiseSettings || {}), crawlFollowers: e.target.checked } })) }), '巡航粉丝列表'),
+              ),
+              h('small', { style: { color: C.faint, fontSize: 11, display: 'block', marginTop: 4, lineHeight: 1.6 } },
+                '两边都会抓，访问时严格交替：上一次访了关注，这次就访粉丝，避免粉丝那边被漏掉。'
+                + (state?.cruiseSweep?.knownCount ? ` 当前名单 ${state.cruiseSweep.knownCount} 人。` : '')),
+            ),
 
           // 重点名单整轮巡
           h('section', { style: cardStyle },
