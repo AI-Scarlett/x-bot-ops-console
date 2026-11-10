@@ -2937,13 +2937,15 @@ export function readPluginVersion(packageUrl = new URL('./package.json', import.
   }
 }
 
-export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGETS, configPath = CONFIG_PATH, targetsPath = null, platform = process.platform, spawnProcess = spawn, queuePath = POST_QUEUE_PATH, learningsPath = LEARNINGS_PATH, backupDir = CONFIG_BACKUP_DIR, trendsPath = TRENDS_PATH, manualDraftsPath = MANUAL_DRAFTS_PATH } = {}) {
+export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGETS, configPath = CONFIG_PATH, targetsPath = null, platform = process.platform, spawnProcess = spawn, queuePath = null, learningsPath = null, backupDir = null, trendsPath = null, manualDraftsPath = null } = {}) {
   let activeConfigPath = configPath;
-  const activeQueuePath = queuePath;
-  const activeManualDraftsPath = manualDraftsPath;
-  const activeLearningsPath = learningsPath;
-  const activeTrendsPath = trendsPath;
-  const activeBackupDir = backupDir;
+  const isCustomConfig = activeConfigPath && dirname(activeConfigPath) !== dirname(CONFIG_PATH);
+  const baseDir = isCustomConfig ? dirname(activeConfigPath) : null;
+  const activeQueuePath = queuePath || (baseDir ? join(baseDir, 'post_queue.json') : POST_QUEUE_PATH);
+  const activeManualDraftsPath = manualDraftsPath || (baseDir ? join(baseDir, 'manual_drafts.json') : MANUAL_DRAFTS_PATH);
+  const activeLearningsPath = learningsPath || (baseDir ? join(baseDir, 'learnings.json') : LEARNINGS_PATH);
+  const activeTrendsPath = trendsPath || (baseDir ? join(baseDir, 'trends.json') : TRENDS_PATH);
+  const activeBackupDir = backupDir || (baseDir ? join(baseDir, 'backups') : CONFIG_BACKUP_DIR);
   const currentTargets = () => (targetsPath ? resolveTargets(paths, targetsPath) : paths);
   const readSharedConfig = () => {
     let raw;
@@ -3628,6 +3630,9 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         // These headlines are now spoken for: never offer them again.
         const usedNow = generated.map(item => item.hotTopic).filter(Boolean);
         if (usedNow.length) rememberUsedHotTopics(usedNow);
+        for (const item of generated) {
+          rememberManualDraft(item, activeManualDraftsPath, clock());
+        }
         const { payload } = mutatePostQueue((current) => {
           current.queue.push(...generated);
         }, activeQueuePath, { maxSize });
@@ -3636,8 +3641,9 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
           action: 'generate-draft-posts',
           generated,
           queue: payload.queue,
+          manualDrafts: readManualDrafts(activeManualDraftsPath, clock()),
           failed: failures.length,
-          note: `已成功由大模型生成并追加 ${generated.length} 条推文草稿入队！${failures.length ? `另有 ${failures.length} 条生成失败。` : ''}`,
+          note: `已成功由大模型生成并追加 ${generated.length} 条推文草稿入队！草稿已在手动创作页备份保留 24 小时。${failures.length ? `另有 ${failures.length} 条生成失败。` : ''}`,
         };
       }
       return {

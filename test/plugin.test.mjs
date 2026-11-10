@@ -567,6 +567,22 @@ test('post queue survives concurrent enqueue and remove without losing drafts', 
   } finally { f.cleanup(); }
 });
 
+test('service with custom config isolates state paths and never touches production files', async () => {
+  const f = fixture();
+  try {
+    const service = createService({
+      paths: f.paths,
+      configPath: join(f.dir, 'config.json'),
+      platform: 'darwin',
+    });
+    await service.action({ action: 'enqueue-post', text: '沙盒草稿', urgent: false });
+    const localDrafts = join(f.dir, 'manual_drafts.json');
+    assert.ok(existsSync(localDrafts), 'must write manual drafts inside the custom dir');
+    await service.action({ action: 'clear-manual-drafts' });
+    assert.equal(JSON.parse(readFileSync(localDrafts, 'utf8')).items.length, 0);
+  } finally { f.cleanup(); }
+});
+
 test('post queue settings accept batch size, threshold and auto refill knobs', async () => {
   const f = fixture();
   try {
