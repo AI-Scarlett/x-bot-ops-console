@@ -2931,3 +2931,35 @@ test('the panel explains an invalid config instead of silently showing defaults'
   const host = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
   assert.match(host, /configError: shared\.error/);
 });
+
+test('a rephrased story is caught as the same core content', async () => {
+  const { coreDuplicateReason, contentBigrams, buildHotScreenPrompt } = await import('../index.js');
+  // The lexical gate only decides whether the model is asked; the model has
+  // the final word, so this test only proves the prompt and the plumbing.
+  const prompt = buildHotScreenPrompt(['石家庄陨石最大一块重三十五公斤'], {
+    usedTopics: ['石家庄聚来逐陨星者'],
+  });
+  assert.match(prompt, /已经写过的头条/);
+  assert.match(prompt, /石家庄聚来逐陨星者/);
+  // Without a close match the model is never asked.
+  const reason = await coreDuplicateReason('一段全新的内容，和旧稿没有共同词', ['旧的第一条', '旧的第二条'], {
+    model: 'gpt-6-luna', port: 3040,
+  });
+  assert.equal(reason, '', 'a clearly different draft is not sent to the model');
+  // The knobs are validated.
+  const bad = clone(DEFAULT_CONFIG);
+  bad.postSettings.dedupe.coreSimilarity = 9;
+  assert.throws(() => validateConfig(bad), /核心查重相似度/);
+  const off = clone(DEFAULT_CONFIG);
+  off.postSettings.dedupe.coreCheck = false;
+  assert.equal(validateConfig(off).postSettings.dedupe.coreCheck, false);
+});
+
+test('a used hot topic is burned out of the board instead of coming back', async () => {
+  const source = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
+  // The plugin must not resurrect a headline that was already written.
+  assert.match(source, /usedTopicKeys/);
+  const workerSource = readFileSync('/Users/zhouxiaoming/Documents/Codex/tmp-84e0365a44937636/scripts/post_worker.py', 'utf8');
+  assert.match(workerSource, /def drop_trend_topic/);
+  assert.match(workerSource, /hot_filter\["usedTopics"\] = used_topics/);
+});

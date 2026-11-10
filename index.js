@@ -231,6 +231,17 @@ export async function executePluginUpdate({ repoSpec = 'github:AI-Scarlett/x-bot
   };
 }
 
+// The posts that already went out, read from the shared history file.
+export function readPostHistoryEntries(historyPath = POST_HISTORY_PATH) {
+  try {
+    if (existsSync(historyPath)) {
+      const hist = JSON.parse(readFileSync(historyPath, 'utf8'));
+      if (hist && Array.isArray(hist.posts)) return hist.posts;
+    }
+  } catch { /* unreadable history means no used topics */ }
+  return [];
+}
+
 export function readPostQueue(queuePath = POST_QUEUE_PATH) {
   try {
     if (existsSync(queuePath)) {
@@ -1155,6 +1166,67 @@ export function buildStructureBlock(format = {}, style = {}, language = 'chinese
 // Structural fingerprint: per line the character count plus the first and last
 // character. Two drafts that differ only by swapped words share a skeleton, which
 // is what the 48h cooldown is meant to stop.
+// The literal overlap check only catches verbatim runs, so a rephrased story
+// slipped through and the same core content went out several times. The model
+// decides; a cheap lexical gate keeps the extra call rare.
+export const CORE_DUPLICATE_INSTRUCTION = [
+  '你是推文查重员。下面给一条新稿和若干条近期已发稿。',
+  '判断新稿和哪一条旧稿讲的是【同一个核心内容】：同一件事、同一个桥段、同一个转折、同一个梗。',
+  '只是话题相近、文风相似、用词相似，但事情或桥段不同，不算重复。',
+  '',
+  '# 新稿',
+  '{draft}',
+  '',
+  '# 近期已发稿',
+  '{previous}',
+  '',
+  '只输出 JSON，不要解释：{"duplicate":true|false,"match":重复的编号或0,"why":"一句话理由"}',
+].join('\n');
+
+function contentBigrams(text) {
+  const flat = String(text || '').replace(/\s+/g, '');
+  if (flat.length < 2) return new Set();
+  const out = new Set();
+  for (let i = 0; i < flat.length - 1; i += 1) out.add(flat.slice(i, i + 2));
+  return out;
+}
+
+function contentContainment(a, b) {
+  const ga = contentBigrams(a);
+  const gb = contentBigrams(b);
+  if (!ga.size || !gb.size) return 0;
+  let shared = 0;
+  for (const gram of ga) if (gb.has(gram)) shared += 1;
+  return shared / Math.min(ga.size, gb.size);
+}
+
+export async function coreDuplicateReason(text, recentTexts, { model = 'gpt-6-luna', port = 3040, threshold = 0.28, window = 40 } = {}) {
+  const previous = (Array.isArray(recentTexts) ? recentTexts : [])
+    .map(item => String(item || '').trim()).filter(Boolean).slice(-window);
+  if (!previous.length) return '';
+  const scored = previous
+    .map((old, index) => ({ score: contentContainment(text, old), index }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3)
+    .filter(entry => entry.score >= threshold);
+  if (!scored.length) return '';
+  const listing = scored.map(entry => `${entry.index + 1}. ${previous[entry.index]}`).join('\n');
+  const prompt = CORE_DUPLICATE_INSTRUCTION
+    .replace('{draft}', String(text || '').trim())
+    .replace('{previous}', listing);
+  let reply = '';
+  try {
+    reply = await localModelChat(prompt, { model, port, temperature: 0, maxTokens: 200, timeoutMs: 60000 });
+  } catch { return ''; }
+  const start = reply.indexOf('{');
+  const end = reply.lastIndexOf('}');
+  if (start === -1 || end <= start) return '';
+  let verdict = null;
+  try { verdict = JSON.parse(reply.slice(start, end + 1)); } catch { return ''; }
+  if (!verdict || verdict.duplicate !== true) return '';
+  return `核心内容与近期已发稿重复：${String(verdict.why || '同一件事、同一桥段').trim()}`;
+}
+
 export function postSkeleton(text) {
   const lines = String(text || '').split('\n').map(line => line.replace(/\s+/g, '')).filter(Boolean);
   if (!lines.length) return '';
@@ -1644,6 +1716,9 @@ export const HOT_AI_DEFAULT_INSTRUCTION = [
   '# 优先保留',
   '生活观察、社会怪象、职场、消费与钱、科技与 AI、文化传统、教育、城市交通、饮食',
   '',
+  '# 已经写过的头条（同一件事、同一场热点即使换了说法也不要再用）',
+  '{usedTopics}',
+  '',
   '# 待审话题',
   '{topics}',
   '',
@@ -1655,9 +1730,15 @@ export function buildHotScreenPrompt(topics, filter = {}) {
   const keywords = (Array.isArray(filter.excludeKeywords) ? filter.excludeKeywords : []).slice(0, 200).join('、') || '（无）';
   const banned = (Array.isArray(filter.bannedTopics) ? filter.bannedTopics : []).slice(0, 100).join('、') || '（无）';
   const list = topics.map((topic, index) => `${index + 1}. ${topic}`).join('\n');
+  // Headlines already written about: the same event under another wording has
+  // to be rejected too, otherwise the account posts the same story twice.
+  const used = (Array.isArray(filter.usedTopics) ? filter.usedTopics : [])
+    .map(topic => String(topic || '').trim()).filter(Boolean).slice(0, 40);
+  const usedList = used.length ? used.map(topic => `- ${topic}`).join('\n') : '（无）';
   return instruction
     .replaceAll('{keywords}', keywords)
     .replaceAll('{banned}', banned)
+    .replaceAll('{usedTopics}', usedList)
     .replaceAll('{topics}', list);
 }
 
@@ -1892,7 +1973,7 @@ const DEFAULT_CONFIG = Object.freeze({
       extraRules: '',
     },
     // Reuse guard: no long verbatim run and no repeated skeleton.
-    dedupe: { maxOverlapChars: 8, recentPosts: 50, skeletonCooldownHours: 48 },
+    dedupe: { maxOverlapChars: 8, recentPosts: 50, skeletonCooldownHours: 48, coreCheck: true, coreSimilarity: 0.28, coreWindow: 40 },
     // Political topics are capped per day and per event.
     politicalCap: {
       dailyMax: 3,
@@ -2532,6 +2613,17 @@ function validateConfig(input) {
         const value = Number(dedupe[key]);
         if (!Number.isInteger(value) || value < 0 || value > 10000) throw new TypeError('去重数值需为非负整数');
         dedupe[key] = value;
+      }
+      if (dedupe.coreCheck !== undefined && typeof dedupe.coreCheck !== 'boolean') throw new TypeError('核心查重开关无效');
+      if (dedupe.coreSimilarity !== undefined) {
+        const value = Number(dedupe.coreSimilarity);
+        if (!Number.isFinite(value) || value < 0.05 || value > 1) throw new TypeError('核心查重相似度需为 0.05~1 之间的小数');
+        dedupe.coreSimilarity = value;
+      }
+      if (dedupe.coreWindow !== undefined) {
+        const value = Number(dedupe.coreWindow);
+        if (!Number.isInteger(value) || value < 5 || value > 200) throw new TypeError('核心查重对照条数需为 5~200 的整数');
+        dedupe.coreWindow = value;
       }
     }
     if (copy.postSettings.politicalCap !== undefined) {
@@ -3427,6 +3519,19 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
             verdict.ok = false;
             verdict.reasons = [firstStyleIssue, ...(verdict.reasons || [])];
           }
+          // The same story in different words must not be offered again.
+          if (dedupeCfg.coreCheck !== false) {
+            const coreDup = await coreDuplicateReason(draftText, recentTexts, {
+              model: genModel,
+              port,
+              threshold: Number(dedupeCfg.coreSimilarity) || 0.28,
+              window: Number(dedupeCfg.coreWindow) || 40,
+            });
+            if (coreDup) {
+              verdict.ok = false;
+              verdict.reasons = [coreDup, ...(verdict.reasons || [])];
+            }
+          }
           // 预览挑选不反复重写：超时和校验拦截正是手动生成“点了没稿”的主因。
           const retryLimit = commitToQueue ? 2 : 0;
           for (let attempt = 0; attempt < retryLimit && !verdict.ok; attempt += 1) {
@@ -3766,6 +3871,15 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       // Screen before caching: headlines the rules already reject must never reach
       // the board list, otherwise the operator has to strike them out by hand.
       const filterCfg = effectiveHotFilter(sharedCfg.postSettings, readLearnings(activeLearningsPath));
+      // A headline that has been written may not come back, and the model has to
+      // reject another headline about the same event.
+      const usedTopicList = collectUsedHotTopics({
+        historyPosts: readPostHistoryEntries(),
+        queueItems: readPostQueue(activeQueuePath).queue,
+        extra: readUsedHotTopics(),
+      });
+      filterCfg.usedTopics = usedTopicList;
+      const usedTopicKeys = new Set(usedTopicList.map(topic => normalizeHotTopic(topic).toLowerCase()).filter(Boolean));
       const keywordPass = screenHotTopics(topics, filterCfg);
       let usable = keywordPass.usable;
       const dropped = keywordPass.dropped.slice();
@@ -3806,7 +3920,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         }
       } catch { /* the cache is an optimisation, never a blocker */ }
       const payload = writeTrends({
-        topics: usable,
+        topics: usable.filter(topic => !usedTopicKeys.has(normalizeHotTopic(topic).toLowerCase())),
         sources: results,
         rawCount: topics.length,
         droppedCount: dropped.length,
