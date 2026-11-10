@@ -1044,7 +1044,9 @@ export function postSettingsSignature(postCfg) {
       // fingerprint, so an untouched config keeps the same signature as before.
       const range = themeOwnRange(item);
       const rangeSuffix = range.minChars || range.maxChars ? `::${range.minChars || ''}:${range.maxChars || ''}` : '';
-      const suffix = (style || model || rangeSuffix) ? `::${style}::${model}${rangeSuffix}` : '';
+      const windowSuffix = (item.sendStartHour !== undefined && item.sendEndHour !== undefined)
+        ? `::${item.sendStartHour}-${item.sendEndHour}` : '';
+      const suffix = (style || model || rangeSuffix || windowSuffix) ? `::${style}::${model}${rangeSuffix}${windowSuffix}` : '';
       return `${item.label}:${item.weight}:${item.prompt || ''}${suffix}`;
     })
     .join(';');
@@ -2666,6 +2668,25 @@ function validateConfig(input) {
         }
         if (item.minChars !== undefined && item.maxChars !== undefined && item.minChars > item.maxChars) {
           throw new TypeError(`主题「${item.label}」的字数下限不能大于上限`);
+        }
+        // Optional Beijing-time window. Both empty means all day. One side
+        // without the other is rejected so a greeting cannot fire at random.
+        const blank = value => value === undefined || value === null || value === '';
+        const startBlank = blank(item.sendStartHour);
+        const endBlank = blank(item.sendEndHour);
+        if (startBlank && endBlank) {
+          delete item.sendStartHour;
+          delete item.sendEndHour;
+        } else if (startBlank || endBlank) {
+          throw new TypeError(`主题「${item.label}」的发送时段需要同时填写开始和结束`);
+        } else {
+          const start = Number(item.sendStartHour);
+          const end = Number(item.sendEndHour);
+          if (!Number.isInteger(start) || start < 0 || start > 23) throw new TypeError('发送开始时间需为 0~23 点');
+          if (!Number.isInteger(end) || end < 1 || end > 24) throw new TypeError('发送结束时间需为 1~24 点');
+          if (start === end) throw new TypeError(`主题「${item.label}」的发送时段不能是同一个小时`);
+          item.sendStartHour = start;
+          item.sendEndHour = end;
         }
       }
       const total = mix.reduce((sum, item) => sum + item.weight, 0);

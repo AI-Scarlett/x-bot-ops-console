@@ -399,6 +399,8 @@ window.__ModuleLoader__.load({
       const [pickingFolder, setPickingFolder] = React.useState(false);
       const [styleGuideDraft, setStyleGuideDraft] = React.useState('');
       const [bannedDraft, setBannedDraft] = React.useState('');
+      // 清空学习成果只是页面上的待保存标记，点底部「保存」才写盘。
+      const [learningsClearPending, setLearningsClearPending] = React.useState(false);
       // Last X login probe: { comment: true, reply: false, ... } when it ran.
       const [loginStatus, setLoginStatus] = React.useState(null);
       const saveLock = React.useRef(false);
@@ -443,6 +445,7 @@ window.__ModuleLoader__.load({
           if (!response.ok || data.ok !== true) throw new Error(data.error || `请求失败，状态码 ${response.status}`);
           const value = data.value || {};
           if (action === 'save-config') { setNotice(value.note || t('saved')); setConfig(value.config); setConfigHash(value.configHash ?? null); latestSaveHash.current = value.configHash ?? null; setDraftDirty(false); }
+          if (action === 'clear-learnings') setLearningsClearPending(false);
           else if (action === 'restore-config-backup') { setNotice(value.note || '配置已从备份恢复'); setConfig(value.config); setConfigHash(value.configHash ?? null); latestSaveHash.current = value.configHash ?? null; setDraftDirty(false); }
           else if (action === 'update-plugin') { /* handled by caller */ }
           else if (value.launchRequested) setNotice(t('launchRequested'));
@@ -2075,6 +2078,28 @@ window.__ModuleLoader__.load({
                       h('option', { value: 'english' }, '英文'),
                       h('option', { value: 'chuci' }, '楚辞')),
                     h('label', {
+                      title: '北京时间。两个都留空就是全天可发；填了之后只在这个时段生成和发送，同一天只发一条',
+                      style: { display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, color: (item.sendStartHour !== '' && item.sendStartHour !== undefined) ? C.accent : C.muted },
+                    },
+                      '发送时段',
+                      h('input', {
+                        type: 'number', min: 0, max: 23,
+                        style: { ...inputStyle, width: 64, margin: 0, padding: '4px 6px', fontSize: 12 },
+                        placeholder: '起',
+                        value: item.sendStartHour ?? '',
+                        onChange: e => patch(item.id, { sendStartHour: e.target.value === '' ? '' : Number(e.target.value) }),
+                      }),
+                      h('span', null, '点 ~'),
+                      h('input', {
+                        type: 'number', min: 1, max: 24,
+                        style: { ...inputStyle, width: 64, margin: 0, padding: '4px 6px', fontSize: 12 },
+                        placeholder: '止',
+                        value: item.sendEndHour ?? '',
+                        onChange: e => patch(item.id, { sendEndHour: e.target.value === '' ? '' : Number(e.target.value) }),
+                      }),
+                      h('span', null, '点'),
+                      h('span', { style: { fontSize: 11, color: C.faint } }, '留空=全天')),
+                    h('label', {
                       title: '这一条主题单独用多少字；留空就沿用上面的全局字数区间',
                       style: { display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, color: C.muted },
                     },
@@ -3234,25 +3259,13 @@ window.__ModuleLoader__.load({
 
           // 4. 学习成果
           h('section', { style: cardStyle },
-            h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 } },
-              h('h2', { style: { margin: 0, fontSize: 15 } }, '📚 学习成果'),
-              h('button', {
-                type: 'button',
-                disabled: busy,
-                style: { ...buttonStyle(false), fontSize: 12, padding: '4px 10px', color: C.error, borderColor: C.error },
-                onClick: () => setConfirmModal({
-                  title: '清空学习成果',
-                  prompt: '确认清空全部学习成果吗？\n\n套路总结、赢家话题、避写话题和已提炼的结构都会被删除，且不可恢复。',
-                  confirmText: '确认清空',
-                  onConfirm: () => void act('clear-learnings'),
-                })
-              }, '🗑️ 清空学习成果')),
+            h('h2', { style: { margin: 0, fontSize: 15 } }, '📚 学习成果'),
 
             h('label', { style: { ...labelStyle, marginTop: 12 } }, '套路总结（会拼进生成提示词，可手动编辑）：'),
             h('textarea', {
               style: { ...inputStyle, minHeight: 90 },
               placeholder: '大模型从样本中总结的选题角度 / 情绪 / 节奏 / 收尾方式…',
-              value: styleGuideDraft !== '' ? styleGuideDraft : (state?.learnings?.styleGuide || ''),
+              value: learningsClearPending ? '' : (styleGuideDraft !== '' ? styleGuideDraft : (state?.learnings?.styleGuide || '')),
               onChange: e => setStyleGuideDraft(e.target.value),
             }),
             h('div', { style: { display: 'flex', justifyContent: 'flex-end', marginTop: 6 } },
@@ -3271,7 +3284,7 @@ window.__ModuleLoader__.load({
 
             h('div', { style: { marginTop: 12 } },
               h('div', { style: { fontSize: 13, fontWeight: '600', marginBottom: 6 } },
-                `✅ 优先话题（${(state?.learnings?.winningTopics || []).length}）`
+                `✅ 优先话题（${learningsClearPending ? 0 : (state?.learnings?.winningTopics || []).length}）`
                 + (() => {
                   const winners = state?.learnings?.winningTopics || [];
                   const banned = new Set((state?.learnings?.bannedTopics || []).map(t => String(t).toLowerCase()));
@@ -3282,7 +3295,7 @@ window.__ModuleLoader__.load({
                 })()),
               h('p', { style: { margin: '0 0 8px', fontSize: 12, color: C.faint, lineHeight: 1.6 } },
                 '优先话题是生成选题的默认来源：每条帖子只讲一个话题，写热榜话题时才会改用热榜标题。生成配比（香艳/批判/搞女人）只决定切入角度，不决定题目。'),
-              (state?.learnings?.winningTopics || []).length
+              !learningsClearPending && (state?.learnings?.winningTopics || []).length
                 ? h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
                     ...(state.learnings.winningTopics).map(topic => h('span', {
                       key: topic,
@@ -3297,7 +3310,7 @@ window.__ModuleLoader__.load({
 
             h('div', { style: { marginTop: 12 } },
               h('div', { style: { fontSize: 13, fontWeight: '600', marginBottom: 6 } },
-                `🚫 避写话题（手动 ${(config?.postSettings?.manualBannedTopics || []).length} · 学习 ${(state?.learnings?.bannedTopics || []).length}）`),
+                `🚫 避写话题（手动 ${(config?.postSettings?.manualBannedTopics || []).length} · 学习 ${learningsClearPending ? 0 : (state?.learnings?.bannedTopics || []).length}）`),
               h('div', { style: { display: 'flex', gap: 8, marginBottom: 8 } },
                 h('input', {
                   style: { ...inputStyle, margin: 0, flex: 1 },
@@ -3314,7 +3327,7 @@ window.__ModuleLoader__.load({
                 '手动添加的不会被「重新学习」覆盖；生成时优先避开，热榜话题命中也会被跳过。'),
               (() => {
                 const manual = config?.postSettings?.manualBannedTopics || [];
-                const learned = state?.learnings?.bannedTopics || [];
+                const learned = learningsClearPending ? [] : (state?.learnings?.bannedTopics || []);
                 const learnedOnly = learned.filter(t => !manual.some(m => m.toLowerCase() === String(t).toLowerCase()));
                 const chip = (topic, isManual) => h('span', {
                   key: (isManual ? 'm-' : 'l-') + topic,
@@ -3350,8 +3363,12 @@ window.__ModuleLoader__.load({
               })()),
 
             h('div', { style: { marginTop: 12 } },
-              h('div', { style: { fontSize: 13, fontWeight: '600', marginBottom: 6 } }, `🧩 已提炼套路（${(state?.learnings?.patterns || []).length}）`),
-              (state?.learnings?.patterns || []).length
+              h('div', { style: { fontSize: 13, fontWeight: '600', marginBottom: 6 } }, `🧩 已提炼套路（${learningsClearPending ? 0 : (state?.learnings?.patterns || []).length}）`),
+              learningsClearPending
+                ? h('div', { style: { padding: '10px 12px', borderRadius: 8, background: C.raised, border: `1px solid ${C.error}`, fontSize: 12, color: C.error, lineHeight: 1.6 } },
+                    '已标成待清空。点底部「保存并写入共享配置」才会真正清掉；现在刷新页面可以取消。')
+                : null,
+              !learningsClearPending && (state?.learnings?.patterns || []).length
                 ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
                     ...(state.learnings.patterns).map(pattern => h('div', {
                       key: pattern.id,
@@ -3372,7 +3389,27 @@ window.__ModuleLoader__.load({
                           onClick: () => void act('remove-learning', undefined, { kind: 'pattern', id: pattern.id })
                         }, '✕')))
                     ))
-                : h('small', { style: { color: C.faint } }, '暂无。三种学习方式任一完成都会产生套路。'))
+                : h('small', { style: { color: C.faint } }, '暂无。三种学习方式任一完成都会产生套路。'),
+
+              h('div', { style: { marginTop: 16, paddingTop: 12, borderTop: `1px solid ${C.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' } },
+                h('span', { style: { fontSize: 12, color: C.faint, lineHeight: 1.5 } },
+                  '清空全部会一起去掉套路总结、已提炼套路、优先话题和避写话题。只想改总结，用上面的「保存套路总结」。'),
+                h('button', {
+                  type: 'button',
+                  disabled: busy,
+                  style: { ...buttonStyle(false), fontSize: 12, padding: '4px 10px', color: C.error, borderColor: C.error },
+                  onClick: () => setConfirmModal({
+                    title: '清空全部学习成果',
+                    prompt: '这不是删一条，也不是现在就清。\n\n确认后只在页面上标成待清空：套路总结、全部已提炼套路、优先话题、避写话题。点底部「保存并写入共享配置」才会真正清掉；不保存、或刷新页面，都还在。\n\n只想去掉某一条，用那一条旁边的删除。',
+                    confirmText: '标成待清空',
+                    onConfirm: () => {
+                      setLearningsClearPending(true);
+                      setDraftDirty(true);
+                      setStyleGuideDraft('');
+                      setNotice('已标成待清空。还没写盘，点底部「保存并写入共享配置」才会真正清掉；现在刷新页面可以取消。');
+                    },
+                  })
+                }, learningsClearPending ? '⏳ 待保存后清空' : '🗑️ 清空全部学习成果')))
           )
         ) : null,
 
@@ -3588,6 +3625,10 @@ window.__ModuleLoader__.load({
               if (outcome === undefined) {
                 const failed = state?.saveLog?.last;
                 setNotice(`保存没有成功：${failed?.reason || '服务器拒绝了这次保存'}${failed?.detail ? '（' + failed.detail + '）' : ''}`);
+              } else if (learningsClearPending) {
+                // 清空学习成果跟配置走同一条保存：配置没写成功就不清。
+                const cleared = await act('clear-learnings');
+                if (cleared) setNotice('配置已保存，学习成果已清空。');
               }
             },
             style: { ...buttonStyle(true), padding: '8px 20px', fontSize: 14 }
