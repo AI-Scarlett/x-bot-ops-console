@@ -304,7 +304,12 @@ export function readManualDrafts(draftsPath = MANUAL_DRAFTS_PATH, nowMs = Date.n
       else if (isRecord(data) && Array.isArray(data.items)) items = data.items;
     }
   } catch { items = []; }
-  return pruneManualDrafts(items, nowMs);
+  // The expiry time travels with the draft so the panel can show when a
+  // candidate will be dropped instead of promising "24 hours" invisibly.
+  return pruneManualDrafts(items, nowMs).map(item => ({
+    ...item,
+    expiresAt: new Date(parseIsoMs(item.createdAt) + MANUAL_DRAFT_TTL_MS).toISOString(),
+  }));
 }
 
 export function writeManualDrafts(items, draftsPath = MANUAL_DRAFTS_PATH, nowMs = Date.now()) {

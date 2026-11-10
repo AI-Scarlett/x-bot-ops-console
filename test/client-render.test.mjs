@@ -594,3 +594,28 @@ test('manual draft delete posts the draft id and text instead of filtering by in
     assert.equal(posted.text, '要点掉的稿');
   } finally { app.close(); }
 });
+
+test('the candidate board shows the 24 hour retention and asks before clearing it', async () => {
+  const app = mount({ tab: 'manualGen' });
+  try {
+    app.hooks[22] = [
+      { id: 'a', text: '第一条候选稿', createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 3600 * 1000).toISOString() },
+      { id: 'b', text: '第二条候选稿', createdAt: new Date(Date.now() - 3600 * 1000).toISOString(), expiresAt: new Date(Date.now() + 23 * 3600 * 1000).toISOString() },
+    ];
+    let tree = app.render();
+    const text = flatText(tree);
+    // The retention is visible instead of being an invisible promise.
+    assert.match(text, /草稿库 2 条，存在磁盘上/);
+    assert.match(text, /还剩 \d+ 小时/);
+    assert.match(text, /重新载入/);
+    // The clear button states what it wipes and asks first.
+    const clear = elements(tree).find(node => node.type === 'button' && flatText(node).includes('清空草稿库'));
+    assert.ok(clear, 'the clear button is rendered');
+    await clear.props.onClick({ preventDefault() {}, target: {} });
+    tree = app.render();
+    const dialog = elements(tree).find(node => node.props && node.props.role === 'alertdialog');
+    assert.ok(dialog, 'clearing the library asks for confirmation first');
+    assert.match(flatText(dialog), /无法恢复/);
+    assert.equal(app.requests.length, 0, 'nothing is deleted before the confirmation');
+  } finally { app.close(); }
+});

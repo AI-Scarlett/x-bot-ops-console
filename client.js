@@ -93,6 +93,32 @@ window.__ModuleLoader__.load({
       } catch { /* private mode or quota: the panel still works, just forgets */ }
     }
 
+    // The 24 hour promise has to be visible: when the library drops a draft,
+    // and how long the oldest one still has.
+    function draftExpiryText(item) {
+      const created = Date.parse(String(item?.createdAt || ''));
+      if (!Number.isFinite(created)) return '保留 24 小时';
+      const expires = Date.parse(String(item?.expiresAt || '')) || (created + 24 * 3600 * 1000);
+      const left = Math.max(0, Math.round((expires - Date.now()) / 60000));
+      if (left <= 0) return '已过期';
+      if (left < 60) return `还剩 ${left} 分钟`;
+      if (left < 60 * 24) return `还剩 ${Math.round(left / 60)} 小时`;
+      return `还剩 ${Math.round(left / 1440)} 天`;
+    }
+
+    function draftLibraryHint(items) {
+      const list = Array.isArray(items) ? items : [];
+      if (!list.length) return '草稿库是空的：生成后会存在磁盘上，24 小时内随时可以回来取。';
+      const oldest = list.reduce((min, item) => {
+        const created = Date.parse(String(item?.createdAt || '')) || Infinity;
+        return created < min ? created : min;
+      }, Infinity);
+      if (!Number.isFinite(oldest)) return `草稿库 ${list.length} 条，存在磁盘上，24 小时内可随时回来取。`;
+      const left = Math.max(0, Math.round((oldest + 24 * 3600 * 1000 - Date.now()) / 60000));
+      const when = left < 60 ? `还剩 ${left} 分钟` : left < 60 * 24 ? `还剩 ${Math.round(left / 60)} 小时` : `还剩 ${Math.round(left / 1440)} 天`;
+      return `草稿库 ${list.length} 条，存在磁盘上；最早的一条${when}过期。`;
+    }
+
     const tierInfo = {
       apex: {
         title: '👑 Apex 档位（最高优先级 · 专属对象）',
@@ -2463,8 +2489,23 @@ window.__ModuleLoader__.load({
           // 候选草稿预览与挑选入队看板
           h('section', { style: cardStyle },
             h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 10 } },
-              h('h2', { style: { margin: 0, fontSize: 15 } }, `📝 候选草稿预览 (${previewDrafts.length} 条，入队后仍保留 24 小时)`),
+              h('div', null,
+                h('h2', { style: { margin: 0, fontSize: 15 } }, `📝 候选草稿预览 (${previewDrafts.length} 条，入队后仍保留 24 小时)`),
+                h('div', { style: { fontSize: 11, color: C.faint, marginTop: 2 } },
+                  draftLibraryHint(previewDrafts))),
               previewDrafts.length > 0 ? h('div', { style: { display: 'flex', gap: 8 } },
+                h('button', {
+                  type: 'button',
+                  disabled: busy,
+                  title: '重新从磁盘读取草稿库',
+                  style: { ...buttonStyle(false), fontSize: 12, padding: '4px 10px' },
+                  onClick: async () => {
+                    try {
+                      await refresh();
+                      setNotice('已重新读取草稿库。');
+                    } catch (err) { setError(err.message || String(err)); }
+                  },
+                }, '↻ 重新载入'),
                 h('button', {
                   type: 'button',
                   disabled: busy,
@@ -2493,19 +2534,24 @@ window.__ModuleLoader__.load({
                   type: 'button',
                   disabled: busy,
                   style: { ...buttonStyle(false), fontSize: 12, padding: '4px 10px', color: C.error, borderColor: C.error },
-                  onClick: async () => {
-                    setBusy(true);
-                    try {
-                      const res = await act('clear-manual-drafts');
-                      setPreviewDrafts(Array.isArray(res?.manualDrafts) ? res.manualDrafts : []);
-                      setNotice('已清空本页 24 小时草稿库。');
-                    } catch (err) {
-                      setError(err.message || String(err));
-                    } finally {
-                      setBusy(false);
-                    }
-                  },
-                }, '✕ 清空本页草稿')
+                  onClick: () => setConfirmModal({
+                    title: '清空 24 小时草稿库',
+                    prompt: `草稿库里现在有 ${previewDrafts.length} 条候选稿。\n\n清空后全部消失，无法恢复（已经进入待发队列的不受影响）。\n\n只想去掉某一条，用那一条旁边的 ✕。`,
+                    confirmText: '确认清空草稿库',
+                    onConfirm: async () => {
+                      setBusy(true);
+                      try {
+                        const res = await act('clear-manual-drafts');
+                        setPreviewDrafts(Array.isArray(res?.manualDrafts) ? res.manualDrafts : []);
+                        setNotice('已清空 24 小时草稿库。');
+                      } catch (err) {
+                        setError(err.message || String(err));
+                      } finally {
+                        setBusy(false);
+                      }
+                    },
+                  }),
+                }, '🗑 清空草稿库')
               ) : null
             ),
             previewDrafts.length === 0
@@ -2523,7 +2569,8 @@ window.__ModuleLoader__.load({
                     h('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
                       h('span', { style: { fontWeight: '600', fontSize: 13, color: C.accent } }, `#${idx + 1}`),
                       item.theme ? h('span', { style: { fontSize: 11, background: C.raised, padding: '2px 6px', borderRadius: 4, color: C.muted } }, item.theme) : null,
-                      h('span', { style: { fontSize: 11, color: C.faint } }, `约 ${(item.text || '').length} 字`)
+                      h('span', { style: { fontSize: 11, color: C.faint } }, `约 ${(item.text || '').length} 字`),
+                      h('span', { style: { fontSize: 11, color: C.faint } }, draftExpiryText(item))
                     ),
                     h('div', { style: { display: 'flex', gap: 8 } },
                       h('button', {
