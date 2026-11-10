@@ -1914,22 +1914,7 @@ window.__ModuleLoader__.load({
                   h('div', { style: { fontSize: 12, color: C.text, marginBottom: 6 } }, `已保存并生效：${savedLabel}`),
                   draftDirty && draftLabel !== savedLabel
                     ? h('div', { style: { fontSize: 12, color: C.accent, marginBottom: 6 } }, `编辑中（未保存，Worker 还在用上面那套）：${draftLabel}`)
-                    : null,
-                  h('button', {
-                    type: 'button',
-                    style: { ...buttonStyle(false), padding: '7px 14px', fontSize: 12 },
-                    onClick: () => {
-                      const preset = [
-                        { id: 'hook_xy', label: '香艳', weight: 60, prompt: '古典艳诗/宫体诗气质，写虚构成年女子，称卿、佳人、娘子。闺房双关、调情、暧昧动作，用一句双关收束。不写琴、月、帘、花之类氛围小品。' },
-                        { id: 'hook_pp', label: '批判', weight: 20, prompt: '骂一件具体的事（热点、制度动作、平台坑、看客、伪君子），要有具体人物/动作/数字。' },
-                        { id: 'hook_gn', label: '搞女人', weight: 20, prompt: '成年人自愿的暧昧、男女博弈、相亲彩礼、渣男渣女、嘴上装身体诚实。' },
-                      ];
-                      updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), topicMix: preset } }));
-                      setNotice('已套用出厂配比：香艳 60% / 批判 20% / 搞女人 20%。这会覆盖你现在的主题配比，记得保存。');
-                    },
-                  }, '⚡ 套用出厂配比（香艳60/批判20/搞女人20）'),
-                  h('small', { style: { display: 'block', marginTop: 6, fontSize: 11, color: C.faint } },
-                    '这只是出厂预设，不是当前生效值。真正在用的是下面「主题配比」那几行；改完点保存才会写入。'));
+                    : null);
               })()),
           ),
 

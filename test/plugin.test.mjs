@@ -1528,7 +1528,7 @@ test('writer rule settings are editable and validated', async () => {
   const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
   assert.match(source, /写作规则（三行结构/);
   assert.match(source, /末行引导字/);
-  assert.match(source, /套用出厂配比/);
+  assert.doesNotMatch(source, /套用出厂配比/);
   assert.match(source, /已保存并生效/);
 });
 
