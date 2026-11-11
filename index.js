@@ -1227,6 +1227,20 @@ export async function coreDuplicateReason(text, recentTexts, { model = 'gpt-6-lu
   return `核心内容与近期已发稿重复：${String(verdict.why || '同一件事、同一桥段').trim()}`;
 }
 
+export function copiedSentence(body, recentTexts, minChars) {
+  const need = Number(minChars) || 0;
+  if (need <= 0) return '';
+  const sentences = String(body || '').split(/[。！？!?；;\n]/).map(part => part.trim()).filter(part => part.length >= need);
+  if (!sentences.length || !Array.isArray(recentTexts)) return '';
+  for (const previous of recentTexts) {
+    const prev = String(previous || '').replace(/\s+/g, '');
+    if (!prev) continue;
+    const hit = sentences.find(sentence => prev.includes(sentence));
+    if (hit) return hit;
+  }
+  return '';
+}
+
 export function postSkeleton(text) {
   const lines = String(text || '').split('\n').map(line => line.replace(/\s+/g, '')).filter(Boolean);
   if (!lines.length) return '';
@@ -1285,19 +1299,11 @@ export function checkPostDraft(text, format = {}, recentTexts = [], skeletonText
   if (/https?:\/\/|www\.|@[A-Za-z0-9_]{2,}/.test(body)) reasons.push('含链接或 @');
 
   const overlap = Number(fmt.maxOverlapChars) || 0;
-  if (overlap > 0 && Array.isArray(recentTexts)) {
-    for (const previous of recentTexts) {
-      const prev = String(previous || '').replace(/\s+/g, '');
-      if (!prev) continue;
-      for (let i = 0; i + overlap <= body.length; i += 1) {
-        if (prev.includes(body.slice(i, i + overlap))) {
-          reasons.push(`与已发内容连续 ${overlap} 字重复`);
-          break;
-        }
-      }
-      if (reasons.some(reason => reason.startsWith('与已发内容'))) break;
-    }
-  }
+  // Whole sentences only. A sliding window of a few characters matches the
+  // stock phrasing this account repeats on purpose, so every new draft was
+  // rejected and the queue stopped refilling.
+  const copied = copiedSentence(body, recentTexts, overlap);
+  if (copied) reasons.push(`整句照搬已发内容（「${copied.slice(0, 12)}…」）`);
   const cooldown = Number(skeletonCooldownHours) || 0;
   if (cooldown > 0 && Array.isArray(skeletonTexts) && skeletonTexts.length) {
     const skeleton = postSkeleton(text);
@@ -1607,6 +1613,38 @@ export function preferredTopicCacheFresh(cache, source, maxAgeHours = 24) {
 // The persona answers "who is speaking". It is injected into every generated
 // text (posts, comments, replies) and the result is checked afterwards, because
 // a model can still slip an identity detail past the instruction.
+const GENDER_LABEL = { male: '男', female: '女' };
+
+// The people the operator marked as story material, in a stable order.
+export function storyCast(config = {}) {
+  const profiles = (config && config.handleProfiles) || {};
+  return Object.entries(profiles)
+    .filter(([, profile]) => profile && profile.inStories === true && String(profile.persona || '').trim())
+    .map(([handle, profile]) => ({
+      handle,
+      name: String(profile.nickname || '').trim() || handle,
+      gender: GENDER_LABEL[profile.gender] || '',
+      persona: String(profile.persona || '').trim(),
+    }))
+    .sort((a, b) => a.handle.localeCompare(b.handle));
+}
+
+// Prompt block naming the people this draft must actually write about.
+// `picks` restricts the cast; an empty list means every marked person is eligible.
+export function castBlock(config = {}, picks = []) {
+  const all = storyCast(config);
+  const wanted = new Set((Array.isArray(picks) ? picks : []).map(handle => String(handle || '').trim().replace(/^@/, '').toLowerCase()).filter(Boolean));
+  const cast = wanted.size ? all.filter(person => wanted.has(person.handle)) : all;
+  if (!cast.length) return '';
+  const lines = cast.map(person => `- ${person.name}${person.gender ? `（${person.gender}）` : ''}：${person.persona}`);
+  return '\n\n【本条故事的出场人物（从下面挑选，写进正文）】\n'
+    + lines.join('\n')
+    + '\n要求：本条必须让上面点名的人真正出场并参与情节，用列出的称呼，性格与关系按人设写；'
+    + '可以只用其中一两位，不要把名单里的人全部堆进同一条；'
+    + '人设里没写的经历不要编造成既定事实，可以写新的情节但不得与人设矛盾；'
+    + '正文里用称呼，不要出现 @ 和用户名。';
+}
+
 export function personaBlock(config = {}) {
   const persona = (config && config.persona) || {};
   if (persona.enabled === false) return '';
@@ -2505,8 +2543,14 @@ function validateConfig(input) {
       const note = String(profile.note || '').trim().slice(0, 200);
       if (profile.bilingual !== undefined && typeof profile.bilingual !== 'boolean') throw new TypeError(`重点名单备注的「文言+白话」开关无效：${handle}`);
       const bilingual = profile.bilingual === true;
-      if (!nickname && gender === 'unknown' && !note && !bilingual) continue;
-      cleaned[handle] = { nickname, gender, note, bilingual };
+      if (profile.persona !== undefined && typeof profile.persona !== 'string') throw new TypeError(`重点名单的人物人设无效：${handle}`);
+      const persona = String(profile.persona || '').trim().slice(0, 1000);
+      if (profile.inStories !== undefined && typeof profile.inStories !== 'boolean') throw new TypeError(`重点名单的「可进故事」开关无效：${handle}`);
+      // A persona is there to be used in stories, so writing one opts the
+      // person in unless the operator explicitly turned it off.
+      const inStories = profile.inStories !== undefined ? profile.inStories === true : Boolean(persona);
+      if (!nickname && gender === 'unknown' && !note && !bilingual && !persona && !inStories) continue;
+      cleaned[handle] = { nickname, gender, note, bilingual, persona, inStories };
     }
     copy.handleProfiles = cleaned;
   } else {
@@ -3320,6 +3364,10 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       const reference = typeof request.reference === 'string' ? request.reference.trim().slice(0, 4000) : '';
       const referenceAnalysis = typeof request.referenceAnalysis === 'string'
         ? request.referenceAnalysis.trim().slice(0, 2000) : '';
+      // 手动面板勾选的出场人物；不传表示这一批不限定，从全部可进故事的人里挑。
+      const castPicks = Array.isArray(request.cast)
+        ? [...new Set(request.cast.map(handle => String(handle || '').trim().replace(/^@/, '').toLowerCase()).filter(Boolean))].slice(0, 12)
+        : null;
       const onePerLine = postCfg.oneSentencePerLine !== false;
       const baseFmt = { ...DEFAULT_CONFIG.postSettings.format, ...(postCfg.format || {}) };
       const fmtCfg = { ...baseFmt };
@@ -3506,9 +3554,10 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
           effectiveBasePrompt = '你在推特(X)上发一条原创推文。' + personaText;
         }
       }
+      const peopleBlock = castBlock(sharedCfg, castPicks === null ? [] : castPicks);
       const prompt = reference
-        ? effectiveBasePrompt + referenceBlock + learningBlock + formatRuleFor(theme)
-        : basePrompt + themeBlock + learningBlock + subjectBlock + formatRuleFor(theme);
+        ? effectiveBasePrompt + referenceBlock + peopleBlock + learningBlock + formatRuleFor(theme)
+        : basePrompt + themeBlock + learningBlock + subjectBlock + peopleBlock + formatRuleFor(theme);
         const styleProblem = text => draftStyleProblem(text, styleKey);
         try {
           let rawDraft = await generateTweetViaLmh(prompt, { model: genModel, port });

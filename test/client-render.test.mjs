@@ -424,7 +424,7 @@ test('the priority list lets you mark a nickname and a gender', async () => {
     // Typing a nickname stores it under the handle.
     nickInputs[0].props.onChange({ target: { value: '阿呆' } });
     tree = app.render();
-    assert.deepEqual(app.config().handleProfiles['4ggug'], { nickname: '阿呆', gender: 'unknown', note: '', bilingual: false });
+    assert.deepEqual(app.config().handleProfiles['4ggug'], { nickname: '阿呆', gender: 'unknown', note: '', bilingual: false, persona: '', inStories: false });
 
     // The same row carries the 文言+白话 switch; turning it on keeps the other fields.
     const bilingualBox = elements(tree).filter(node => node.type === 'input' && node.props?.type === 'checkbox')
@@ -433,7 +433,7 @@ test('the priority list lets you mark a nickname and a gender', async () => {
     assert.equal(bilingualBox.props.checked, false);
     bilingualBox.props.onChange({ target: { checked: true } });
     tree = app.render();
-    assert.deepEqual(app.config().handleProfiles['4ggug'], { nickname: '阿呆', gender: 'unknown', note: '', bilingual: true });
+    assert.deepEqual(app.config().handleProfiles['4ggug'], { nickname: '阿呆', gender: 'unknown', note: '', bilingual: true, persona: '', inStories: false });
 
     // Picking a gender stores it too.
     const select = elements(tree).find(node => node.type === 'select' && node.props?.value === 'unknown');
@@ -579,8 +579,8 @@ test('a theme row can pin its own character range, and clearing it falls back', 
 test('manual draft delete posts the draft id and text instead of filtering by index', async () => {
   const app = mount({ tab: 'manualGen' });
   try {
-    // previewDrafts is the 23rd useState in Panel (0-based index 22).
-    app.hooks[22] = [
+    // previewDrafts follows draftCast, which was added after draftReference.
+    app.hooks[23] = [
       { id: 'draft_keep', text: '留下来的稿' },
       { id: 'draft_drop', text: '要点掉的稿' },
     ];
@@ -598,7 +598,7 @@ test('manual draft delete posts the draft id and text instead of filtering by in
 test('the candidate board shows the 24 hour retention and asks before clearing it', async () => {
   const app = mount({ tab: 'manualGen' });
   try {
-    app.hooks[22] = [
+    app.hooks[23] = [
       { id: 'a', text: '第一条候选稿', createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 3600 * 1000).toISOString() },
       { id: 'b', text: '第二条候选稿', createdAt: new Date(Date.now() - 3600 * 1000).toISOString(), expiresAt: new Date(Date.now() + 23 * 3600 * 1000).toISOString() },
     ];

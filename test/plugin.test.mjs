@@ -1512,10 +1512,16 @@ test('writer rules enforce three lines, closing question and banned words', asyn
   const retired = '君不见余昨夜赴宴，卿举杯便解罗带，满座皆惊。\n余只顾看她嘴角那点酒，实在难当得很。\n尔若同席，先劝酒还是先劝归？';
   assert.ok(checkPostDraft(retired, fmt, []).reasons.some(r => r.includes('作废句式')));
 
-  // Long verbatim overlap with an already published post is rejected.
+  // A whole sentence copied from an already published post is rejected.
   // maxOverlapChars lives in dedupe and is merged into the format at generation.
   const dup = checkPostDraft(good, { ...fmt, maxOverlapChars: defaults.postSettings.dedupe.maxOverlapChars }, [good]);
-  assert.ok(dup.reasons.some(r => r.includes('重复')));
+  assert.ok(dup.reasons.some(r => r.includes('整句照搬')));
+
+  // A short shared phrase is not a copy: the account repeats 余/卿 on purpose,
+  // and flagging it stopped the queue from ever refilling.
+  const fresh = '余今晨过市，卿立于门后只露半面。\n市声喧处，余却听得她腕上环佩轻响。\n尔若同行，先买酒还是先寻她？';
+  const phrase = checkPostDraft(fresh, { ...fmt, maxOverlapChars: 5 }, [good]);
+  assert.equal(phrase.ok, true, phrase.reasons.join('；'));
 });
 
 test('writer rule settings are editable and validated', async () => {
@@ -2700,7 +2706,7 @@ test('a handle can carry a nickname and a gender', async () => {
   };
   const validated = validateConfig(config);
   // The key is normalised and the values are kept.
-  assert.deepEqual(validated.handleProfiles['4ggug'], { nickname: '阿呆', gender: 'male', note: '别叫姐', bilingual: false });
+  assert.deepEqual(validated.handleProfiles['4ggug'], { nickname: '阿呆', gender: 'male', note: '别叫姐', bilingual: false, persona: '', inStories: false });
   assert.equal(validated.handleProfiles['someone'].gender, 'female');
   // An unknown gender falls back to "unknown".
   const odd = structuredClone(DEFAULT_CONFIG);
@@ -2717,11 +2723,43 @@ test('a handle can carry a nickname and a gender', async () => {
   const notObject = structuredClone(DEFAULT_CONFIG);
   notObject.handleProfiles = { x: 'nope' };
   assert.throws(() => validateConfig(notObject), /重点名单备注无效/);
+
+  // A persona opts the person into stories; the text is kept and bounded.
+  const withPersona = structuredClone(DEFAULT_CONFIG);
+  withPersona.handleProfiles = { ling: { nickname: '玲', gender: 'female', persona: '叙述者的女友，已婚。' } };
+  const kept = validateConfig(withPersona).handleProfiles.ling;
+  assert.equal(kept.persona, '叙述者的女友，已婚。');
+  assert.equal(kept.inStories, true);
+  // Explicitly off stays off even with a persona.
+  withPersona.handleProfiles.ling.inStories = false;
+  assert.equal(validateConfig(withPersona).handleProfiles.ling.inStories, false);
+});
+
+test('the story cast block names only the people marked for stories', async () => {
+  const { castBlock, storyCast } = await import('../index.js');
+  const config = {
+    handleProfiles: {
+      ling: { nickname: '玲', gender: 'female', persona: '叙述者的女友。', inStories: true },
+      wang: { nickname: '王小妹', gender: 'female', persona: '玲的闺蜜。', inStories: true },
+      grok: { nickname: '旁观', gender: 'unknown', persona: '不参与故事。', inStories: false },
+      bare: { nickname: '无名', gender: 'male', persona: '', inStories: true },
+    },
+  };
+  assert.deepEqual(storyCast(config).map(person => person.name), ['玲', '王小妹']);
+  const block = castBlock(config, ['ling']);
+  assert.match(block, /出场人物/);
+  assert.match(block, /玲（女）：叙述者的女友。/);
+  assert.doesNotMatch(block, /王小妹/);
+  assert.doesNotMatch(block, /ling/);
+  // No pick means every eligible person is offered.
+  assert.match(castBlock(config, []), /王小妹/);
 });
 
 test('the priority list shows the nickname and gender editor', async () => {
   const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
   assert.match(source, /昵称与性别标注/);
+  assert.match(source, /人物人设/);
+  assert.match(source, /可进故事/);
   assert.match(source, /handleProfiles/);
   assert.match(source, /gender: 'unknown'/);
   assert.match(source, /option.*value: 'male'.*男/s);

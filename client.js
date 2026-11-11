@@ -410,6 +410,7 @@ window.__ModuleLoader__.load({
       const [draftGenStyle, setDraftGenStyle] = React.useState(typeof genPrefs.style === 'string' ? genPrefs.style : '');
       const [draftGenMaxChars, setDraftGenMaxChars] = React.useState(genPrefs.maxChars === undefined || genPrefs.maxChars === null ? '' : genPrefs.maxChars);
       const [draftReference, setDraftReference] = React.useState(typeof genPrefs.reference === 'string' ? genPrefs.reference : '');
+      const [draftCast, setDraftCast] = React.useState(Array.isArray(genPrefs.cast) ? genPrefs.cast : []);
       const [draftAnalysis, setDraftAnalysis] = React.useState('');
       const [analyzingReference, setAnalyzingReference] = React.useState(false);
       // 手动生成出的候选草稿（不直接进队列，先在界面展示，供单条勾选入队）
@@ -941,11 +942,11 @@ window.__ModuleLoader__.load({
                     h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
                       ...handlesList.map(handle => {
                         const key = String(handle).toLowerCase();
-                        const profile = config?.handleProfiles?.[key] || { nickname: '', gender: 'unknown', note: '', bilingual: false };
+                        const profile = config?.handleProfiles?.[key] || { nickname: '', gender: 'unknown', note: '', bilingual: false, persona: '', inStories: false };
                         const setProfile = patch => updateConfig(current => {
                           const next = { ...(current.handleProfiles || {}) };
-                          const merged = { ...(next[key] || { nickname: '', gender: 'unknown', note: '', bilingual: false }), ...patch };
-                          if (!merged.nickname && merged.gender === 'unknown' && !merged.note && !merged.bilingual) delete next[key];
+                          const merged = { ...(next[key] || { nickname: '', gender: 'unknown', note: '', bilingual: false, persona: '', inStories: false }), ...patch };
+                          if (!merged.nickname && merged.gender === 'unknown' && !merged.note && !merged.bilingual && !String(merged.persona || '').trim() && !merged.inStories) delete next[key];
                           else next[key] = merged;
                           return { ...current, handleProfiles: next };
                         });
@@ -976,7 +977,20 @@ window.__ModuleLoader__.load({
                             style: { display: 'flex', gap: 5, alignItems: 'center', fontSize: 12, color: profile.bilingual ? C.accent : C.muted, cursor: 'pointer', whiteSpace: 'nowrap' },
                           },
                             h('input', { type: 'checkbox', checked: profile.bilingual === true, onChange: e => setProfile({ bilingual: e.target.checked }) }),
-                            '文言+白话'));
+                            '文言+白话'),
+                          h('label', {
+                            title: '勾上以后：自动发帖和手动生成故事时可以把这个人写进情节',
+                            style: { display: 'flex', gap: 5, alignItems: 'center', fontSize: 12, color: profile.inStories ? C.accent : C.muted, cursor: 'pointer', whiteSpace: 'nowrap' },
+                          },
+                            h('input', { type: 'checkbox', checked: profile.inStories === true, onChange: e => setProfile({ inStories: e.target.checked }) }),
+                            '可进故事'),
+                          h('textarea', {
+                            style: { ...inputStyle, flex: '1 1 100%', margin: 0, minHeight: 46, padding: '4px 8px', fontSize: 12 },
+                            placeholder: '人物人设：称呼、性格、与叙述者的关系、能写进故事的经历。留空则不参与故事。',
+                            maxLength: 1000,
+                            value: profile.persona || '',
+                            onChange: e => setProfile({ persona: e.target.value, inStories: e.target.value.trim() ? (profile.inStories !== false) : profile.inStories }),
+                          }));
                       }))) : null),
 
                 h('div', { style: { display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 10 } },
@@ -2392,6 +2406,31 @@ window.__ModuleLoader__.load({
                 })
               ),
               h('div', { style: { marginTop: 12, padding: '12px 14px', borderRadius: 8, background: C.raised, border: `1px solid ${C.border}` } },
+                h('div', { style: { fontSize: 13, fontWeight: '600', marginBottom: 4 } }, '👥 本批故事的出场人物（可选）：'),
+                h('div', { style: { fontSize: 12, color: C.faint, marginBottom: 8, lineHeight: 1.6 } },
+                  '勾选后，这一批生成的故事会让这些人真正出场，按「👥 重点名单」里写的人设来写。一个都不勾，则从所有标记了「可进故事」的人里自动挑。'),
+                (() => {
+                  const cast = Object.entries(config?.handleProfiles || {})
+                    .filter(([, profile]) => profile && profile.inStories === true && String(profile.persona || '').trim())
+                    .map(([handle, profile]) => ({ handle, name: profile.nickname || handle }));
+                  if (!cast.length) return h('div', { style: { fontSize: 12, color: C.muted } }, '还没有可出场的人。到「👥 重点名单」里给某人写人设并勾上「可进故事」。');
+                  return h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 8 } },
+                    ...cast.map(person => h('label', {
+                      key: person.handle,
+                      style: { display: 'flex', gap: 5, alignItems: 'center', fontSize: 12, cursor: 'pointer', padding: '3px 8px', borderRadius: 6, border: `1px solid ${draftCast.includes(person.handle) ? C.accent : C.border}`, color: draftCast.includes(person.handle) ? C.accent : C.text },
+                    },
+                      h('input', {
+                        type: 'checkbox',
+                        checked: draftCast.includes(person.handle),
+                        onChange: e => {
+                          const next = e.target.checked ? [...draftCast, person.handle] : draftCast.filter(item => item !== person.handle);
+                          setDraftCast(next);
+                          saveGenPrefs({ cast: next });
+                        },
+                      }),
+                      person.name)));
+                })()),
+              h('div', { style: { marginTop: 12, padding: '12px 14px', borderRadius: 8, background: C.raised, border: `1px solid ${C.border}` } },
                 h('div', { style: { fontSize: 13, fontWeight: '600', marginBottom: 4 } }, '📋 粘贴一条参考帖子，照它的写法写（可选）：'),
                 h('div', { style: { fontSize: 12, color: C.faint, marginBottom: 8, lineHeight: 1.6 } },
                   '把想模仿的推文整段粘在下方。先点「拆解这条帖子」查看提取出的体裁和句式；生成时会照着它的逻辑与钩子写全新内容，不会照抄原句。'),
@@ -2445,6 +2484,7 @@ window.__ModuleLoader__.load({
                   + (draftGenStyle ? `｜文风：${{ classical: '文言文', vernacular: '白话文', english: '英文', chuci: '楚辞' }[draftGenStyle]}` : '')
                   + (draftGenModel ? `｜模型：${draftGenModel}` : '')
                   + (draftReference.trim() ? '｜模仿参考帖' : '')
+                  + (draftCast.length ? `｜出场 ${draftCast.length} 人` : '')
                   + '。慢模型（如 grok）建议先生成 1~3 条。'),
                 h('button', {
                   type: 'button',
@@ -2464,6 +2504,7 @@ window.__ModuleLoader__.load({
                         maxChars: draftGenMaxChars === '' ? 0 : Number(draftGenMaxChars),
                         reference: draftReference.trim(),
                         referenceAnalysis: draftAnalysis,
+                        cast: draftCast,
                         commitToQueue: false,
                       });
                       if (res && Array.isArray(res.generated) && res.generated.length) {
