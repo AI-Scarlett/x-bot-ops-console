@@ -95,6 +95,14 @@ window.__ModuleLoader__.load({
 
     // The 24 hour promise has to be visible: when the library drops a draft,
     // and how long the oldest one still has.
+    function draftCreatedText(item) {
+      const created = Date.parse(String(item?.createdAt || ''));
+      if (!Number.isFinite(created)) return '';
+      const when = new Date(created);
+      const pad = value => String(value).padStart(2, '0');
+      return `${when.getMonth() + 1}-${pad(when.getDate())} ${pad(when.getHours())}:${pad(when.getMinutes())}`;
+    }
+
     function draftExpiryText(item) {
       const created = Date.parse(String(item?.createdAt || ''));
       if (!Number.isFinite(created)) return '保留 24 小时';
@@ -2627,26 +2635,32 @@ window.__ModuleLoader__.load({
                       h('span', { style: { fontWeight: '600', fontSize: 13, color: C.accent } }, `#${idx + 1}`),
                       item.theme ? h('span', { style: { fontSize: 11, background: C.raised, padding: '2px 6px', borderRadius: 4, color: C.muted } }, item.theme) : null,
                       h('span', { style: { fontSize: 11, color: C.faint } }, `约 ${(item.text || '').length} 字`),
+                      draftCreatedText(item) ? h('span', { style: { fontSize: 11, color: C.muted } }, `生成于 ${draftCreatedText(item)}`) : null,
+                      item.queuedAt
+                        ? h('span', { style: { fontSize: 11, color: C.success, fontWeight: '600' } }, '✓ 已加入发布队列')
+                        : h('span', { style: { fontSize: 11, color: '#f59e0b' } }, '未加入发布队列'),
                       h('span', { style: { fontSize: 11, color: C.faint } }, draftExpiryText(item))
                     ),
                     h('div', { style: { display: 'flex', gap: 8 } },
-                      h('button', {
-                        type: 'button',
-                        disabled: busy,
-                        style: { ...buttonStyle(true), padding: '4px 12px', fontSize: 12 },
-                        onClick: async () => {
-                          setBusy(true);
-                          try {
-                            const res = await act('enqueue-post', undefined, { text: item.text, urgent: false, source: item.source || 'ai_draft' });
-                            if (!res) throw new Error('入队没有成功');
-                            setNotice('该条已加入待发队列，原稿还在本页保留 24 小时。');
-                          } catch (err) {
-                            setError(`${err.message || String(err)}。这条还在预览里，可以直接复制。`);
-                          } finally {
-                            setBusy(false);
+                      item.queuedAt
+                        ? h('span', { style: { fontSize: 12, color: C.success, padding: '4px 8px' } }, '已在发布队列')
+                        : h('button', {
+                          type: 'button',
+                          disabled: busy,
+                          style: { ...buttonStyle(true), padding: '4px 12px', fontSize: 12 },
+                          onClick: async () => {
+                            setBusy(true);
+                            try {
+                              const res = await act('enqueue-post', undefined, { text: item.text, urgent: false, source: item.source || 'ai_draft' });
+                              if (!res) throw new Error('入队没有成功');
+                              setNotice('该条已加入待发队列，原稿还在本页保留 24 小时。');
+                            } catch (err) {
+                              setError(`${err.message || String(err)}。这条还在预览里，可以直接复制。`);
+                            } finally {
+                              setBusy(false);
+                            }
                           }
-                        }
-                      }, '＋ 加入待发队列'),
+                        }, '＋ 加入待发队列'),
                       h('button', {
                         type: 'button',
                         disabled: busy,

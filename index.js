@@ -348,13 +348,16 @@ function rememberManualDraft(item, draftsPath = MANUAL_DRAFTS_PATH, nowMs = Date
   if (!item || !String(item.text || '').trim()) return;
   mutateManualDrafts(current => {
     const id = String(item.id || `manual_${nowMs}_${Math.random().toString(36).slice(2, 6)}`);
+    const existing = current.items.find(entry => entry.id === id || entry.text === String(item.text || '').trim());
     const next = {
       id,
       text: String(item.text || '').trim(),
       source: item.source || 'manual',
       theme: item.theme || '',
-      createdAt: item.createdAt || new Date(nowMs).toISOString(),
-      queuedAt: new Date(nowMs).toISOString(),
+      createdAt: (existing && existing.createdAt) || item.createdAt || new Date(nowMs).toISOString(),
+      // Only a real enqueue counts. Regenerating or re-reading the same draft
+      // must not make it look queued.
+      queuedAt: item.queued === true ? new Date(nowMs).toISOString() : (existing && existing.queuedAt) || '',
     };
     current.items = [next, ...current.items.filter(entry => entry.id !== id && entry.text !== next.text)];
   }, draftsPath, nowMs);
@@ -3279,7 +3282,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         if (urgent) current.queue.unshift(newItem);
         else current.queue.push(newItem);
       }, activeQueuePath, { maxSize });
-      rememberManualDraft(newItem, activeManualDraftsPath, clock());
+      rememberManualDraft({ ...newItem, queued: true }, activeManualDraftsPath, clock());
       return {
         ok: true,
         action: 'enqueue-post',

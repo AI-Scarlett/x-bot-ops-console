@@ -491,6 +491,10 @@ test('handles post queue operations (enqueue, urgent, remove, clear)', async () 
     assert.equal(res1.queue.length, 1);
     assert.equal(res1.item.urgent, false);
     assert.ok(res1.manualDrafts.some(item => item.text === '第一条普通测试推文'));
+    // Enqueueing is what marks a draft as queued; the time survives a later rewrite.
+    const queued = res1.manualDrafts.find(item => item.text === '第一条普通测试推文');
+    assert.ok(queued.queuedAt, 'enqueueing must record when the draft joined the queue');
+    assert.ok(queued.createdAt, 'a draft must record when it was generated');
 
     const res2 = await service.action({ action: 'enqueue-post', text: '加急插队推文', urgent: true });
     assert.equal(res2.ok, true);
