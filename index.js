@@ -127,6 +127,7 @@ export const FIELD_SIDE = Object.freeze({
   'cruiseSettings.visitGapMinSeconds': 'profile',
   'cruiseSettings.visitGapMaxSeconds': 'profile',
   'cruiseSettings.tierSweepHours': 'profile',
+  'cruiseSettings.tierDailyVisits': 'profile',
   'cruiseSettings.commentsPerProfile': 'profile',
   'cruiseSettings.likesPerProfile': 'profile',
   'cruiseSettings.likeOnComment': 'profile',
@@ -2103,6 +2104,8 @@ const DEFAULT_CONFIG = Object.freeze({
     crawlFollowers: true,
     interactionCooldownHours: 48,
     tierSweepHours: 6,
+    // Visits owed per day, by tier id. A tier missing here has no daily guarantee.
+    tierDailyVisits: {},
     commentsPerProfile: 1,
     // How many posts of a visited profile to like. 0 disables liking.
     likesPerProfile: 0,
@@ -2888,6 +2891,18 @@ function validateConfig(input) {
       const cd = Number(copy.cruiseSettings.interactionCooldownHours);
       if (!Number.isInteger(cd) || cd < 1 || cd > 720) throw new TypeError('巡航冷却时长需为 1~720 小时之间的整数');
       copy.cruiseSettings.interactionCooldownHours = cd;
+    }
+    if (copy.cruiseSettings.tierDailyVisits !== undefined) {
+      const visits = copy.cruiseSettings.tierDailyVisits;
+      if (!isRecord(visits)) throw new TypeError('重点名单每日巡航次数无效');
+      const cleaned = {};
+      for (const [tierId, value] of Object.entries(visits)) {
+        if (!/^[a-z0-9_-]{1,40}$/.test(tierId)) throw new TypeError('重点名单档位编号无效');
+        const times = Number(value);
+        if (!Number.isInteger(times) || times < 0 || times > 24) throw new TypeError('每档每日巡航次数需为 0~24 的整数');
+        cleaned[tierId] = times;
+      }
+      copy.cruiseSettings.tierDailyVisits = cleaned;
     }
     if (copy.cruiseSettings.tierSweepHours !== undefined) {
       const sweep = Number(copy.cruiseSettings.tierSweepHours);

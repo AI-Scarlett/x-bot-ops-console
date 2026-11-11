@@ -3577,7 +3577,31 @@ window.__ModuleLoader__.load({
 
           // 重点名单整轮巡
           h('section', { style: cardStyle },
-            h('h2', { style: { margin: 0, fontSize: 15 } }, '🔁 重点名单整轮巡（按小时把全部名单走一遍）'),
+            h('h2', { style: { margin: 0, fontSize: 15 } }, '📌 重点名单每日保底次数（按档位，随时可改）'),
+            h('p', { style: { margin: '6px 0 10px', fontSize: 12, color: C.faint, lineHeight: 1.6 } },
+              '每个档位填每天至少拜访几次。次数越高的人越优先，而且同一天的几次会拉开时间，不会连着拜访。留空或填 0 表示这档不设保底，只参加下面的随机巡航和整轮巡。改完点底部保存即生效，不用重启。'),
+            h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
+              ...((config?.tiers || []).filter(tier => (tier.handles || []).length).map(tier => h('label', {
+                key: tier.id,
+                style: { display: 'flex', gap: 10, alignItems: 'center', fontSize: 13 },
+              },
+                h('span', { style: { flex: '1 1 160px' } },
+                  `${tier.label || tier.id}`,
+                  h('span', { style: { color: C.faint, fontSize: 11, marginLeft: 6 } }, `${(tier.handles || []).length} 人`)),
+                h('input', {
+                  type: 'number', min: 0, max: 24,
+                  style: { ...inputStyle, width: 90, margin: 0 },
+                  placeholder: '不保底',
+                  value: config?.cruiseSettings?.tierDailyVisits?.[tier.id] ?? '',
+                  onChange: e => updateConfig(c => {
+                    const next = { ...(c.cruiseSettings?.tierDailyVisits || {}) };
+                    if (e.target.value === '') delete next[tier.id];
+                    else next[tier.id] = Math.max(0, Math.min(24, Number(e.target.value) || 0));
+                    return { ...c, cruiseSettings: { ...(c.cruiseSettings || {}), tierDailyVisits: next } };
+                  }),
+                }),
+                h('span', { style: { color: C.muted, fontSize: 12 } }, '次/天'))))),
+            h('h2', { style: { margin: '16px 0 0', fontSize: 15 } }, '🔁 重点名单整轮巡（按小时把全部名单走一遍）'),
             h('p', { style: { margin: '6px 0 10px', fontSize: 12, color: C.faint, lineHeight: 1.6 } },
               '到达设定间隔后，巡航 Worker 会按「Apex → Tier 1 → … → 其他」的顺序，把「👥 重点名单」里的所有用户名逐个拜访一遍；中途不会因为随机爬取而丢掉进度，走完才重新计时。设 0 表示关闭，仅保留随机巡航。'),
             h('label', { style: { ...labelStyle, marginTop: 4 } }, '每隔多少小时轮巡一次全部重点名单（0=关闭）：', h(SideBadge, { side: 'profile' })),
