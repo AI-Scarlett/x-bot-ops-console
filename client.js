@@ -978,18 +978,12 @@ window.__ModuleLoader__.load({
                           },
                             h('input', { type: 'checkbox', checked: profile.bilingual === true, onChange: e => setProfile({ bilingual: e.target.checked }) }),
                             '文言+白话'),
-                          h('label', {
-                            title: '勾上以后：自动发帖和手动生成故事时可以把这个人写进情节',
-                            style: { display: 'flex', gap: 5, alignItems: 'center', fontSize: 12, color: profile.inStories ? C.accent : C.muted, cursor: 'pointer', whiteSpace: 'nowrap' },
-                          },
-                            h('input', { type: 'checkbox', checked: profile.inStories === true, onChange: e => setProfile({ inStories: e.target.checked }) }),
-                            '可进故事'),
                           h('textarea', {
                             style: { ...inputStyle, flex: '1 1 100%', margin: 0, minHeight: 46, padding: '4px 8px', fontSize: 12 },
-                            placeholder: '人物人设：称呼、性格、与叙述者的关系、能写进故事的经历。留空则不参与故事。',
+                            placeholder: '人物人设：称呼、性格、与叙述者的关系、能写进故事的经历。写好后到每个主题里勾选，这个人才会进那个主题的故事。',
                             maxLength: 1000,
                             value: profile.persona || '',
-                            onChange: e => setProfile({ persona: e.target.value, inStories: e.target.value.trim() ? (profile.inStories !== false) : profile.inStories }),
+                            onChange: e => setProfile({ persona: e.target.value }),
                           }));
                       }))) : null),
 
@@ -2157,7 +2151,29 @@ window.__ModuleLoader__.load({
                     placeholder: '这个主题的写法和侧重点，例如：围绕搞钱与追求异性展开，风趣不低俗…',
                     value: item.prompt || '',
                     onChange: e => patch(item.id, { prompt: e.target.value }),
-                  }))));
+                  }),
+                  (() => {
+                    const cast = Object.entries(config?.handleProfiles || {})
+                      .filter(([, profile]) => profile && String(profile.persona || '').trim())
+                      .map(([handle, profile]) => ({ handle, name: profile.nickname || handle }));
+                    const picked = Array.isArray(item.cast) ? item.cast : [];
+                    return h('div', { style: { marginTop: 8 } },
+                      h('div', { style: { fontSize: 12, color: C.muted, marginBottom: 4 } },
+                        '出场人物：勾选后，这个主题生成的故事只写这些人；一个都不勾，这个主题就不出现名单里的人。'),
+                      cast.length
+                        ? h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
+                          ...cast.map(person => h('label', {
+                            key: person.handle,
+                            style: { display: 'flex', gap: 4, alignItems: 'center', fontSize: 12, cursor: 'pointer', padding: '2px 8px', borderRadius: 6, border: `1px solid ${picked.includes(person.handle) ? C.accent : C.border}`, color: picked.includes(person.handle) ? C.accent : C.text },
+                          },
+                            h('input', {
+                              type: 'checkbox',
+                              checked: picked.includes(person.handle),
+                              onChange: e => patch(item.id, { cast: e.target.checked ? [...picked, person.handle] : picked.filter(x => x !== person.handle) }),
+                            }),
+                            person.name)))
+                        : h('div', { style: { fontSize: 11, color: C.faint } }, '还没有写人设的人。到「👥 重点名单」里给某人填人物人设后，这里就能勾选。'));
+                  })())));
             })()),
 
           // 分时段文风调度
@@ -2408,12 +2424,12 @@ window.__ModuleLoader__.load({
               h('div', { style: { marginTop: 12, padding: '12px 14px', borderRadius: 8, background: C.raised, border: `1px solid ${C.border}` } },
                 h('div', { style: { fontSize: 13, fontWeight: '600', marginBottom: 4 } }, '👥 本批故事的出场人物（可选）：'),
                 h('div', { style: { fontSize: 12, color: C.faint, marginBottom: 8, lineHeight: 1.6 } },
-                  '勾选后，这一批生成的故事会让这些人真正出场，按「👥 重点名单」里写的人设来写。一个都不勾，则从所有标记了「可进故事」的人里自动挑。'),
+                  '勾选后，这一批生成的故事只让这些人出场，按「👥 重点名单」里写的人设来写。一个都不勾，就按每条主题自己勾选的出场人物来；主题也没勾的，这条故事里不出现名单上的人。'),
                 (() => {
                   const cast = Object.entries(config?.handleProfiles || {})
-                    .filter(([, profile]) => profile && profile.inStories === true && String(profile.persona || '').trim())
+                    .filter(([, profile]) => profile && String(profile.persona || '').trim())
                     .map(([handle, profile]) => ({ handle, name: profile.nickname || handle }));
-                  if (!cast.length) return h('div', { style: { fontSize: 12, color: C.muted } }, '还没有可出场的人。到「👥 重点名单」里给某人写人设并勾上「可进故事」。');
+                  if (!cast.length) return h('div', { style: { fontSize: 12, color: C.muted } }, '还没有可出场的人。到「👥 重点名单」里给某人写人物人设后，这里就能勾选。');
                   return h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 8 } },
                     ...cast.map(person => h('label', {
                       key: person.handle,

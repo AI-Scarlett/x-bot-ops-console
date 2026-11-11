@@ -1619,7 +1619,7 @@ const GENDER_LABEL = { male: '男', female: '女' };
 export function storyCast(config = {}) {
   const profiles = (config && config.handleProfiles) || {};
   return Object.entries(profiles)
-    .filter(([, profile]) => profile && profile.inStories === true && String(profile.persona || '').trim())
+    .filter(([, profile]) => profile && profile.inStories !== false && String(profile.persona || '').trim())
     .map(([handle, profile]) => ({
       handle,
       name: String(profile.nickname || '').trim() || handle,
@@ -1631,10 +1631,13 @@ export function storyCast(config = {}) {
 
 // Prompt block naming the people this draft must actually write about.
 // `picks` restricts the cast; an empty list means every marked person is eligible.
-export function castBlock(config = {}, picks = []) {
+export function castBlock(config = {}, picks = null) {
   const all = storyCast(config);
-  const wanted = new Set((Array.isArray(picks) ? picks : []).map(handle => String(handle || '').trim().replace(/^@/, '').toLowerCase()).filter(Boolean));
-  const cast = wanted.size ? all.filter(person => wanted.has(person.handle)) : all;
+  // null means "no restriction"; an empty list means nobody was chosen, so the
+  // story names no one instead of pulling in every person with a persona.
+  const cast = picks === null
+    ? all
+    : all.filter(person => new Set((Array.isArray(picks) ? picks : []).map(handle => String(handle || '').trim().replace(/^@/, '').toLowerCase())).has(person.handle));
   if (!cast.length) return '';
   const lines = cast.map(person => `- ${person.name}${person.gender ? `（${person.gender}）` : ''}：${person.persona}`);
   return '\n\n【本条故事的出场人物（从下面挑选，写进正文）】\n'
@@ -2810,6 +2813,17 @@ function validateConfig(input) {
         if (item.minChars !== undefined && item.maxChars !== undefined && item.minChars > item.maxChars) {
           throw new TypeError(`主题「${item.label}」的字数下限不能大于上限`);
         }
+        // The people this theme's stories are allowed to use. Empty means the
+        // theme writes without any named person, so a story never pulls in
+        // someone the operator did not pick for it.
+        if (item.cast !== undefined && item.cast !== null) {
+          if (!Array.isArray(item.cast) || item.cast.length > 12) throw new TypeError(`主题「${item.label}」的出场人物过多`);
+          item.cast = [...new Set(item.cast.map(handle => String(handle || '').trim().replace(/^@/, '').toLowerCase()).filter(Boolean))];
+          for (const handle of item.cast) {
+            if (!HANDLE_PATTERN.test(handle)) throw new TypeError(`主题「${item.label}」的出场人物用户名无效：${handle}`);
+          }
+          if (!item.cast.length) delete item.cast;
+        }
         // Optional Beijing-time window. Both empty means all day. One side
         // without the other is rejected so a greeting cannot fire at random.
         const blank = value => value === undefined || value === null || value === '';
@@ -3554,7 +3568,9 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
           effectiveBasePrompt = '你在推特(X)上发一条原创推文。' + personaText;
         }
       }
-      const peopleBlock = castBlock(sharedCfg, castPicks === null ? [] : castPicks);
+      // 手动没勾人时，用这一条主题自己选定的出场人物；主题也没选就一个都不带。
+      const themeCast = Array.isArray(theme?.cast) ? theme.cast : [];
+      const peopleBlock = castBlock(sharedCfg, castPicks === null ? themeCast : castPicks);
       const prompt = reference
         ? effectiveBasePrompt + referenceBlock + peopleBlock + learningBlock + formatRuleFor(theme)
         : basePrompt + themeBlock + learningBlock + subjectBlock + peopleBlock + formatRuleFor(theme);

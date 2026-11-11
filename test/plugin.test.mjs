@@ -2735,31 +2735,37 @@ test('a handle can carry a nickname and a gender', async () => {
   assert.equal(validateConfig(withPersona).handleProfiles.ling.inStories, false);
 });
 
-test('the story cast block names only the people marked for stories', async () => {
-  const { castBlock, storyCast } = await import('../index.js');
+test('a story only names the people a theme or a batch explicitly picks', async () => {
+  const { castBlock, storyCast, validateConfig, DEFAULT_CONFIG } = await import('../index.js');
   const config = {
     handleProfiles: {
-      ling: { nickname: '玲', gender: 'female', persona: '叙述者的女友。', inStories: true },
-      wang: { nickname: '王小妹', gender: 'female', persona: '玲的闺蜜。', inStories: true },
+      ling: { nickname: '玲', gender: 'female', persona: '叙述者的女友。' },
+      wang: { nickname: '王小妹', gender: 'female', persona: '玲的闺蜜。' },
       grok: { nickname: '旁观', gender: 'unknown', persona: '不参与故事。', inStories: false },
-      bare: { nickname: '无名', gender: 'male', persona: '', inStories: true },
+      bare: { nickname: '无名', gender: 'male', persona: '' },
     },
   };
+  // A persona makes someone available; an explicit off or an empty persona does not.
   assert.deepEqual(storyCast(config).map(person => person.name), ['玲', '王小妹']);
   const block = castBlock(config, ['ling']);
   assert.match(block, /出场人物/);
   assert.match(block, /玲（女）：叙述者的女友。/);
   assert.doesNotMatch(block, /王小妹/);
-  assert.doesNotMatch(block, /ling/);
-  // No pick means every eligible person is offered.
-  assert.match(castBlock(config, []), /王小妹/);
+  // No pick means nobody appears: people only enter a story when chosen.
+  assert.equal(castBlock(config, []), '');
+
+  const themed = structuredClone(DEFAULT_CONFIG);
+  themed.postSettings.topicMix = [{ id: 'story', label: '故事', weight: 100, prompt: '', cast: ['@Ling', 'ling', 'nope!'] }];
+  assert.throws(() => validateConfig(themed), /出场人物用户名无效/);
+  themed.postSettings.topicMix[0].cast = ['@Ling', 'ling'];
+  assert.deepEqual(validateConfig(themed).postSettings.topicMix[0].cast, ['ling']);
 });
 
 test('the priority list shows the nickname and gender editor', async () => {
   const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
   assert.match(source, /昵称与性别标注/);
   assert.match(source, /人物人设/);
-  assert.match(source, /可进故事/);
+  assert.match(source, /出场人物：勾选后/);
   assert.match(source, /handleProfiles/);
   assert.match(source, /gender: 'unknown'/);
   assert.match(source, /option.*value: 'male'.*男/s);
