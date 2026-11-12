@@ -953,6 +953,11 @@ function normalizeLearnings(data) {
       benchmarkNote: String(data.lastCycle.benchmarkNote || '').slice(0, 500),
       benchmarkConsidered: Number.isFinite(Number(data.lastCycle.benchmarkConsidered)) ? Number(data.lastCycle.benchmarkConsidered) : 0,
       benchmarkLearned: Number.isFinite(Number(data.lastCycle.benchmarkLearned)) ? Number(data.lastCycle.benchmarkLearned) : 0,
+      xApiQuota: isRecord(data.lastCycle.xApiQuota) ? {
+        limit: Number(data.lastCycle.xApiQuota.limit) || 0,
+        remaining: Number.isFinite(Number(data.lastCycle.xApiQuota.remaining)) ? Number(data.lastCycle.xApiQuota.remaining) : null,
+        reset: Number(data.lastCycle.xApiQuota.reset) || 0,
+      } : null,
     } : null,
     updatedAt: typeof data.updatedAt === 'string' ? data.updatedAt : null,
   };

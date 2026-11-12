@@ -2816,6 +2816,16 @@ window.__ModuleLoader__.load({
               ? h('div', { style: { marginTop: 10, padding: '8px 10px', background: C.raised, borderRadius: 8, fontSize: 12, color: C.accent } },
                 '已收到「立即学习」请求，发帖 Worker 正在处理（需要连上 Chrome）。完成后这条提示会消失，下方时间戳会更新。')
               : null,
+            (() => {
+              const quota = state?.learnings?.lastCycle?.xApiQuota;
+              if (!quota || !quota.limit) return null;
+              const left = quota.remaining;
+              const resetIn = quota.reset ? Math.max(0, Math.round(quota.reset - Date.now() / 1000)) : 0;
+              const when = resetIn > 0 ? `，${Math.ceil(resetIn / 60)} 分钟后恢复` : '';
+              const low = Number.isFinite(left) && left <= Math.max(3, Math.round(quota.limit * 0.1));
+              return h('div', { style: { marginTop: 10, padding: '8px 10px', borderRadius: 8, background: C.layerTwo, border: `1px solid ${low ? '#f59e0b' : C.border}`, fontSize: 12, color: low ? '#f59e0b' : C.text } },
+                `X 接口额度：本窗口还剩 ${Number.isFinite(left) ? left : '?'} / ${quota.limit} 次${when}。每次学习查自己的帖子用 1 次。`);
+            })(),
             state?.learnings?.lastCycle?.lastRunAt
               ? h('div', { style: { marginTop: 10, fontSize: 12, color: C.muted, lineHeight: 1.7 } },
                 `整轮学习：${state.learnings.lastCycle.lastRunAt}`,
