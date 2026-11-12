@@ -29,6 +29,7 @@ export const CONFIG_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsCo
 export const TARGETS_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/console-targets.json');
 export const POST_QUEUE_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/post_queue.json');
 export const MANUAL_DRAFTS_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/manual_drafts.json');
+export const SERIALS_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/serials.json');
 export const MANUAL_DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
 export const MANUAL_DRAFT_MAX = 80;
 export const POST_HISTORY_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/post_history.json');
@@ -291,6 +292,58 @@ function withQueueLock(fn, queuePath = POST_QUEUE_PATH) {
 
 function withManualDraftLock(fn, draftsPath = MANUAL_DRAFTS_PATH) {
   return withFileLock(fn, `${draftsPath}.lock`, '手动草稿库');
+}
+
+const SERIAL_LIMITS = { tasks: 30, chapters: 200, chapterChars: 20000, premiseChars: 4000, referenceChars: 8000, cast: 12 };
+
+function blankSerials() {
+  return { tasks: [] };
+}
+
+export function readSerials(serialsPath = SERIALS_PATH) {
+  try {
+    if (existsSync(serialsPath)) {
+      const data = JSON.parse(readFileSync(serialsPath, 'utf8'));
+      if (isRecord(data) && Array.isArray(data.tasks)) return data;
+    }
+  } catch { /* a broken file reads as empty rather than throwing */ }
+  return blankSerials();
+}
+
+function writeSerials(data, serialsPath) {
+  const dir = dirname(serialsPath);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  const tempPath = `${serialsPath}.tmp.${process.pid}.${Date.now()}`;
+  writeFileSync(tempPath, JSON.stringify(data, null, 2), { mode: 0o600 });
+  renameSync(tempPath, serialsPath);
+  return data;
+}
+
+export function mutateSerials(mutator, serialsPath = SERIALS_PATH) {
+  return withFileLock(() => {
+    const current = readSerials(serialsPath);
+    mutator(current);
+    current.tasks = (current.tasks || []).slice(0, SERIAL_LIMITS.tasks);
+    writeSerials(current, serialsPath);
+    return current;
+  }, `${serialsPath}.lock`, '连载长文');
+}
+
+// The chapter prompt: the premise, the reference and everything already written,
+// so a new chapter continues instead of restarting.
+export function serialChapterPrompt({ task, cast, chapterNo }) {
+  const people = (cast || []).map(person => `- ${person.name}${person.gender ? `（${person.gender}）` : ''}：${person.persona}`).join('\n');
+  const written = (task.chapters || []).map(chapter => `第${chapter.no}章 ${chapter.title || ''}\n${chapter.text}`).join('\n\n');
+  return [
+    '你在续写一部连载长文。只输出本章正文，不要前言、不要解释、不要复述设定。',
+    `这一章是第${chapterNo}章。`,
+    task.title ? `作品名：${task.title}` : '',
+    task.premise ? `\n【基础剧情与设定】\n${task.premise}` : '',
+    task.reference ? `\n【内容参考（只借鉴其写法、节奏和细节，不要照抄，不要写成同一件事）】\n${task.reference}` : '',
+    people ? `\n【出场人物（用列出的称呼，性格与关系按人设写，正文不要出现用户名和 @）】\n${people}` : '',
+    written ? `\n【已写章节（本章必须承接上文，不要重写已发生的情节，不要换人设）】\n${written.slice(-12000)}` : '',
+    '\n要求：本章 800 到 2000 字，情节往前推进一段，结尾留一个让人想看下一章的落点。第一行写本章标题，格式为「第N章 标题」。',
+  ].filter(Boolean).join('\n');
 }
 
 function parseIsoMs(value) {
@@ -3031,6 +3084,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
   const baseDir = isCustomConfig ? dirname(activeConfigPath) : null;
   const activeQueuePath = queuePath || (baseDir ? join(baseDir, 'post_queue.json') : POST_QUEUE_PATH);
   const activeManualDraftsPath = manualDraftsPath || (baseDir ? join(baseDir, 'manual_drafts.json') : MANUAL_DRAFTS_PATH);
+  const activeSerialsPath = baseDir ? join(baseDir, 'serials.json') : SERIALS_PATH;
   const activeLearningsPath = learningsPath || (baseDir ? join(baseDir, 'learnings.json') : LEARNINGS_PATH);
   const activeTrendsPath = trendsPath || (baseDir ? join(baseDir, 'trends.json') : TRENDS_PATH);
   const activeBackupDir = backupDir || (baseDir ? join(baseDir, 'backups') : CONFIG_BACKUP_DIR);
@@ -3228,6 +3282,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       dshModels,
       postQueue: postQueue.queue,
       manualDrafts: readManualDrafts(activeManualDraftsPath, clock()),
+      serials: readSerials(activeSerialsPath).tasks,
       postHistory: postHistory.slice(-20),
       learnings: readLearnings(activeLearningsPath),
       trends: readTrends(activeTrendsPath),
@@ -3325,6 +3380,89 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         current.items = [];
       }, activeManualDraftsPath, clock());
       return { ok: true, action: 'clear-manual-drafts', manualDrafts: items, note: '已清空本页 24 小时草稿库。' };
+    }
+    if (request.action === 'save-serial') {
+      const title = String(request.title || '').trim().slice(0, 60);
+      if (!title) throw new TypeError('请先给这部连载起个名字');
+      const premise = String(request.premise || '').trim().slice(0, SERIAL_LIMITS.premiseChars);
+      if (!premise) throw new TypeError('请先写基础剧情和设定');
+      const reference = String(request.reference || '').trim().slice(0, SERIAL_LIMITS.referenceChars);
+      const cast = [...new Set((Array.isArray(request.cast) ? request.cast : []).map(handle => String(handle || '').trim().replace(/^@/, '').toLowerCase()).filter(Boolean))].slice(0, SERIAL_LIMITS.cast);
+      const id = String(request.id || '').trim();
+      let saved = null;
+      const store = mutateSerials(current => {
+        const existing = id ? current.tasks.find(task => task.id === id) : null;
+        if (existing) {
+          existing.title = title;
+          existing.premise = premise;
+          existing.reference = reference;
+          existing.cast = cast;
+          existing.updatedAt = new Date(clock()).toISOString();
+          saved = existing;
+          return;
+        }
+        saved = {
+          id: `serial_${clock()}_${Math.random().toString(36).slice(2, 6)}`,
+          title, premise, reference, cast,
+          chapters: [],
+          createdAt: new Date(clock()).toISOString(),
+          updatedAt: new Date(clock()).toISOString(),
+        };
+        current.tasks.unshift(saved);
+      }, activeSerialsPath);
+      return { ok: true, action: 'save-serial', serial: saved, serials: store.tasks, note: id ? '连载设定已更新。' : '连载已建立。生成的章节只在这里，不会进入自动发帖。' };
+    }
+    if (request.action === 'delete-serial') {
+      const id = String(request.id || '').trim();
+      if (!id) throw new TypeError('缺少连载编号');
+      const store = mutateSerials(current => {
+        current.tasks = current.tasks.filter(task => task.id !== id);
+      }, activeSerialsPath);
+      return { ok: true, action: 'delete-serial', serials: store.tasks, note: '这部连载已删除。' };
+    }
+    if (request.action === 'write-serial-chapter') {
+      const id = String(request.id || '').trim();
+      const sharedCfg = getConfig();
+      const task = readSerials(activeSerialsPath).tasks.find(item => item.id === id);
+      if (!task) throw new TypeError('找不到这部连载');
+      if ((task.chapters || []).length >= SERIAL_LIMITS.chapters) throw new TypeError(`一部连载最多 ${SERIAL_LIMITS.chapters} 章`);
+      const chapterNo = (task.chapters || []).length + 1;
+      const cast = storyCast(sharedCfg).filter(person => (task.cast || []).includes(person.handle));
+      const model = String(request.model || '').trim().slice(0, 60) || sharedCfg.postSettings?.model || sharedCfg.model?.name || 'gpt-6-luna';
+      const port = sharedCfg.model?.endpointPort || 3040;
+      const prompt = serialChapterPrompt({ task, cast, chapterNo });
+      const raw = await localModelChat(prompt, { model, port, temperature: 0.8, maxTokens: 4000, timeoutMs: 180000 });
+      const body = String(raw || '').trim();
+      if (!body) throw new Error('大模型没有返回正文');
+      const firstLine = body.split('\n')[0].trim();
+      const titled = /^第\s*\d+\s*章/.test(firstLine);
+      const chapter = {
+        no: chapterNo,
+        title: titled ? firstLine.replace(/^第\s*\d+\s*章\s*/, '').slice(0, 40) : `第${chapterNo}章`,
+        text: body.slice(0, SERIAL_LIMITS.chapterChars),
+        createdAt: new Date(clock()).toISOString(),
+      };
+      let saved = null;
+      const store = mutateSerials(current => {
+        const target = current.tasks.find(item => item.id === id);
+        if (!target) return;
+        target.chapters = [...(target.chapters || []), chapter];
+        target.updatedAt = new Date(clock()).toISOString();
+        saved = target;
+      }, activeSerialsPath);
+      return { ok: true, action: 'write-serial-chapter', serial: saved, serials: store.tasks, note: `第${chapterNo}章已写好。它只在连载里，不会自动发布。` };
+    }
+    if (request.action === 'delete-serial-chapter') {
+      const id = String(request.id || '').trim();
+      const no = Number(request.no);
+      if (!id || !Number.isInteger(no)) throw new TypeError('缺少要删除的章节');
+      const store = mutateSerials(current => {
+        const target = current.tasks.find(item => item.id === id);
+        if (!target) return;
+        target.chapters = (target.chapters || []).filter(chapter => chapter.no !== no);
+        target.updatedAt = new Date(clock()).toISOString();
+      }, activeSerialsPath);
+      return { ok: true, action: 'delete-serial-chapter', serials: store.tasks, note: `第${no}章已删除。` };
     }
     if (request.action === 'remove-queued-post') {
       const id = String(request.id || '');

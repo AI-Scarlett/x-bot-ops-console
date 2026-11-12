@@ -40,7 +40,7 @@ window.__ModuleLoader__.load({
       missingFiles: '未找到配置位置的工作进程或监控脚本；请在设置中核对脚本目录。',
       pidForeign: '发现进程身份未确认，控制已禁用', logEmpty: '暂无日志', heartbeatStatus: '心跳状态',
       detailMissing: '未找到进程编号文件', detailDead: '进程编号已失效', detailVerified: '身份已验证', detailForeign: '进程身份未确认',
-      tabTiers: '👥 重点名单与个性化', tabGeneral: '🌐 通用与公共配置', tabComment: '💬 自动评论', tabReply: '↩️ 提及回复', tabPost: '📝 自动发帖', tabManualGen: '✍️ 手动AI创作', tabProfile: '🧭 主页巡航',
+      tabTiers: '👥 重点名单与个性化', tabGeneral: '🌐 通用与公共配置', tabComment: '💬 自动评论', tabReply: '↩️ 提及回复', tabPost: '📝 自动发帖', tabManualGen: '✍️ 手动AI创作', tabSerial: '📖 连载长文', tabProfile: '🧭 主页巡航',
       addHandle: '＋ 添加', remove: '移除', removeHandle: '移除此名单', saveHint: '保存后各个 worker 会在下一轮读取时生效。',
     };
     const t = key => zh[key] || key;
@@ -419,6 +419,9 @@ window.__ModuleLoader__.load({
       const [draftGenMaxChars, setDraftGenMaxChars] = React.useState(genPrefs.maxChars === undefined || genPrefs.maxChars === null ? '' : genPrefs.maxChars);
       const [draftReference, setDraftReference] = React.useState(typeof genPrefs.reference === 'string' ? genPrefs.reference : '');
       const [draftCast, setDraftCast] = React.useState(Array.isArray(genPrefs.cast) ? genPrefs.cast : []);
+      const [serialForm, setSerialForm] = React.useState({ id: '', title: '', premise: '', reference: '', cast: [] });
+      const [serialOpen, setSerialOpen] = React.useState('');
+      const [serialWriting, setSerialWriting] = React.useState(false);
       const [draftAnalysis, setDraftAnalysis] = React.useState('');
       const [analyzingReference, setAnalyzingReference] = React.useState(false);
       // 手动生成出的候选草稿（不直接进队列，先在界面展示，供单条勾选入队）
@@ -801,6 +804,7 @@ window.__ModuleLoader__.load({
           h('button', { type: 'button', style: tabItemStyle('reply'), onClick: () => setActiveTab('reply') }, t('tabReply')),
           h('button', { type: 'button', style: tabItemStyle('post'), onClick: () => setActiveTab('post') }, t('tabPost')),
           h('button', { type: 'button', style: tabItemStyle('manualGen'), onClick: () => setActiveTab('manualGen') }, t('tabManualGen')),
+          h('button', { type: 'button', style: tabItemStyle('serial'), onClick: () => setActiveTab('serial') }, t('tabSerial')),
           h('button', { type: 'button', style: tabItemStyle('learning'), onClick: () => setActiveTab('learning') }, '🧠 发帖学习'),
           h('button', { type: 'button', style: tabItemStyle('profile'), onClick: () => setActiveTab('profile') }, t('tabProfile')),
           h('button', { type: 'button', style: tabItemStyle('tiers'), onClick: () => setActiveTab('tiers') }, t('tabTiers'))),
@@ -2719,6 +2723,110 @@ window.__ModuleLoader__.load({
                 ))
               )
           )
+        ) : null,
+
+        // TAB: 📖 连载长文（独立于自动发帖，只生成、不发布）
+        activeTab === 'serial' ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
+          h('section', { style: cardStyle },
+            h('h2', { style: { margin: 0, fontSize: 16 } }, serialForm.id ? '编辑连载设定' : '新建一部连载'),
+            h('p', { style: { margin: '4px 0 10px', fontSize: 12, color: C.faint, lineHeight: 1.6 } },
+              '写好基础剧情、贴上参考，再从重点名单里选出场人物。章节在这里逐章生成，只给你复制后手动发布，不会进入自动发帖队列。'),
+            h('input', {
+              style: inputStyle, maxLength: 60, placeholder: '连载名称，例如「玲的夜谈」',
+              value: serialForm.title, onChange: e => setSerialForm(form => ({ ...form, title: e.target.value })),
+            }),
+            h('textarea', {
+              style: { ...inputStyle, minHeight: 90 }, maxLength: 4000,
+              placeholder: '基础剧情与设定：谁和谁、什么关系、故事从哪里开始、想写成什么样。',
+              value: serialForm.premise, onChange: e => setSerialForm(form => ({ ...form, premise: e.target.value })),
+            }),
+            h('textarea', {
+              style: { ...inputStyle, minHeight: 70 }, maxLength: 8000,
+              placeholder: '内容参考（可选）：贴一段你想借鉴的文字，只学写法和节奏，不会照抄。',
+              value: serialForm.reference, onChange: e => setSerialForm(form => ({ ...form, reference: e.target.value })),
+            }),
+            h('div', { style: { fontSize: 12, color: C.muted, margin: '8px 0 4px' } }, '出场人物（从重点名单里选，需先在名单里写好人物人设）：'),
+            (() => {
+              const people = Object.entries(config?.handleProfiles || {})
+                .filter(([, profile]) => profile && String(profile.persona || '').trim())
+                .map(([handle, profile]) => ({ handle, name: profile.nickname || handle }));
+              if (!people.length) return h('div', { style: { fontSize: 12, color: C.faint } }, '重点名单里还没有写人设的人。');
+              return h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
+                ...people.map(person => h('label', {
+                  key: person.handle,
+                  style: { display: 'flex', gap: 4, alignItems: 'center', fontSize: 12, cursor: 'pointer', padding: '2px 8px', borderRadius: 6, border: `1px solid ${serialForm.cast.includes(person.handle) ? C.accent : C.border}`, color: serialForm.cast.includes(person.handle) ? C.accent : C.text },
+                },
+                  h('input', {
+                    type: 'checkbox', checked: serialForm.cast.includes(person.handle),
+                    onChange: e => setSerialForm(form => ({ ...form, cast: e.target.checked ? [...form.cast, person.handle] : form.cast.filter(item => item !== person.handle) })),
+                  }),
+                  person.name)));
+            })(),
+            h('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 } },
+              serialForm.id ? h('button', { type: 'button', style: buttonStyle(false), onClick: () => setSerialForm({ id: '', title: '', premise: '', reference: '', cast: [] }) }, '取消编辑') : null,
+              h('button', {
+                type: 'button', disabled: busy, style: buttonStyle(true),
+                onClick: async () => {
+                  try {
+                    const res = await act('save-serial', undefined, serialForm);
+                    setSerialForm({ id: '', title: '', premise: '', reference: '', cast: [] });
+                    if (res?.serial?.id) setSerialOpen(res.serial.id);
+                    setNotice(res?.note || '连载已保存。');
+                  } catch (err) { setError(err.message || String(err)); }
+                },
+              }, serialForm.id ? '保存修改' : '建立这部连载'))),
+          ...((state?.serials || []).map(serial => h('section', { key: serial.id, style: cardStyle },
+            h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
+              h('div', null,
+                h('h2', { style: { margin: 0, fontSize: 15 } }, serial.title),
+                h('div', { style: { fontSize: 12, color: C.faint, marginTop: 3 } },
+                  `${(serial.chapters || []).length} 章`,
+                  (serial.cast || []).length ? ` · 出场 ${serial.cast.length} 人` : ' · 未选出场人物')),
+              h('div', { style: { display: 'flex', gap: 6 } },
+                h('button', { type: 'button', style: buttonStyle(false), onClick: () => setSerialOpen(serialOpen === serial.id ? '' : serial.id) }, serialOpen === serial.id ? '收起' : '展开'),
+                h('button', {
+                  type: 'button', style: buttonStyle(false),
+                  onClick: () => setSerialForm({ id: serial.id, title: serial.title, premise: serial.premise, reference: serial.reference || '', cast: serial.cast || [] }),
+                }, '改设定'),
+                h('button', {
+                  type: 'button', disabled: busy || serialWriting, style: buttonStyle(true),
+                  onClick: async () => {
+                    setSerialWriting(true);
+                    setNotice(`正在写《${serial.title}》第${(serial.chapters || []).length + 1}章，长文需要一两分钟...`);
+                    try {
+                      const res = await act('write-serial-chapter', undefined, { id: serial.id });
+                      setSerialOpen(serial.id);
+                      setNotice(res?.note || '本章已写好。');
+                    } catch (err) { setError(err.message || String(err)); }
+                    finally { setSerialWriting(false); }
+                  },
+                }, serialWriting ? '写作中...' : '✍️ 写下一章'),
+                h('button', {
+                  type: 'button', style: { ...buttonStyle(false), color: C.error, borderColor: C.error },
+                  onClick: () => setConfirmModal({
+                    title: `删除《${serial.title}》`,
+                    prompt: '连载和已写的章节会全部删除，无法恢复。',
+                    confirmText: '确认删除',
+                    onConfirm: async () => { await act('delete-serial', undefined, { id: serial.id }); setNotice('连载已删除。'); },
+                  }),
+                }, '删除'))),
+            serialOpen === serial.id ? h('div', { style: { marginTop: 12, display: 'flex', flexDirection: 'column', gap: 10 } },
+              h('div', { style: { fontSize: 12, color: C.muted, lineHeight: 1.6, whiteSpace: 'pre-wrap' } }, serial.premise),
+              (serial.chapters || []).length
+                ? serial.chapters.map(chapter => h('div', { key: chapter.no, style: { padding: '10px 12px', background: C.layerTwo, borderRadius: 8, border: `1px solid ${C.border}` } },
+                  h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 } },
+                    h('strong', { style: { fontSize: 13 } }, `第${chapter.no}章 ${chapter.title || ''}`),
+                    h('span', { style: { display: 'flex', gap: 6 } },
+                      h('button', {
+                        type: 'button', style: { ...buttonStyle(false), padding: '2px 8px', fontSize: 11 },
+                        onClick: async () => { try { await navigator.clipboard.writeText(chapter.text); setNotice(`第${chapter.no}章已复制，可以去手动发布。`); } catch { setError('复制失败，请选中正文复制。'); } },
+                      }, '复制本章'),
+                      h('button', {
+                        type: 'button', style: { ...buttonStyle(false), padding: '2px 8px', fontSize: 11, color: C.error },
+                        onClick: async () => { await act('delete-serial-chapter', undefined, { id: serial.id, no: chapter.no }); setNotice(`第${chapter.no}章已删除。`); },
+                      }, '删除'))),
+                  h('div', { style: { fontSize: 13, lineHeight: 1.7, whiteSpace: 'pre-wrap' } }, chapter.text)))
+                : h('div', { style: { fontSize: 12, color: C.faint } }, '还没有章节。点「写下一章」从第一章开始。')) : null))),
         ) : null,
 
         // TAB: 🧠 发帖学习

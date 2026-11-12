@@ -61,6 +61,7 @@ function mount({ config = sampleConfig(), state = sampleState, tab = 'tiers' } =
 
   const hooks = [];
   const requests = [];
+  const storage = new Map();
   let hookIndex = 0;
   let rootComponent = null;
 
@@ -81,7 +82,9 @@ function mount({ config = sampleConfig(), state = sampleState, tab = 'tiers' } =
     useState(initial) {
       const index = hookIndex++;
       if (!(index in hooks)) hooks[index] = typeof initial === 'function' ? initial() : initial;
-      return [hooks[index], value => { hooks[index] = typeof value === 'function' ? value(hooks[index]) : value; }];
+      const setter = value => { hooks[index] = typeof value === 'function' ? value(hooks[index]) : value; };
+      React.__setters[index] = setter;
+      return [hooks[index], setter];
     },
     useRef(initial) {
       const index = hookIndex++;
@@ -91,6 +94,7 @@ function mount({ config = sampleConfig(), state = sampleState, tab = 'tiers' } =
     useEffect() {},
     useCallback(fn) { return fn; },
     Component: class { constructor(props) { this.props = props; } },
+    __setters: [],
     // useState slots are positional: 0 state, 1 error, 2 notice, 3 busy,
     // 4 updating, 5 config, 6 configHash, 7 draftDirty, 8 activeTab.
     __seed: undefined,
@@ -123,7 +127,6 @@ function mount({ config = sampleConfig(), state = sampleState, tab = 'tiers' } =
   assert.ok(rootComponent, 'client bundle must register a root component');
 
   const placeholders = [];
-  const storage = new Map();
   globalThis.fetch = async (url, options = {}) => {
     if (options && options.method === 'POST') {
       requests.push(JSON.parse(options.body));
@@ -154,7 +157,7 @@ function mount({ config = sampleConfig(), state = sampleState, tab = 'tiers' } =
   };
 
   const api = {
-    React, hooks, requests, render, storage, fakeWindow,
+    React, hooks, requests, render, storage, fakeWindow, setters: React.__setters,
     config: () => hooks[5],
     find: (tree, predicate) => elements(tree).find(predicate),
     findByText: (tree, text) => elements(tree).find(node => node.type && typeof node.type !== 'function' && flatText(node).includes(text)),
@@ -579,8 +582,8 @@ test('a theme row can pin its own character range, and clearing it falls back', 
 test('manual draft delete posts the draft id and text instead of filtering by index', async () => {
   const app = mount({ tab: 'manualGen' });
   try {
-    // previewDrafts follows draftCast, which was added after draftReference.
-    app.hooks[23] = [
+    // previewDrafts is the 26th useState in Panel.
+    app.hooks[26] = [
       { id: 'draft_keep', text: '留下来的稿' },
       { id: 'draft_drop', text: '要点掉的稿' },
     ];
@@ -598,7 +601,7 @@ test('manual draft delete posts the draft id and text instead of filtering by in
 test('the candidate board shows the 24 hour retention and asks before clearing it', async () => {
   const app = mount({ tab: 'manualGen' });
   try {
-    app.hooks[23] = [
+    app.hooks[26] = [
       { id: 'a', text: '第一条候选稿', createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 3600 * 1000).toISOString() },
       { id: 'b', text: '第二条候选稿', createdAt: new Date(Date.now() - 3600 * 1000).toISOString(), expiresAt: new Date(Date.now() + 23 * 3600 * 1000).toISOString() },
     ];

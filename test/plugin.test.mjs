@@ -587,6 +587,40 @@ test('service with custom config isolates state paths and never touches producti
   } finally { f.cleanup(); }
 });
 
+test('a serial stays in its own store and never enters the post queue', async () => {
+  const f = fixture();
+  try {
+    const service = createService({ paths: f.paths, configPath: join(f.dir, 'config.json'), platform: 'darwin' });
+    const created = await service.action({
+      action: 'save-serial', title: '玲的夜谈', premise: '玲与叙述者相识于茶肆，约定逐夜相见。',
+      reference: '一段可借鉴的写法', cast: ['@Ling', 'ling'],
+    });
+    assert.equal(created.serials.length, 1);
+    assert.deepEqual(created.serial.cast, ['ling']);
+    assert.equal(created.serial.chapters.length, 0);
+    const state = await service.inspect();
+    assert.equal(state.serials.length, 1);
+    assert.equal(state.postQueue.length, 0, 'building a serial must not enqueue anything');
+    const removed = await service.action({ action: 'delete-serial', id: created.serial.id });
+    assert.equal(removed.serials.length, 0);
+    await assert.rejects(service.action({ action: 'save-serial', title: '', premise: '有剧情' }), /起个名字/);
+  } finally { f.cleanup(); }
+});
+
+test('the serial chapter prompt carries the premise, the cast and the chapters already written', async () => {
+  const { serialChapterPrompt } = await import('../index.js');
+  const prompt = serialChapterPrompt({
+    task: { title: '玲的夜谈', premise: '两人约定逐夜相见', reference: '', chapters: [{ no: 1, title: '初见', text: '第一章正文' }] },
+    cast: [{ name: '玲', gender: '女', persona: '叙述者的女友' }],
+    chapterNo: 2,
+  });
+  assert.match(prompt, /第2章/);
+  assert.match(prompt, /两人约定逐夜相见/);
+  assert.match(prompt, /玲（女）：叙述者的女友/);
+  assert.match(prompt, /第一章正文/);
+  assert.match(prompt, /不要重写已发生的情节/);
+});
+
 test('post queue settings accept batch size, threshold and auto refill knobs', async () => {
   const f = fixture();
   try {
