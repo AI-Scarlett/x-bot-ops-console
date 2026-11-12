@@ -3387,6 +3387,18 @@ window.__ModuleLoader__.load({
 
             h('div', { style: { marginTop: 12 } },
               h('div', { style: { fontSize: 13, fontWeight: '600', marginBottom: 6 } },
+                `🔥 高频曝光词（${learningsClearPending ? 0 : (state?.learnings?.hotWords || []).length}）`),
+              h('p', { style: { margin: '0 0 8px', fontSize: 12, color: C.faint, lineHeight: 1.6 } },
+                '从高曝光样本里反复出现的用词里提炼出来，按出现频率排列。生成时会自然用上其中几个，不是整句照搬。'),
+              (learningsClearPending ? [] : (state?.learnings?.hotWords || [])).length
+                ? h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
+                  ...(learningsClearPending ? [] : state.learnings.hotWords).map(word => h('span', {
+                    key: word,
+                    style: { fontSize: 12, padding: '3px 8px', borderRadius: 6, background: C.layerTwo, border: `1px solid ${C.border}`, color: C.text },
+                  }, word)))
+                : h('div', { style: { fontSize: 12, color: C.faint } }, '还没有。跑一次学习后，高曝光样本里反复出现的词会列在这里。')),
+            h('div', { style: { marginTop: 12 } },
+              h('div', { style: { fontSize: 13, fontWeight: '600', marginBottom: 6 } },
                 `✅ 优先话题（${learningsClearPending ? 0 : (state?.learnings?.winningTopics || []).length}）`
                 + (() => {
                   const winners = state?.learnings?.winningTopics || [];

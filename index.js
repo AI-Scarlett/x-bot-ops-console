@@ -936,6 +936,7 @@ function normalizeLearnings(data) {
     styleGuide: String(data.styleGuide || '').slice(0, 4000),
     winningTopics: cleanList(data.winningTopics, 40),
     bannedTopics: cleanList(data.bannedTopics, 40),
+    hotWords: cleanList(data.hotWords, 30).map(word => word.slice(0, 20)),
     patterns,
     history: {
       lastRunAt: typeof history.lastRunAt === 'string' ? history.lastRunAt : null,
@@ -1429,6 +1430,7 @@ export function buildLearningPromptBlock(learnings, { maxChars = 1600, influence
   const usableWinners = (learnings.winningTopics || []).filter(topic => !bannedSet.has(String(topic).toLowerCase()));
   if (usableWinners.length) parts.push(`【已验证有效的话题方向】${usableWinners.join('、')}`);
   if (learnings.bannedTopics.length) parts.push(`【必须避开的话题（历史表现差）】${learnings.bannedTopics.join('、')}`);
+  if ((learnings.hotWords || []).length) parts.push(`【高曝光用词（样本里反复出现，写作时自然用上几个，不要堆砌，不要照抄原句）】${learnings.hotWords.slice(0, 20).join('、')}`);
   if (!parts.length) return '';
   // influence scales how much of the learned guidance reaches the model.
   const strength = Math.max(0, Math.min(100, Number(influence)));
@@ -1460,8 +1462,9 @@ const LEARNING_ANALYST_PROMPT = `你是中文社交媒体的内容策略分析�
 请拆解它们为什么能获得高曝光/高互动，并提炼成可以照着写的套路。
 
 只输出严格 JSON，不要任何解释文字，格式：
-{"styleGuide":"150字以内的整体套路总结（选题角度+情绪+节奏+收尾方式）","winningTopics":["值得继续写的话题方向1","方向2"],"patterns":[{"title":"套路名称","structure":"这条推文的结构拆解（开头—中段—收尾）","hooks":["可复用的开头钩子或句式"]}]}
-patterns 给 2~5 条。赢家话题要是「话题方向」而不是整句原文。`;
+{"styleGuide":"150字以内的整体套路总结（选题角度+情绪+节奏+收尾方式）","winningTopics":["值得继续写的话题方向1","方向2"],"hotWords":["在高曝光样本里反复出现、值得继续用的词或短语"],"patterns":[{"title":"套路名称","structure":"这条推文的结构拆解（开头—中段—收尾）","hooks":["可复用的开头钩子或句式"]}]}
+patterns 给 2~5 条。赢家话题要是「话题方向」而不是整句原文。
+hotWords 给 5~15 个：从样本里找出反复出现、且看起来在拉高曝光的具体用词或短语（称呼、身体部位、动作、场景、情绪词），按出现频率从高到低排。不要给「的、了、余、曰」这类虚词和每条都有的套话，不要给整句。`;
 
 // Ask the local model to turn raw high-performing samples into reusable patterns.
 export async function analyzeLearningSamples(samples, { model = 'gpt-6-luna', port = 3040, kind = 'manual', extra = '' } = {}) {
@@ -1505,6 +1508,10 @@ export async function analyzeLearningSamples(samples, { model = 'gpt-6-luna', po
     winningTopics: (Array.isArray(parsed.winningTopics) ? parsed.winningTopics : [])
       .map(topic => String(topic || '').trim().slice(0, 80))
       .filter(Boolean)
+      .slice(0, 20),
+    hotWords: (Array.isArray(parsed.hotWords) ? parsed.hotWords : [])
+      .map(word => String(word || '').trim().slice(0, 20))
+      .filter(word => word.length >= 2)
       .slice(0, 20),
     patterns,
   };
@@ -4054,13 +4061,14 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         current.patterns.unshift(...analysis.patterns);
         if (analysis.styleGuide) current.styleGuide = analysis.styleGuide;
         current.winningTopics = [...new Set([...analysis.winningTopics, ...current.winningTopics])].slice(0, 40);
+        current.hotWords = [...new Set([...(analysis.hotWords || []), ...(current.hotWords || [])])].slice(0, 30);
       }, activeLearningsPath);
       return {
         ok: true,
         action: 'learn-manual',
         learnings: payload,
         learnedPatterns: analysis.patterns.length,
-        note: `已拆解 ${samples.length} 条高曝光样本，提炼出 ${analysis.patterns.length} 条可复用套路。`,
+        note: `已拆解 ${samples.length} 条高曝光样本，提炼出 ${analysis.patterns.length} 条可复用套路、${(analysis.hotWords || []).length} 个高频曝光词。`,
       };
     }
     if (request.action === 'trigger-learn') {
@@ -4126,6 +4134,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         current.styleGuide = '';
         current.winningTopics = [];
         current.bannedTopics = [];
+        current.hotWords = [];
         current.patterns = [];
         current.history = { lastRunAt: null, considered: 0, learned: 0, note: '', posts: [] };
       }, activeLearningsPath);

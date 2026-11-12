@@ -1817,11 +1817,14 @@ test('learning prompt block carries topics but never overrides the writing style
     winningTopics: ['打工账本'],
     bannedTopics: ['股市理财'],
     patterns: [{ title: '反差', structure: '反问—举例—自嘲', hooks: ['谁还没破防过'] }],
+    hotWords: ['反差', '破防'],
   });
   assert.match(block, /反差开局再落地/);
   assert.match(block, /打工账本/);
   assert.match(block, /股市理财/);
   assert.match(block, /谁还没破防过/);
+  assert.match(block, /高曝光用词/);
+  assert.match(block, /破防/);
   // The style remains the caller's; the block only says to borrow structure.
   assert.match(block, /行文风格仍必须严格遵循/);
   assert.doesNotMatch(block, /请改用|改为白话|英文/);
