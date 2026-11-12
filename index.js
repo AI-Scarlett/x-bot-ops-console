@@ -330,15 +330,29 @@ export function mutateSerials(mutator, serialsPath = SERIALS_PATH) {
   }, `${serialsPath}.lock`, '连载长文');
 }
 
+// The writing style a serial is written in. It is per serial, so one story
+// can be classical while another is plain or English.
+const SERIAL_STYLE_BLOCKS = {
+  classical: '【本篇文风：文言文（硬性要求）】通篇写成浅显文言：可用之、乎、者、也、矣、焉、乃、其、卿、余；称呼用「卿」「余」，不要出现「的、了、吗、呢、吧」等白话虚词。',
+  vernacular: '【本篇文风：现代白话文（硬性要求）】用干净利落的现代汉语写，可以用「我、你、的、了」；称呼只用「你」，不要用「尔、君、卿」这类文言称呼，也不要堆砌之乎者也。',
+  english: '【本篇文风：English（硬性要求）】Write the whole chapter in natural English. No Chinese characters at all, no translationese, no emoji spam.',
+};
+
+export function serialStyleBlock(styleKey) {
+  return SERIAL_STYLE_BLOCKS[String(styleKey || '').trim().toLowerCase()] || '';
+}
+
 // The chapter prompt: the premise, the reference and everything already written,
 // so a new chapter continues instead of restarting.
 export function serialChapterPrompt({ task, cast, chapterNo }) {
   const people = (cast || []).map(person => `- ${person.name}${person.gender ? `（${person.gender}）` : ''}：${person.persona}`).join('\n');
   const written = (task.chapters || []).map(chapter => `第${chapter.no}章 ${chapter.title || ''}\n${chapter.text}`).join('\n\n');
+  const style = serialStyleBlock(task.style);
   return [
     '你在续写一部连载长文。只输出本章正文，不要前言、不要解释、不要复述设定。',
     `这一章是第${chapterNo}章。`,
     task.title ? `作品名：${task.title}` : '',
+    style ? `\n${style}` : '',
     task.premise ? `\n【基础剧情与设定】\n${task.premise}` : '',
     task.reference ? `\n【内容参考（只借鉴其写法、节奏和细节，不要照抄，不要写成同一件事）】\n${task.reference}` : '',
     people ? `\n【出场人物（用列出的称呼，性格与关系按人设写，正文不要出现用户名和 @）】\n${people}` : '',
@@ -3393,6 +3407,10 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       const premise = String(request.premise || '').trim().slice(0, SERIAL_LIMITS.premiseChars);
       if (!premise) throw new TypeError('请先写基础剧情和设定');
       const reference = String(request.reference || '').trim().slice(0, SERIAL_LIMITS.referenceChars);
+      // Writing style and a fixed model, both per serial.
+      const rawStyle = String(request.style || '').trim().toLowerCase();
+      const style = ['classical', 'vernacular', 'english'].includes(rawStyle) ? rawStyle : '';
+      const model = String(request.model || '').trim().slice(0, 60);
       const cast = [...new Set((Array.isArray(request.cast) ? request.cast : []).map(handle => String(handle || '').trim().replace(/^@/, '').toLowerCase()).filter(Boolean))].slice(0, SERIAL_LIMITS.cast);
       // People who are not on the priority list: a name and a persona is enough.
       const customCast = (Array.isArray(request.customCast) ? request.customCast : [])
@@ -3410,6 +3428,8 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
           existing.title = title;
           existing.premise = premise;
           existing.reference = reference;
+          existing.style = style;
+          existing.model = model;
           existing.cast = cast;
           existing.customCast = customCast;
           existing.updatedAt = new Date(clock()).toISOString();
@@ -3418,7 +3438,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         }
         saved = {
           id: `serial_${clock()}_${Math.random().toString(36).slice(2, 6)}`,
-          title, premise, reference, cast, customCast,
+          title, premise, reference, style, model, cast, customCast,
           chapters: [],
           createdAt: new Date(clock()).toISOString(),
           updatedAt: new Date(clock()).toISOString(),
@@ -3446,7 +3466,11 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         ...storyCast(sharedCfg).filter(person => (task.cast || []).includes(person.handle)),
         ...(task.customCast || []).map(person => ({ name: person.name, gender: '', persona: person.persona })),
       ];
-      const model = String(request.model || '').trim().slice(0, 60) || sharedCfg.postSettings?.model || sharedCfg.model?.name || 'gpt-6-luna';
+      // A serial can pin its own model; the request may override it for one
+      // chapter.
+      const model = String(request.model || '').trim().slice(0, 60)
+        || task.model
+        || sharedCfg.postSettings?.model || sharedCfg.model?.name || 'gpt-6-luna';
       const port = sharedCfg.model?.endpointPort || 3040;
       const prompt = serialChapterPrompt({ task, cast, chapterNo });
       const raw = await localModelChat(prompt, { model, port, temperature: 0.8, maxTokens: 4000, timeoutMs: 180000 });

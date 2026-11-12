@@ -607,6 +607,27 @@ test('the route can swap in a newer service without the host reloading the plugi
   assert.equal((await after.json()).version, 'new');
 });
 
+test('a serial keeps its own writing style and model, and the style reaches the chapter prompt', async () => {
+  const f = fixture();
+  try {
+    const service = createService({ paths: f.paths, configPath: join(f.dir, 'config.json'), platform: 'darwin' });
+    const created = await service.action({
+      action: 'save-serial', title: '玲的夜谈', premise: '设定',
+      style: 'classical', model: 'grok-4.7-build-fast',
+    });
+    assert.equal(created.serial.style, 'classical');
+    assert.equal(created.serial.model, 'grok-4.7-build-fast');
+    // An unknown style is dropped rather than written into the prompt.
+    const odd = await service.action({ action: 'save-serial', title: '另一部', premise: '设定', style: 'klingon' });
+    assert.equal(odd.serial.style, '');
+    const { serialChapterPrompt, serialStyleBlock } = await import('../index.js');
+    const prompt = serialChapterPrompt({ task: created.serial, cast: [], chapterNo: 1 });
+    assert.match(prompt, /文言文/);
+    assert.match(serialStyleBlock('english'), /English/);
+    assert.equal(serialStyleBlock('klingon'), '');
+  } finally { f.cleanup(); }
+});
+
 test('the server lists the actions it supports so a stale panel can be detected', async () => {
   const f = fixture();
   try {
