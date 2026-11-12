@@ -3079,6 +3079,11 @@ export function readPluginVersion(packageUrl = new URL('./package.json', import.
   }
 }
 
+// The version of the code that is actually running. The badge used to read
+// package.json on every request, so after an update it showed the new
+// version while the old code was still serving requests.
+const LOADED_VERSION = readPluginVersion();
+
 export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGETS, configPath = CONFIG_PATH, targetsPath = null, platform = process.platform, spawnProcess = spawn, queuePath = null, learningsPath = null, backupDir = null, trendsPath = null, manualDraftsPath = null } = {}) {
   let activeConfigPath = configPath;
   const isCustomConfig = activeConfigPath && dirname(activeConfigPath) !== dirname(CONFIG_PATH);
@@ -3278,7 +3283,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       }
     } catch {}
     return {
-      ok: true, pluginVersion: readPluginVersion(), actions: SERVICE_ACTIONS, config: maskTrendCookies(shared.config), configSource: shared.source, configError: shared.error || '', configPath: activeConfigPath, configHash,
+      ok: true, pluginVersion: LOADED_VERSION, diskVersion: readPluginVersion(), actions: SERVICE_ACTIONS, config: maskTrendCookies(shared.config), configSource: shared.source, configError: shared.error || '', configPath: activeConfigPath, configHash,
       runtimeConfigApplied: shared.source === 'shared', runtimeCapabilities, fieldSide: FIELD_SIDE,
       dshModels,
       postQueue: postQueue.queue,

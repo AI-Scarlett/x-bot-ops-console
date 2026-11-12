@@ -769,9 +769,13 @@ window.__ModuleLoader__.load({
             h('p', { style: { margin: '4px 0 0', fontSize: 13, color: C.muted } }, t('subtitle'))),
           h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
             h('span', {
-              title: state?.pluginVersion ? '版本号读取自已安装插件的 package.json' : '宿主进程还没重新加载插件（重启 DSH 后自动显示真实版本）',
-              style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: state?.pluginVersion ? C.muted : C.accent, border: `1px solid ${C.border}` },
-            }, state?.pluginVersion ? `v${state.pluginVersion}` : 'v? 待宿主重载'),
+              title: state?.pluginVersion
+                ? `正在运行 v${state.pluginVersion}${state?.diskVersion && state.diskVersion !== state.pluginVersion ? `（磁盘上已是 v${state.diskVersion}，刷新 DSH 窗口后生效）` : ''}`
+                : '宿主进程还没重新加载插件',
+              style: { padding: '4px 8px', borderRadius: 6, fontSize: 11, background: C.layerTwo, color: state?.pluginVersion ? (state?.diskVersion && state.diskVersion !== state.pluginVersion ? C.accent : C.muted) : C.accent, border: `1px solid ${C.border}` },
+            }, state?.pluginVersion
+              ? (state?.diskVersion && state.diskVersion !== state.pluginVersion ? `v${state.pluginVersion} → v${state.diskVersion}` : `v${state.pluginVersion}`)
+              : 'v? 待宿主重载'),
             h('button', {
               type: 'button',
               disabled: busy || updating,
