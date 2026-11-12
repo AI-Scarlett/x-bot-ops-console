@@ -587,6 +587,26 @@ test('service with custom config isolates state paths and never touches producti
   } finally { f.cleanup(); }
 });
 
+test('the route can swap in a newer service without the host reloading the plugin', async () => {
+  const calls = [];
+  const ctx = {
+    connection: { fetch: { register(route) { calls.push(route); return () => {}; } } },
+    effect() {},
+  };
+  const older = { inspect: async () => ({ ok: true, version: 'old' }), action: async () => ({ ok: true, version: 'old' }) };
+  const newer = { inspect: async () => ({ ok: true, version: 'new' }), action: async () => ({ ok: true, version: 'new' }) };
+  let current = older;
+  const { installRoute } = await import('../index.js');
+  installRoute(ctx, async () => current, { desktop: false });
+  const route = calls[0];
+  const response = await route.fetch({ method: 'GET' });
+  assert.equal((await response.json()).version, 'old');
+  // The host keeps the module it imported; the plugin hands over a new one.
+  current = newer;
+  const after = await route.fetch({ method: 'GET' });
+  assert.equal((await after.json()).version, 'new');
+});
+
 test('the server lists the actions it supports so a stale panel can be detected', async () => {
   const f = fixture();
   try {

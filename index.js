@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 import { basename, dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { createConnection } from 'node:net';
 import http from 'node:http';
@@ -4440,17 +4441,21 @@ export const SERVICE_ACTIONS = [
 export function installRoute(ctx, service, { desktop = false } = {}) {
   if (typeof ctx.connection?.fetch?.register !== 'function') throw new Error('DSH Connection Fetch service is unavailable');
   const routePath = desktop ? DESKTOP_ROUTE : WEB_ROUTE;
+  // The service may be a provider so a newer module on disk can take over
+  // without the host having to reload the plugin.
+  const resolve = async () => (typeof service === 'function' ? await service() : service);
   const registered = ctx.connection.fetch.register({
     path: routePath,
     methods: ['GET', 'POST'],
     requestBody: 'buffered',
     fetch: async request => {
       try {
-        if (request.method === 'GET') return new Response(JSON.stringify(await service.inspect()), { status: 200, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'; frame-ancestors 'none'" } });
+        const current = await resolve();
+        if (request.method === 'GET') return new Response(JSON.stringify(await current.inspect()), { status: 200, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'; frame-ancestors 'none'" } });
         if (request.method !== 'POST') return new Response(JSON.stringify({ ok: false, error: '不支持此请求方法' }), { status: 405, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
         const body = await request.arrayBuffer();
         if (body.byteLength > MAX_BODY) return new Response(JSON.stringify({ ok: false, error: '请求内容过大' }), { status: 413, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
-        const result = await service.action(JSON.parse(new TextDecoder().decode(body)));
+        const result = await current.action(JSON.parse(new TextDecoder().decode(body)));
         return new Response(JSON.stringify({ ok: true, value: result }), { status: 200, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'; frame-ancestors 'none'" } });
       } catch (error) {
         const status = error instanceof RangeError ? 413 : 400;
@@ -4461,10 +4466,37 @@ export function installRoute(ctx, service, { desktop = false } = {}) {
   ctx.effect(() => registered, 'x-bot-ops-console: authenticated Connection Fetch route');
 }
 export const inject = ['connection'];
+
+// The host imports this module once and keeps it in memory, so an update that
+// replaces the files on disk would otherwise leave the old server running and
+// the newer panel would fail with "未知操作类型". Watch the file and re-import
+// the module when it changes.
+function moduleStamp() {
+  try { return statSync(fileURLToPath(import.meta.url)).mtimeMs; } catch { return 0; }
+}
+
 export function apply(ctx) {
-  const service = createService({ targetsPath: TARGETS_PATH });
   const desktop = ctx.profileContext?.name === 'desktop';
-  installRoute(ctx, service, { desktop });
+  let service = createService({ targetsPath: TARGETS_PATH });
+  let stamp = moduleStamp();
+  const resolve = async () => {
+    const current = moduleStamp();
+    if (current && current !== stamp) {
+      try {
+        const fresh = await import(`${import.meta.url}?v=${current}`);
+        const rebuilt = fresh.createService({ targetsPath: TARGETS_PATH });
+        service = rebuilt;
+        stamp = current;
+        console.log('[x-bot-ops-console] reloaded the server module after an update');
+      } catch (error) {
+        // A half-written file during an update: keep the old service and try
+        // again on the next request.
+        console.error('[x-bot-ops-console] could not reload the server module:', error?.message || error);
+      }
+    }
+    return service;
+  };
+  installRoute(ctx, resolve, { desktop });
 }
 
 export { DEFAULT_CONFIG, TIMING_BOUNDS, TIER_IDS, validateConfig };
