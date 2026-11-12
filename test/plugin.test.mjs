@@ -597,6 +597,11 @@ test('a serial stays in its own store and never enters the post queue', async ()
     });
     assert.equal(created.serials.length, 1);
     assert.deepEqual(created.serial.cast, ['ling']);
+    const withCustom = await service.action({
+      action: 'save-serial', id: created.serial.id, title: '玲的夜谈', premise: '玲与叙述者相识于茶肆，约定逐夜相见。',
+      customCast: [{ name: '王小妹', persona: '玲的闺蜜' }, { name: '', persona: '没称呼的会被丢掉' }],
+    });
+    assert.deepEqual(withCustom.serial.customCast, [{ name: '王小妹', persona: '玲的闺蜜' }]);
     assert.equal(created.serial.chapters.length, 0);
     const state = await service.inspect();
     assert.equal(state.serials.length, 1);

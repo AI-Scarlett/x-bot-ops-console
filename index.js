@@ -3388,6 +3388,14 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       if (!premise) throw new TypeError('请先写基础剧情和设定');
       const reference = String(request.reference || '').trim().slice(0, SERIAL_LIMITS.referenceChars);
       const cast = [...new Set((Array.isArray(request.cast) ? request.cast : []).map(handle => String(handle || '').trim().replace(/^@/, '').toLowerCase()).filter(Boolean))].slice(0, SERIAL_LIMITS.cast);
+      // People who are not on the priority list: a name and a persona is enough.
+      const customCast = (Array.isArray(request.customCast) ? request.customCast : [])
+        .map(person => ({
+          name: String(person?.name || '').trim().slice(0, 30),
+          persona: String(person?.persona || '').trim().slice(0, 1000),
+        }))
+        .filter(person => person.name && person.persona)
+        .slice(0, SERIAL_LIMITS.cast);
       const id = String(request.id || '').trim();
       let saved = null;
       const store = mutateSerials(current => {
@@ -3397,13 +3405,14 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
           existing.premise = premise;
           existing.reference = reference;
           existing.cast = cast;
+          existing.customCast = customCast;
           existing.updatedAt = new Date(clock()).toISOString();
           saved = existing;
           return;
         }
         saved = {
           id: `serial_${clock()}_${Math.random().toString(36).slice(2, 6)}`,
-          title, premise, reference, cast,
+          title, premise, reference, cast, customCast,
           chapters: [],
           createdAt: new Date(clock()).toISOString(),
           updatedAt: new Date(clock()).toISOString(),
@@ -3427,7 +3436,10 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       if (!task) throw new TypeError('找不到这部连载');
       if ((task.chapters || []).length >= SERIAL_LIMITS.chapters) throw new TypeError(`一部连载最多 ${SERIAL_LIMITS.chapters} 章`);
       const chapterNo = (task.chapters || []).length + 1;
-      const cast = storyCast(sharedCfg).filter(person => (task.cast || []).includes(person.handle));
+      const cast = [
+        ...storyCast(sharedCfg).filter(person => (task.cast || []).includes(person.handle)),
+        ...(task.customCast || []).map(person => ({ name: person.name, gender: '', persona: person.persona })),
+      ];
       const model = String(request.model || '').trim().slice(0, 60) || sharedCfg.postSettings?.model || sharedCfg.model?.name || 'gpt-6-luna';
       const port = sharedCfg.model?.endpointPort || 3040;
       const prompt = serialChapterPrompt({ task, cast, chapterNo });

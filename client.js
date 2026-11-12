@@ -419,7 +419,7 @@ window.__ModuleLoader__.load({
       const [draftGenMaxChars, setDraftGenMaxChars] = React.useState(genPrefs.maxChars === undefined || genPrefs.maxChars === null ? '' : genPrefs.maxChars);
       const [draftReference, setDraftReference] = React.useState(typeof genPrefs.reference === 'string' ? genPrefs.reference : '');
       const [draftCast, setDraftCast] = React.useState(Array.isArray(genPrefs.cast) ? genPrefs.cast : []);
-      const [serialForm, setSerialForm] = React.useState({ id: '', title: '', premise: '', reference: '', cast: [] });
+      const [serialForm, setSerialForm] = React.useState({ id: '', title: '', premise: '', reference: '', cast: [], customCast: [] });
       const [serialOpen, setSerialOpen] = React.useState('');
       const [serialWriting, setSerialWriting] = React.useState(false);
       const [draftAnalysis, setDraftAnalysis] = React.useState('');
@@ -2745,7 +2745,7 @@ window.__ModuleLoader__.load({
               placeholder: '内容参考（可选）：贴一段你想借鉴的文字，只学写法和节奏，不会照抄。',
               value: serialForm.reference, onChange: e => setSerialForm(form => ({ ...form, reference: e.target.value })),
             }),
-            h('div', { style: { fontSize: 12, color: C.muted, margin: '8px 0 4px' } }, '出场人物（从重点名单里选，需先在名单里写好人物人设）：'),
+            h('div', { style: { fontSize: 12, color: C.muted, margin: '8px 0 4px' } }, '出场人物 · 从重点名单里选（需先在名单里写好人物人设）：'),
             (() => {
               const people = Object.entries(config?.handleProfiles || {})
                 .filter(([, profile]) => profile && String(profile.persona || '').trim())
@@ -2762,14 +2762,33 @@ window.__ModuleLoader__.load({
                   }),
                   person.name)));
             })(),
+            h('div', { style: { fontSize: 12, color: C.muted, margin: '10px 0 4px' } }, '出场人物 · 自定义（不在重点名单里的人，写称呼和人设）：'),
+            h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
+              ...(serialForm.customCast || []).map((person, index) => h('div', { key: index, style: { display: 'flex', gap: 6, alignItems: 'flex-start' } },
+                h('input', {
+                  style: { ...inputStyle, flex: '0 0 120px', margin: 0 }, maxLength: 30, placeholder: '称呼',
+                  value: person.name, onChange: e => setSerialForm(form => ({ ...form, customCast: form.customCast.map((item, i) => i === index ? { ...item, name: e.target.value } : item) })),
+                }),
+                h('textarea', {
+                  style: { ...inputStyle, flex: 1, margin: 0, minHeight: 40 }, maxLength: 1000, placeholder: '人设：性格、与其他人的关系、能写进故事的经历',
+                  value: person.persona, onChange: e => setSerialForm(form => ({ ...form, customCast: form.customCast.map((item, i) => i === index ? { ...item, persona: e.target.value } : item) })),
+                }),
+                h('button', {
+                  type: 'button', style: { ...buttonStyle(false), padding: '4px 8px', color: C.error },
+                  onClick: () => setSerialForm(form => ({ ...form, customCast: form.customCast.filter((_, i) => i !== index) })),
+                }, '✕'))),
+              h('button', {
+                type: 'button', style: { ...buttonStyle(false), alignSelf: 'flex-start', fontSize: 12 },
+                onClick: () => setSerialForm(form => ({ ...form, customCast: [...(form.customCast || []), { name: '', persona: '' }] })),
+              }, '＋ 添加自定义人物')),
             h('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 } },
-              serialForm.id ? h('button', { type: 'button', style: buttonStyle(false), onClick: () => setSerialForm({ id: '', title: '', premise: '', reference: '', cast: [] }) }, '取消编辑') : null,
+              serialForm.id ? h('button', { type: 'button', style: buttonStyle(false), onClick: () => setSerialForm({ id: '', title: '', premise: '', reference: '', cast: [], customCast: [] }) }, '取消编辑') : null,
               h('button', {
                 type: 'button', disabled: busy, style: buttonStyle(true),
                 onClick: async () => {
                   try {
                     const res = await act('save-serial', undefined, serialForm);
-                    setSerialForm({ id: '', title: '', premise: '', reference: '', cast: [] });
+                    setSerialForm({ id: '', title: '', premise: '', reference: '', cast: [], customCast: [] });
                     if (res?.serial?.id) setSerialOpen(res.serial.id);
                     setNotice(res?.note || '连载已保存。');
                   } catch (err) { setError(err.message || String(err)); }
@@ -2781,12 +2800,12 @@ window.__ModuleLoader__.load({
                 h('h2', { style: { margin: 0, fontSize: 15 } }, serial.title),
                 h('div', { style: { fontSize: 12, color: C.faint, marginTop: 3 } },
                   `${(serial.chapters || []).length} 章`,
-                  (serial.cast || []).length ? ` · 出场 ${serial.cast.length} 人` : ' · 未选出场人物')),
+                  ((serial.cast || []).length + (serial.customCast || []).length) ? ` · 出场 ${(serial.cast || []).length + (serial.customCast || []).length} 人` : ' · 未选出场人物')),
               h('div', { style: { display: 'flex', gap: 6 } },
                 h('button', { type: 'button', style: buttonStyle(false), onClick: () => setSerialOpen(serialOpen === serial.id ? '' : serial.id) }, serialOpen === serial.id ? '收起' : '展开'),
                 h('button', {
                   type: 'button', style: buttonStyle(false),
-                  onClick: () => setSerialForm({ id: serial.id, title: serial.title, premise: serial.premise, reference: serial.reference || '', cast: serial.cast || [] }),
+                  onClick: () => setSerialForm({ id: serial.id, title: serial.title, premise: serial.premise, reference: serial.reference || '', cast: serial.cast || [], customCast: serial.customCast || [] }),
                 }, '改设定'),
                 h('button', {
                   type: 'button', disabled: busy || serialWriting, style: buttonStyle(true),
