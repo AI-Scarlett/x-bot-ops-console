@@ -587,6 +587,20 @@ test('service with custom config isolates state paths and never touches producti
   } finally { f.cleanup(); }
 });
 
+test('the server lists the actions it supports so a stale panel can be detected', async () => {
+  const f = fixture();
+  try {
+    const service = createService({ paths: f.paths, configPath: join(f.dir, 'config.json'), platform: 'darwin' });
+    const state = await service.inspect();
+    assert.ok(Array.isArray(state.actions), 'the panel needs to know what the server supports');
+    for (const action of ['save-serial', 'write-serial-chapter', 'enqueue-post', 'generate-draft-posts']) {
+      assert.ok(state.actions.includes(action), `${action} must be advertised`);
+    }
+    // An unknown action names itself instead of a bare "unknown action".
+    await assert.rejects(service.action({ action: 'save-serial-v2' }), /未知操作类型「save-serial-v2」/);
+  } finally { f.cleanup(); }
+});
+
 test('a serial stays in its own store and never enters the post queue', async () => {
   const f = fixture();
   try {

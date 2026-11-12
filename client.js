@@ -93,6 +93,20 @@ window.__ModuleLoader__.load({
       } catch { /* private mode or quota: the panel still works, just forgets */ }
     }
 
+    // Actions this panel needs from the server. The browser always loads the
+    // newest client.js, but the host keeps the server module in memory, so a
+    // new panel can talk to an old server. The server lists what it supports.
+    const REQUIRED_ACTIONS = [
+      'save-config', 'enqueue-post', 'remove-manual-draft', 'clear-manual-drafts',
+      'generate-draft-posts', 'analyze-reference-post', 'save-serial', 'delete-serial',
+      'write-serial-chapter', 'delete-serial-chapter', 'learn-manual', 'clear-learnings',
+      'promote-topic', 'save-style-guide', 'trigger-learn', 'fetch-trends', 'update-plugin',
+    ];
+    function staleServerActions(actions) {
+      if (!Array.isArray(actions)) return [];
+      return REQUIRED_ACTIONS.filter(action => !actions.includes(action));
+    }
+
     // The 24 hour promise has to be visible: when the library drops a draft,
     // and how long the oldest one still has.
     function draftCreatedText(item) {
@@ -395,6 +409,7 @@ window.__ModuleLoader__.load({
 
     function Panel() {
       const [state, setState] = React.useState(null);
+      const [staleActions, setStaleActions] = React.useState([]);
       const [error, setError] = React.useState('');
       const [notice, setNotice] = React.useState('');
       const [busy, setBusy] = React.useState(false);
@@ -451,6 +466,9 @@ window.__ModuleLoader__.load({
           const data = await response.json();
           if (!response.ok || data.ok === false) throw new Error(data.error || `请求失败，状态码 ${response.status}`);
           setState(data);
+          // The server says which actions it knows; anything missing means the
+          // host still runs an older module than this panel.
+          setStaleActions(staleServerActions(data.actions));
           serverSnapshot.current = data.config;
           if (!draftDirty && !preserveDraft) {
             setConfig(data.config);
@@ -480,7 +498,16 @@ window.__ModuleLoader__.load({
         try {
           const response = await fetch(ROUTE, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action, target, ...extra }) });
           const data = await response.json();
-          if (!response.ok || data.ok !== true) throw new Error(data.error || `请求失败，状态码 ${response.status}`);
+          if (!response.ok || data.ok !== true) {
+            const message = String(data.error || `请求失败，状态码 ${response.status}`);
+            // An action the server does not know means the host still runs an
+            // older module than this panel.
+            if (message.includes('未知操作类型')) {
+              setStaleActions(staleServerActions(state?.actions).concat(action));
+              throw new Error(`面板比服务端新，服务端还不支持「${action}」。请按 Cmd+R 刷新 DSH 窗口让服务端加载新版本，再重试。`);
+            }
+            throw new Error(message);
+          }
           const value = data.value || {};
           if (action === 'save-config') { setNotice(value.note || t('saved')); setConfig(value.config); setConfigHash(value.configHash ?? null); latestSaveHash.current = value.configHash ?? null; setDraftDirty(false); }
           if (action === 'clear-learnings') setLearningsClearPending(false);
@@ -808,6 +835,11 @@ window.__ModuleLoader__.load({
           h('button', { type: 'button', style: tabItemStyle('learning'), onClick: () => setActiveTab('learning') }, '🧠 发帖学习'),
           h('button', { type: 'button', style: tabItemStyle('profile'), onClick: () => setActiveTab('profile') }, t('tabProfile')),
           h('button', { type: 'button', style: tabItemStyle('tiers'), onClick: () => setActiveTab('tiers') }, t('tabTiers'))),
+
+        staleActions.length ? h('div', { style: { padding: '10px 12px', borderRadius: 8, background: C.raised, border: `1px solid ${C.error}`, color: C.error, fontSize: 12, lineHeight: 1.7, marginBottom: 10 } },
+          `面板比服务端新，服务端还不支持：${staleActions.join('、')}。`,
+          h('br', null),
+          '按 Cmd+R 刷新 DSH 窗口让服务端加载新版本，或点右上角「🔄 自动更新」后再刷新本页面。') : null,
 
         // TAB 1: 👥 重点名单与个性化配置（独立维护专区）
         activeTab === 'tiers' ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
@@ -2799,8 +2831,8 @@ window.__ModuleLoader__.load({
               h('div', null,
                 h('h2', { style: { margin: 0, fontSize: 15 } }, serial.title),
                 h('div', { style: { fontSize: 12, color: C.faint, marginTop: 3 } },
-                  `${(serial.chapters || []).length} 章`,
-                  ((serial.cast || []).length + (serial.customCast || []).length) ? ` · 出场 ${(serial.cast || []).length + (serial.customCast || []).length} 人` : ' · 未选出场人物')),
+                  (serial.chapters || []).length ? `已写 ${(serial.chapters || []).length} 章` : '还没写。点右边「写第 1 章」，写好后在这张卡片里复制，自己去发。',
+                  ((serial.cast || []).length + (serial.customCast || []).length) ? ` · 出场 ${(serial.cast || []).length + (serial.customCast || []).length} 人` : '')),
               h('div', { style: { display: 'flex', gap: 6 } },
                 h('button', { type: 'button', style: buttonStyle(false), onClick: () => setSerialOpen(serialOpen === serial.id ? '' : serial.id) }, serialOpen === serial.id ? '收起' : '展开'),
                 h('button', {
@@ -2819,7 +2851,7 @@ window.__ModuleLoader__.load({
                     } catch (err) { setError(err.message || String(err)); }
                     finally { setSerialWriting(false); }
                   },
-                }, serialWriting ? '写作中...' : '✍️ 写下一章'),
+                }, serialWriting ? '写作中...' : ((serial.chapters || []).length ? '✍️ 写下一章' : '✍️ 写第 1 章')),
                 h('button', {
                   type: 'button', style: { ...buttonStyle(false), color: C.error, borderColor: C.error },
                   onClick: () => setConfirmModal({

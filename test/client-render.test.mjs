@@ -95,13 +95,24 @@ function mount({ config = sampleConfig(), state = sampleState, tab = 'tiers' } =
     useCallback(fn) { return fn; },
     Component: class { constructor(props) { this.props = props; } },
     __setters: [],
-    // useState slots are positional: 0 state, 1 error, 2 notice, 3 busy,
-    // 4 updating, 5 config, 6 configHash, 7 draftDirty, 8 activeTab.
+    // useState slots are positional. The names below are looked up in the
+    // panel source so adding a state does not silently shift the seed.
     __seed: undefined,
   };
   // state.config is the last saved snapshot from inspect(); keep it a clone so
   // in-page edits do not silently mutate the "already saved" copy.
-  const seed = { 0: { ...state, config: structuredClone(config) }, 5: config, 6: 'hash-1', 8: tab };
+  const slotOf = name => {
+    const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+    const body = source.split('function Panel')[1] || '';
+    const before = body.split(`const [${name}`)[0] || '';
+    return (before.match(/useState\(/g) || []).length;
+  };
+  const seed = {
+    [slotOf('state')]: { ...state, config: structuredClone(config) },
+    [slotOf('config')]: config,
+    [slotOf('configHash')]: 'hash-1',
+    [slotOf('activeTab')]: tab,
+  };
   for (const [index, value] of Object.entries(seed)) hooks[Number(index)] = value;
 
   const locale = { register() {}, bind() { return key => key; } };
@@ -157,8 +168,8 @@ function mount({ config = sampleConfig(), state = sampleState, tab = 'tiers' } =
   };
 
   const api = {
-    React, hooks, requests, render, storage, fakeWindow, setters: React.__setters,
-    config: () => hooks[5],
+    React, hooks, requests, render, storage, fakeWindow, setters: React.__setters, slotOf,
+    config: () => hooks[slotOf('config')],
     find: (tree, predicate) => elements(tree).find(predicate),
     findByText: (tree, text) => elements(tree).find(node => node.type && typeof node.type !== 'function' && flatText(node).includes(text)),
     click: async (tree, text) => {
@@ -582,8 +593,7 @@ test('a theme row can pin its own character range, and clearing it falls back', 
 test('manual draft delete posts the draft id and text instead of filtering by index', async () => {
   const app = mount({ tab: 'manualGen' });
   try {
-    // previewDrafts is the 26th useState in Panel.
-    app.hooks[26] = [
+    app.hooks[app.slotOf('previewDrafts')] = [
       { id: 'draft_keep', text: '留下来的稿' },
       { id: 'draft_drop', text: '要点掉的稿' },
     ];
@@ -601,7 +611,7 @@ test('manual draft delete posts the draft id and text instead of filtering by in
 test('the candidate board shows the 24 hour retention and asks before clearing it', async () => {
   const app = mount({ tab: 'manualGen' });
   try {
-    app.hooks[26] = [
+    app.hooks[app.slotOf('previewDrafts')] = [
       { id: 'a', text: '第一条候选稿', createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 3600 * 1000).toISOString() },
       { id: 'b', text: '第二条候选稿', createdAt: new Date(Date.now() - 3600 * 1000).toISOString(), expiresAt: new Date(Date.now() + 23 * 3600 * 1000).toISOString() },
     ];

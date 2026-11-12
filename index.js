@@ -3277,7 +3277,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       }
     } catch {}
     return {
-      ok: true, pluginVersion: readPluginVersion(), config: maskTrendCookies(shared.config), configSource: shared.source, configError: shared.error || '', configPath: activeConfigPath, configHash,
+      ok: true, pluginVersion: readPluginVersion(), actions: SERVICE_ACTIONS, config: maskTrendCookies(shared.config), configSource: shared.source, configError: shared.error || '', configPath: activeConfigPath, configHash,
       runtimeConfigApplied: shared.source === 'shared', runtimeCapabilities, fieldSide: FIELD_SIDE,
       dshModels,
       postQueue: postQueue.queue,
@@ -4295,7 +4295,10 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       }, activeLearningsPath);
       return { ok: true, action: 'clear-learnings', learnings: payload, note: '学习成果已全部清空。' };
     }
-    if (!['pause', 'resume', 'start', 'stop', 'restart', 'restart-watchdog'].includes(request.action)) throw new TypeError('未知操作类型');
+    if (!['pause', 'resume', 'start', 'stop', 'restart', 'restart-watchdog'].includes(request.action)) {
+      // The panel can be newer than the module the host loaded. Say so.
+      throw new TypeError(`未知操作类型「${request.action}」。面板可能比服务端新：请按 Cmd+R 刷新 DSH 窗口，或点右上角「🔄 自动更新」后再试。`);
+    }
     if (!['comment', 'reply', 'post', 'profile'].includes(request.target)) throw new TypeError('目标必须是评论或提及回复');
     if (platform !== 'darwin') throw new Error('进程控制仅支持 macOS');
     const target = currentTargets()[request.target];
@@ -4419,6 +4422,21 @@ function send(res, status, value) {
   const data = Buffer.from(JSON.stringify(value));
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'content-length': data.length, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'; frame-ancestors 'none'" }); res.end(data);
 }
+// Every action the service understands. The panel compares this list with the
+// one it needs: when the browser has a newer client.js than the server module
+// the host has loaded, the missing action is named instead of failing with a
+// bare "未知操作类型".
+export const SERVICE_ACTIONS = [
+  'state', 'save-config', 'restore-config-backup', 'pick-folder', 'pause', 'resume',
+  'start', 'stop', 'restart', 'restart-watchdog', 'start-watchdog',
+  'enqueue-post', 'remove-queued-post', 'clear-post-queue',
+  'remove-manual-draft', 'clear-manual-drafts', 'generate-draft-posts', 'analyze-reference-post',
+  'save-serial', 'delete-serial', 'write-serial-chapter', 'delete-serial-chapter',
+  'learn-manual', 'remove-learning', 'clear-learnings', 'promote-topic', 'save-style-guide',
+  'trigger-learn', 'fetch-trends', 'ensure-chrome', 'chrome-login-status', 'sync-login',
+  'update-plugin', 'cache-cleanup',
+];
+
 export function installRoute(ctx, service, { desktop = false } = {}) {
   if (typeof ctx.connection?.fetch?.register !== 'function') throw new Error('DSH Connection Fetch service is unavailable');
   const routePath = desktop ? DESKTOP_ROUTE : WEB_ROUTE;
