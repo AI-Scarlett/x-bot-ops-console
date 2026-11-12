@@ -3297,7 +3297,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       }
     } catch {}
     return {
-      ok: true, pluginVersion: LOADED_VERSION, diskVersion: readPluginVersion(), actions: SERVICE_ACTIONS, config: maskTrendCookies(shared.config), configSource: shared.source, configError: shared.error || '', configPath: activeConfigPath, configHash,
+      ok: true, pluginVersion: LOADED_VERSION, diskVersion: readPluginVersion(), actions: SERVICE_ACTIONS, capabilities: { serialStyle: true, serialModel: true }, config: maskTrendCookies(shared.config), configSource: shared.source, configError: shared.error || '', configPath: activeConfigPath, configHash,
       runtimeConfigApplied: shared.source === 'shared', runtimeCapabilities, fieldSide: FIELD_SIDE,
       dshModels,
       postQueue: postQueue.queue,

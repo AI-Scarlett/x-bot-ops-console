@@ -107,6 +107,16 @@ window.__ModuleLoader__.load({
       return REQUIRED_ACTIONS.filter(action => !actions.includes(action));
     }
 
+    // The writing style a serial is written in. The server applies it when it
+    // understands the field; an older server only sees the premise, so the
+    // directive is folded into the premise text as well.
+    const SERIAL_STYLE_DIRECTIVES = {
+      classical: '【本篇文风：文言文（硬性要求）】通篇写成浅显文言：可用之、乎、者、也、矣、焉、乃、其、卿、余；称呼用「卿」「余」，不要出现「的、了、吗、呢、吧」等白话虚词。',
+      vernacular: '【本篇文风：现代白话文（硬性要求）】用干净利落的现代汉语写，可以用「我、你、的、了」；称呼只用「你」，不要用「尔、君、卿」这类文言称呼，也不要堆砌之乎者也。',
+      english: '【本篇文风：English（硬性要求）】Write the whole chapter in natural English. No Chinese characters at all, no translationese, no emoji spam.',
+    };
+    const SERIAL_STYLE_LABELS = { classical: '文言文', vernacular: '白话文', english: '英文' };
+
     // The 24 hour promise has to be visible: when the library drops a draft,
     // and how long the oldest one still has.
     function draftCreatedText(item) {
@@ -2842,7 +2852,14 @@ window.__ModuleLoader__.load({
                 type: 'button', disabled: busy, style: buttonStyle(true),
                 onClick: async () => {
                   try {
-                    const res = await act('save-serial', undefined, serialForm);
+                    // An older server has no style field, so the directive goes
+                    // into the premise text it does store.
+                    const serverKnowsStyle = Boolean(state?.capabilities?.serialStyle);
+                    const directive = SERIAL_STYLE_DIRECTIVES[serialForm.style] || '';
+                    const premise = directive && !serverKnowsStyle && !serialForm.premise.includes(directive)
+                      ? `${serialForm.premise}\n\n${directive}`
+                      : serialForm.premise;
+                    const res = await act('save-serial', undefined, { ...serialForm, premise });
                     setSerialForm({ id: '', title: '', premise: '', reference: '', style: '', model: '', cast: [], customCast: [] });
                     if (res?.serial?.id) setSerialOpen(res.serial.id);
                     setNotice(res?.note || '连载已保存。');
@@ -2870,7 +2887,7 @@ window.__ModuleLoader__.load({
                     setSerialWriting(true);
                     setNotice(`正在写《${serial.title}》第${(serial.chapters || []).length + 1}章，长文需要一两分钟...`);
                     try {
-                      const res = await act('write-serial-chapter', undefined, { id: serial.id });
+                      const res = await act('write-serial-chapter', undefined, { id: serial.id, model: serial.model || '' });
                       setSerialOpen(serial.id);
                       setNotice(res?.note || '本章已写好。');
                     } catch (err) { setError(err.message || String(err)); }

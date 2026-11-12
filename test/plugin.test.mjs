@@ -637,6 +637,8 @@ test('the server lists the actions it supports so a stale panel can be detected'
     for (const action of ['save-serial', 'write-serial-chapter', 'enqueue-post', 'generate-draft-posts']) {
       assert.ok(state.actions.includes(action), `${action} must be advertised`);
     }
+    // The panel uses this to know the server applies the serial style itself.
+    assert.equal(state.capabilities.serialStyle, true);
     // An unknown action names itself instead of a bare "unknown action".
     await assert.rejects(service.action({ action: 'save-serial-v2' }), /未知操作类型「save-serial-v2」/);
   } finally { f.cleanup(); }
