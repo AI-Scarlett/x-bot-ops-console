@@ -457,6 +457,32 @@ test('the priority list lets you mark a nickname and a gender', async () => {
   } finally { app.close(); }
 });
 
+test('the learning panel exposes manual X account fetch and safe token setup', () => {
+  const state = structuredClone(sampleState);
+  state.xApi = { available: true, configured: false };
+  state.learnings.externalAccounts = [{ userId: '123456', username: 'alice', displayName: 'Alice', fetchedAt: '2026-11-12T10:00:00Z', fetchedCount: 2, quota: { limit: 50, remaining: 47, reset: 1790000000 }, metricsNotice: '当前权限没有曝光字段。', hotWords: ['反差'], patterns: [{ title: '短反差' }], posts: [{ id: '1', text: 'sample post', metrics: { likes: 2 } }] }];
+  const app = mount({ tab: 'learning', state });
+  try {
+    const tree = app.render();
+    const text = flatText(tree);
+    assert.match(text, /手动抓取他人帖子并学习套路/);
+    const tokenInput = elements(tree).find(node => node.type === 'input' && node.props?.type === 'password');
+    assert.ok(tokenInput, 'the token field must be masked');
+    assert.match(tokenInput.props.placeholder, /App-only Bearer Token/);
+    const accountInput = elements(tree).find(node => node.type === 'input' && String(node.props?.placeholder || '').includes('console.x.com'));
+    assert.ok(accountInput, 'account input must accept a console URL or handle');
+    assert.match(text, /抓取并分析/);
+    assert.match(text, /API 额度剩余 47 \/ 50/);
+    assert.match(text, /反差/);
+    assert.doesNotMatch(text, /sample post/, 'third-party post text should not be persisted in the panel result');
+    assert.match(text, /原文只用于本次分析，不保存/);
+    const token = elements(tree).find(node => node.type === 'input' && node.props?.type === 'password');
+    assert.ok(token, 'token input must be password-masked');
+    const fetchButton = elements(tree).find(node => node.type === 'button' && flatText(node).includes('抓取并分析'));
+    assert.equal(fetchButton.props.disabled, true, 'without a token, remote fetching is disabled');
+  } finally { app.close(); }
+});
+
 test('the manual batch panel renders style, model, length and reference controls', async () => {
   const app = mount({ tab: 'manualGen' });
   try {

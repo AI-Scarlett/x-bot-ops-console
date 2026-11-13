@@ -98,7 +98,8 @@ window.__ModuleLoader__.load({
     // new panel can talk to an old server. The server lists what it supports.
     const REQUIRED_ACTIONS = [
       'save-config', 'enqueue-post', 'remove-manual-draft', 'clear-manual-drafts',
-      'generate-draft-posts', 'analyze-reference-post', 'save-serial', 'delete-serial',
+      'generate-draft-posts', 'analyze-reference-post', 'set-x-api-token', 'clear-x-api-token',
+      'fetch-analyze-user', 'remove-external-account-analysis', 'save-serial', 'delete-serial',
       'write-serial-chapter', 'delete-serial-chapter', 'learn-manual', 'clear-learnings',
       'promote-topic', 'save-style-guide', 'trigger-learn', 'fetch-trends', 'update-plugin',
     ];
@@ -459,6 +460,10 @@ window.__ModuleLoader__.load({
       const [tierHandlesText, setTierHandlesText] = React.useState({});
       const [learnPasteText, setLearnPasteText] = React.useState('');
       const [learnBusy, setLearnBusy] = React.useState(false);
+      const [xApiTokenInput, setXApiTokenInput] = React.useState('');
+      const [externalAccountInput, setExternalAccountInput] = React.useState('');
+      const [externalPostCount, setExternalPostCount] = React.useState(40);
+      const [externalAnalyzeBusy, setExternalAnalyzeBusy] = React.useState(false);
       const [pickingFolder, setPickingFolder] = React.useState(false);
       const [styleGuideDraft, setStyleGuideDraft] = React.useState('');
       const [bannedDraft, setBannedDraft] = React.useState('');
@@ -2963,6 +2968,86 @@ window.__ModuleLoader__.load({
               h('input', { type: 'checkbox', checked: config?.learningSettings?.injectIntoPost !== false, onChange: e => updateConfig(c => ({ ...c, learningSettings: { ...(c.learningSettings || {}), injectIntoPost: e.target.checked } })) }),
               '✨ 生成推文时参考学习成果（套路/钩子/结构；关闭则不注入，但优先话题仍作为选题来源）', h(SideBadge, { side: 'post' }))
           ),
+
+          // 0. 手动抓取他人的公开帖子，独立于自动学习计划。
+          h('section', { style: cardStyle },
+            h('h2', { style: { margin: 0, fontSize: 15 } }, '🔎 手动抓取他人帖子并学习套路'),
+            h('p', { style: { margin: '6px 0 10px', fontSize: 12, color: C.faint, lineHeight: 1.6 } },
+              '输入公开账号的 X 链接、@用户名或数字用户 ID。只在你点击时抓取；结果保存到独立的「他人账号学习」区，不会自动发帖，也不会进入自动发帖提示词。使用官方 X API v2，只读公开账号时间线；原帖文本只用于本次分析，不会持久化保存。'),
+            h('div', { style: { padding: '10px 12px', borderRadius: 8, background: C.layerTwo, border: `1px solid ${C.border}`, marginBottom: 10 } },
+              h('div', { style: { fontSize: 12, marginBottom: 6, color: C.muted } },
+                state?.xApi?.configured
+                  ? `X API Bearer Token 已配置（${state.xApi.masked || '已隐藏'}）`
+                  : (state?.xApi?.available === false ? (state?.xApi?.reason || 'DSH 安全凭据服务不可用。') : '尚未配置 X API Bearer Token。')),
+              state?.xApi?.reason ? h('div', { style: { color: C.error, fontSize: 12, marginBottom: 6 } }, state.xApi.reason) : null,
+              h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' } },
+                h('input', {
+                  type: 'password', autoComplete: 'new-password', style: { ...inputStyle, flex: '1 1 360px', margin: 0 },
+                  placeholder: state?.xApi?.configured ? '已设置。粘贴新 Bearer Token 可轮换' : '粘贴 App-only Bearer Token（不是 App ID 或 Client Secret）',
+                  value: xApiTokenInput, onChange: e => setXApiTokenInput(e.target.value),
+                }),
+                h('button', {
+                  type: 'button', disabled: busy || !xApiTokenInput.trim(), style: buttonStyle(true),
+                  onClick: async () => {
+                    try {
+                      await act('set-x-api-token', undefined, { token: xApiTokenInput });
+                      setXApiTokenInput('');
+                      setNotice('X API Bearer Token 已安全保存；完整值不会再显示。');
+                    } catch (err) { setError(err.message || String(err)); }
+                  },
+                }, '🔐 安全保存 Token'),
+                state?.xApi?.configured ? h('button', {
+                  type: 'button', style: { ...buttonStyle(false), color: C.error },
+                  onClick: () => askConfirmText('删除保存在 DSH 安全凭据文件中的 X API Bearer Token？', async () => {
+                    const result = await act('clear-x-api-token');
+                    setNotice(result?.note || 'Token 已删除。');
+                  }),
+                }, '删除 Token') : null),
+              h('small', { style: { display: 'block', color: C.faint, fontSize: 11, marginTop: 6, lineHeight: 1.6 } },
+                'Token 存在本机独立凭据文件（权限 0600），不进共享配置、学习记录、日志或页面响应。它是本机用户级存储，同一 macOS 用户运行的本地进程仍可读取。App ID 只是标识符，不能拿它代替 Bearer Token。App-only 只能读取公开数据；额度由 X 按 App 套餐和接口限额决定，实际剩余额度以 API 响应为准。')),
+            h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' } },
+              h('input', {
+                style: { ...inputStyle, flex: '1 1 320px', margin: 0 }, maxLength: 300,
+                placeholder: 'https://console.x.com/accounts/…/apps/… 或 @username / 用户 ID',
+                value: externalAccountInput, onChange: e => setExternalAccountInput(e.target.value),
+              }),
+              h('label', { style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: C.muted } },
+                '抓取条数', h('input', { type: 'number', min: 5, max: 100, style: { ...inputStyle, width: 72, margin: 0 }, value: externalPostCount, onChange: e => setExternalPostCount(Math.max(5, Math.min(100, Number(e.target.value) || 40))) })),
+              h('button', {
+                type: 'button', disabled: busy || externalAnalyzeBusy || !externalAccountInput.trim() || state?.xApi?.configured !== true,
+                style: buttonStyle(true),
+                onClick: async () => {
+                  setExternalAnalyzeBusy(true);
+                  setError('');
+                  setNotice('正在调用 X API 获取公开帖子并分析套路与高频词…');
+                  try {
+                    const res = await act('fetch-analyze-user', undefined, { account: externalAccountInput.trim(), maxResults: externalPostCount });
+                    setNotice(res?.note || '已完成他人账号分析。');
+                  } catch (err) { setError(err.message || String(err)); }
+                  finally { setExternalAnalyzeBusy(false); }
+                },
+              }, externalAnalyzeBusy ? '⏳ 抓取并分析中…' : '🔎 抓取并分析')),
+            (state?.learnings?.externalAccounts || []).length
+              ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 } },
+                ...(state.learnings.externalAccounts || []).map(item => h('div', { key: item.userId, style: { padding: '10px 12px', borderRadius: 8, background: C.layerTwo, border: `1px solid ${C.border}` } },
+                  h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' } },
+                    h('strong', { style: { fontSize: 13 } }, `${item.displayName || item.username} @${item.username}`),
+                    h('span', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+                      h('span', { style: { fontSize: 11, color: C.faint } }, `${item.fetchedCount} 条 · ${item.fetchedAt || ''}`),
+                      h('button', {
+                        type: 'button', style: { ...buttonStyle(false), color: C.error, padding: '2px 7px', fontSize: 11 },
+                        onClick: async () => {
+                          try { await act('remove-external-account-analysis', undefined, { userId: item.userId }); setNotice(`已删除 @${item.username} 的学习记录。`); }
+                          catch (err) { setError(err.message || String(err)); }
+                        },
+                      }, '删除分析'))),
+                  item.quota?.limit ? h('div', { style: { fontSize: 11, color: C.faint, marginTop: 3 } }, `API 额度剩余 ${item.quota.remaining ?? '?'} / ${item.quota.limit}${item.quota.reset ? `，重置 ${new Date(item.quota.reset * 1000).toLocaleTimeString()}` : ''}`) : null,
+                  item.metricsNotice ? h('div', { style: { fontSize: 11, color: C.faint, marginTop: 3 } }, item.metricsNotice) : null,
+                  item.styleGuide ? h('div', { style: { marginTop: 6, fontSize: 12, lineHeight: 1.6 } }, `套路总结：${item.styleGuide}`) : null,
+                  item.hotWords?.length ? h('div', { style: { marginTop: 4, fontSize: 12 } }, `高频词：${item.hotWords.join('、')}`) : null,
+                  item.patterns?.length ? h('div', { style: { marginTop: 4, fontSize: 12, color: C.muted } }, `发现套路：${item.patterns.map(pattern => pattern.title).join('、')}`) : null,
+                  h('div', { style: { marginTop: 6, fontSize: 11, color: C.faint } }, `已抓取 ${item.fetchedCount} 条；原文只用于本次分析，不保存。`))))
+              : null),
 
           // 1. 历史发帖表现
           h('section', { style: cardStyle },

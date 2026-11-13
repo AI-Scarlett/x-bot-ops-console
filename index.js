@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, openSync, closeSync, mkdirSync, writeFileSync, renameSync, unlinkSync, statSync, readdirSync } from 'node:fs';
+import { readFileSync, existsSync, openSync, closeSync, mkdirSync, writeFileSync, renameSync, unlinkSync, statSync, readdirSync, chmodSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -31,6 +31,7 @@ export const TARGETS_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsC
 export const POST_QUEUE_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/post_queue.json');
 export const MANUAL_DRAFTS_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/manual_drafts.json');
 export const SERIALS_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/serials.json');
+export const X_API_CREDENTIAL_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/x-api-credential.json');
 export const MANUAL_DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
 export const MANUAL_DRAFT_MAX = 80;
 export const POST_HISTORY_PATH = join(APP_HOME, 'Library/Application Support/XBotOpsConsole/post_history.json');
@@ -1005,6 +1006,24 @@ function normalizeLearnings(data) {
     winningTopics: cleanList(data.winningTopics, 40),
     bannedTopics: cleanList(data.bannedTopics, 40),
     hotWords: cleanList(data.hotWords, 30).map(word => word.slice(0, 20)),
+    externalAccounts: (Array.isArray(data.externalAccounts) ? data.externalAccounts : []).filter(isRecord).slice(0, 20).map(item => ({
+      username: String(item.username || '').slice(0, 30),
+      userId: String(item.userId || '').slice(0, 32),
+      displayName: String(item.displayName || '').slice(0, 80),
+      fetchedAt: typeof item.fetchedAt === 'string' ? item.fetchedAt : null,
+      fetchedCount: Number(item.fetchedCount) || 0,
+      analyzedCount: Number(item.analyzedCount) || 0,
+      quota: isRecord(item.quota) ? { limit: Number(item.quota.limit) || 0, remaining: Number.isFinite(Number(item.quota.remaining)) ? Number(item.quota.remaining) : null, reset: Number(item.quota.reset) || 0 } : null,
+      metricsNotice: String(item.metricsNotice || '').slice(0, 300),
+      styleGuide: String(item.styleGuide || '').slice(0, 1000),
+      hotWords: cleanList(item.hotWords, 20).map(word => word.slice(0, 20)),
+      winningTopics: cleanList(item.winningTopics, 12).map(topic => topic.slice(0, 80)),
+      patterns: (Array.isArray(item.patterns) ? item.patterns : []).filter(isRecord).slice(0, 5).map(pattern => ({ title: String(pattern.title || '').slice(0, 120), structure: String(pattern.structure || '').slice(0, 600), hooks: cleanList(pattern.hooks, 6).map(hook => hook.slice(0, 160)) })),
+      // Do not persist third-party tweet text; keep only aggregate patterns and metrics counts.
+      posts: [],
+
+
+    })),
     patterns,
     history: {
       lastRunAt: typeof history.lastRunAt === 'string' ? history.lastRunAt : null,
@@ -1013,6 +1032,7 @@ function normalizeLearnings(data) {
       note: typeof history.note === 'string' ? history.note.slice(0, 500) : '',
       posts: (Array.isArray(history.posts) ? history.posts : []).filter(isRecord).slice(0, 100),
     },
+
     lastCycle: isRecord(data.lastCycle) ? {
       lastRunAt: typeof data.lastCycle.lastRunAt === 'string' ? data.lastCycle.lastRunAt : null,
       historyNote: String(data.lastCycle.historyNote || '').slice(0, 500),
@@ -1535,9 +1555,159 @@ const LEARNING_ANALYST_PROMPT = `你是中文社交媒体的内容策略分析�
 请拆解它们为什么能获得高曝光/高互动，并提炼成可以照着写的套路。
 
 只输出严格 JSON，不要任何解释文字，格式：
-{"styleGuide":"150字以内的整体套路总结（选题角度+情绪+节奏+收尾方式）","winningTopics":["值得继续写的话题方向1","方向2"],"hotWords":["在高曝光样本里反复出现、值得继续用的词或短语"],"patterns":[{"title":"套路名称","structure":"这条推文的结构拆解（开头—中段—收尾）","hooks":["可复用的开头钩子或句式"]}]}
+{"styleGuide":"150字以内的整体套路总结（选题角度+情绪+节奏+收尾方式）","winningTopics":["值得继续写的话题方向1","方向2"],"hotWords":["在抓取样本里反复出现、值得参考的词或短语"],"patterns":[{"title":"套路名称","structure":"这条推文的结构拆解（开头—中段—收尾）","hooks":["可复用的开头钩子或句式"]}]}
 patterns 给 2~5 条。赢家话题要是「话题方向」而不是整句原文。
 hotWords 给 5~15 个：从样本里找出反复出现、且看起来在拉高曝光的具体用词或短语（称呼、身体部位、动作、场景、情绪词），按出现频率从高到低排。不要给「的、了、余、曰」这类虚词和每条都有的套话，不要给整句。`;
+
+export function xApiCredentialStatus(credentialPath = X_API_CREDENTIAL_PATH) {
+  try {
+    const stored = JSON.parse(readFileSync(credentialPath, 'utf8'));
+    const token = String(stored.token || '');
+    return { available: true, configured: Boolean(token), masked: token ? `••••${token.slice(-4)}` : '', updatedAt: stored.updatedAt || null };
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { available: true, configured: false, masked: '' };
+    return { available: true, configured: false, masked: '', reason: '凭据文件不可读' };
+  }
+}
+
+export function storeXApiBearer(token, credentialPath = X_API_CREDENTIAL_PATH, now = Date.now(), setMode = chmodSync) {
+  const clean = String(token || '').trim();
+  if (!clean) throw new TypeError('请粘贴 App-only Bearer Token');
+  if (clean.length < 40 || clean.length > 4096 || /\\s/.test(clean)) throw new TypeError('Bearer Token 格式无效。Developer Console 的 App ID 不是 API Token。');
+  const dir = dirname(credentialPath);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+  setMode(dir, 0o700);
+  const tempPath = `${credentialPath}.tmp.${process.pid}.${now}`;
+  let committed = false;
+  try {
+    writeFileSync(tempPath, JSON.stringify({ token: clean, updatedAt: new Date(now).toISOString() }), { mode: 0o600, flag: 'wx' });
+    setMode(tempPath, 0o600);
+    renameSync(tempPath, credentialPath);
+    setMode(credentialPath, 0o600);
+    committed = true;
+    return xApiCredentialStatus(credentialPath);
+  } finally {
+    if (!committed) {
+      try { unlinkSync(tempPath); } catch {}
+      // If rename succeeded but permissions failed, remove the unsafe copy.
+      try { unlinkSync(credentialPath); } catch {}
+    }
+  }
+}
+
+export function readXApiBearer(credentialPath = X_API_CREDENTIAL_PATH) {
+  try { return String(JSON.parse(readFileSync(credentialPath, 'utf8')).token || '').trim(); }
+  catch { return ''; }
+}
+
+export function normalizeXAccount(input) {
+  const raw = String(input || '').trim();
+  if (!raw) throw new TypeError('请先粘贴账号链接、@用户名或用户 ID');
+  const consoleMatch = raw.match(/^https?:\/\/console\.x\.com\/accounts\/(\d+)(?:\/apps\/\d+)?(?:[/?#]|$)/i);
+  if (consoleMatch) return { userId: consoleMatch[1], username: '' };
+  const match = raw.match(/^https?:\/\/(?:www\.)?(?:x\.com|twitter\.com)\/([^/?#]+)/i);
+  const candidate = match ? decodeURIComponent(match[1]) : raw;
+  if (/^\d{5,30}$/.test(candidate)) return { userId: candidate, username: '' };
+  const username = candidate.replace(/^@/, '').replace(/\/$/, '');
+  if (!/^[A-Za-z0-9_]{1,15}$/.test(username)) throw new TypeError('账号格式无效：请用主页链接、@用户名或数字用户 ID');
+  return { userId: '', username };
+}
+
+export function xQuotaHeaders(response) {
+  const get = name => {
+    const direct = response?.headers?.get?.(name);
+    if (direct !== null && direct !== undefined) return direct;
+    const entries = response?.headers && typeof response.headers === 'object' ? Object.entries(response.headers) : [];
+    const match = entries.find(([key]) => String(key).toLowerCase() === name.toLowerCase());
+    return match?.[1] ?? null;
+  };
+  const remainingValue = get('x-rate-limit-remaining');
+  const parsedRemaining = remainingValue === null ? null : Number(remainingValue);
+  return {
+    limit: Number(get('x-rate-limit-limit')) || null,
+    remaining: Number.isFinite(parsedRemaining) ? parsedRemaining : null,
+    reset: Number(get('x-rate-limit-reset')) || null,
+    usage: String(get('x-access-level') || '').slice(0, 80),
+  };
+}
+
+export function parseXUserTimeline(payload) {
+  const users = Array.isArray(payload?.includes?.users) ? payload.includes.users : [];
+  const author = users[0] || {};
+  const posts = (Array.isArray(payload?.data) ? payload.data : []).filter(isRecord).slice(0, 100).map(tweet => {
+    const metrics = tweet.public_metrics || {};
+    const organic = tweet.non_public_metrics || {};
+    const impressions = organic.impression_count ?? metrics.impression_count;
+    return {
+      id: String(tweet.id || '').slice(0, 32),
+      text: String(tweet.text || '').slice(0, 4000),
+      createdAt: typeof tweet.created_at === 'string' ? tweet.created_at : null,
+      lang: String(tweet.lang || '').slice(0, 12),
+      metrics: {
+        likes: Number(metrics.like_count) || 0,
+        reposts: Number(metrics.retweet_count) || 0,
+        replies: Number(metrics.reply_count) || 0,
+        quotes: Number(metrics.quote_count) || 0,
+        impressions: impressions === null || impressions === undefined || impressions === '' ? null : (Number.isFinite(Number(impressions)) ? Number(impressions) : null),
+      },
+    };
+  }).filter(post => post.id && post.text);
+  return { userId: String(author.id || payload?.meta?.user_id || ''), username: String(author.username || ''), displayName: String(author.name || ''), posts };
+}
+
+export async function fetchXUserTimeline({ account, token, maxResults = 40, fetchImpl = globalThis.fetch, now = Date.now() }) {
+  const { userId: inputId, username: inputName } = normalizeXAccount(account);
+  const bearer = String(token || '').trim();
+  if (!bearer) throw new Error('尚未设置 X API Bearer Token。App ID 本身不能读取 API，请使用 Developer Console 的 App-only Bearer Token。');
+  if (typeof fetchImpl !== 'function') throw new Error('当前运行环境没有 HTTPS fetch 能力');
+  const limit = Math.max(5, Math.min(100, Math.floor(Number(maxResults) || 40)));
+  const apiGet = async path => {
+    const url = new URL(path, 'https://api.x.com');
+    if (url.origin !== 'https://api.x.com' || !url.pathname.startsWith('/2/')) throw new TypeError('拒绝非 X API v2 地址');
+    const response = await fetchImpl(url, { method: 'GET', headers: { authorization: `Bearer ${bearer}`, accept: 'application/json' }, signal: AbortSignal.timeout(15000) });
+    const quota = xQuotaHeaders(response);
+    let body = {};
+    try { body = await response.json(); } catch {}
+    if (!response.ok) {
+      const errors = Array.isArray(body.errors) ? body.errors.map(error => error?.detail || error?.message || error?.title).filter(Boolean).join('；').slice(0, 400) : '';
+      const message = response.status === 401 || response.status === 403
+        ? `X API 拒绝了 Bearer Token 或 App 权限（HTTP ${response.status}）。请确认 Token 正确、App 有 API 读取权限且套餐允许公开数据读取。${errors ? ` ${errors}` : ''}`
+        : response.status === 429 ? `X API 额度已用完或触发限流，请按重置时间稍后再试。${quota.reset ? ` 重置 Unix 时间：${quota.reset}。` : ''}`
+          : `X API 请求失败（HTTP ${response.status}）${errors ? `：${errors}` : ''}`;
+      const failure = new Error(message);
+      failure.status = response.status;
+      failure.quota = quota;
+      throw failure;
+    }
+    return { data: body, quota };
+  };
+  let userId = inputId;
+  let username = inputName;
+  let displayName = '';
+  let quota = null;
+  if (!userId) {
+    const lookup = await apiGet(`/2/users/by/username/${encodeURIComponent(username)}?user.fields=name,username,public_metrics`);
+    quota = lookup.quota;
+    userId = String(lookup.data?.data?.id || '');
+    username = String(lookup.data?.data?.username || username);
+    displayName = String(lookup.data?.data?.name || '');
+    if (!userId) throw new Error('X API 没有返回该账号资料。');
+  }
+  const query = new URLSearchParams({
+    max_results: String(limit),
+    'tweet.fields': 'created_at,public_metrics,lang,conversation_id,referenced_tweets',
+    'user.fields': 'name,username,public_metrics',
+    expansions: 'author_id',
+  });
+  const timeline = await apiGet(`/2/users/${encodeURIComponent(userId)}/tweets?${query.toString()}`);
+  quota = timeline.quota || quota;
+  const parsed = parseXUserTimeline(timeline.data);
+  const posts = parsed.posts;
+  const metricsNotice = posts.some(post => post.metrics.impressions !== null)
+    ? 'X API 返回了曝光数。'
+    : '当前公开用户时间线权限未返回 impression_count；本次依互动数和帖子文本分析，不会把点赞数伪称曝光量。';
+  return { ...parsed, userId: parsed.userId || userId, username: parsed.username || username || userId, displayName: parsed.displayName || displayName, posts, quota, metricsNotice, fetchedAt: new Date(now).toISOString() };
+}
 
 // Ask the local model to turn raw high-performing samples into reusable patterns.
 export async function analyzeLearningSamples(samples, { model = 'gpt-6-luna', port = 3040, kind = 'manual', extra = '' } = {}) {
@@ -1549,9 +1719,9 @@ export async function analyzeLearningSamples(samples, { model = 'gpt-6-luna', po
 
   const rendered = usable.map((sample, index) => {
     const metrics = [
-      sample.impressions !== undefined ? `曝光 ${sample.impressions}` : '',
-      sample.likes !== undefined ? `点赞 ${sample.likes}` : '',
-      sample.comments !== undefined ? `评论 ${sample.comments}` : '',
+      Number.isFinite(Number(sample.impressions)) && sample.impressions !== null ? `曝光 ${sample.impressions}` : '',
+      Number.isFinite(Number(sample.likes)) && sample.likes !== null ? `点赞 ${sample.likes}` : '',
+      Number.isFinite(Number(sample.comments)) && sample.comments !== null ? `评论 ${sample.comments}` : '',
     ].filter(Boolean).join(' / ');
     return `${index + 1}. ${metrics ? `[${metrics}] ` : ''}${String(sample.text).trim().slice(0, 400)}`;
   }).join('\n');
@@ -3098,17 +3268,110 @@ export function readPluginVersion(packageUrl = new URL('./package.json', import.
 // version while the old code was still serving requests.
 const LOADED_VERSION = readPluginVersion();
 
-export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGETS, configPath = CONFIG_PATH, targetsPath = null, platform = process.platform, spawnProcess = spawn, queuePath = null, learningsPath = null, backupDir = null, trendsPath = null, manualDraftsPath = null } = {}) {
+export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGETS, configPath = CONFIG_PATH, targetsPath = null, platform = process.platform, spawnProcess = spawn, queuePath = null, learningsPath = null, backupDir = null, trendsPath = null, manualDraftsPath = null, fetchImpl = globalThis.fetch, learningsAnalyzer = analyzeLearningSamples } = {}) {
   let activeConfigPath = configPath;
   const isCustomConfig = activeConfigPath && dirname(activeConfigPath) !== dirname(CONFIG_PATH);
   const baseDir = isCustomConfig ? dirname(activeConfigPath) : null;
   const activeQueuePath = queuePath || (baseDir ? join(baseDir, 'post_queue.json') : POST_QUEUE_PATH);
   const activeManualDraftsPath = manualDraftsPath || (baseDir ? join(baseDir, 'manual_drafts.json') : MANUAL_DRAFTS_PATH);
   const activeSerialsPath = baseDir ? join(baseDir, 'serials.json') : SERIALS_PATH;
+  // Tests inject fetch/analyzer mocks and a temporary config path; keep their
+  // credential file in that disposable directory as well.
+  const activeXApiCredentialPath = baseDir ? join(baseDir, 'x-api-credential.json') : X_API_CREDENTIAL_PATH;
   const activeLearningsPath = learningsPath || (baseDir ? join(baseDir, 'learnings.json') : LEARNINGS_PATH);
   const activeTrendsPath = trendsPath || (baseDir ? join(baseDir, 'trends.json') : TRENDS_PATH);
   const activeBackupDir = backupDir || (baseDir ? join(baseDir, 'backups') : CONFIG_BACKUP_DIR);
   const currentTargets = () => (targetsPath ? resolveTargets(paths, targetsPath) : paths);
+  const xApiRead = async (path, bearer) => {
+    if (typeof fetchImpl !== 'function') throw new Error('当前运行环境没有 HTTPS 请求能力。');
+    const url = new URL(path, 'https://api.x.com');
+    if (url.origin !== 'https://api.x.com' || !url.pathname.startsWith('/2/')) throw new TypeError('拒绝非 X API v2 地址');
+    const response = await fetchImpl(url, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${bearer}`, accept: 'application/json' },
+      signal: AbortSignal.timeout(15000),
+    });
+    const headers = {
+      limit: Number(response.headers.get('x-rate-limit-limit')) || null,
+      remaining: Number(response.headers.get('x-rate-limit-remaining')),
+      reset: Number(response.headers.get('x-rate-limit-reset')) || null,
+      usage: response.headers.get('x-access-level') || '',
+    };
+    let data = {};
+    try { data = await response.json(); } catch { /* bounded error below */ }
+    if (!response.ok) {
+      const apiMessage = Array.isArray(data?.errors) ? data.errors.map(item => item?.detail || item?.message || item?.title).filter(Boolean).join('；') : '';
+      const message = response.status === 401 || response.status === 403
+        ? 'X API 拒绝了此凭据或权限。请确认使用 Developer Console 的 App-only Bearer Token（不是 App ID），该 App 有 X API 读取权限且套餐允许读取。'
+        : response.status === 429
+          ? 'X API 额度已用完或触发频率限制，请等额度重置后再抓取。'
+          : `X API 请求失败（HTTP ${response.status}）${apiMessage ? `：${apiMessage}` : ''}`;
+      const error = new Error(message);
+      error.xApiStatus = response.status;
+      error.xApiQuota = headers;
+      throw error;
+    }
+    return { data, quota: headers };
+  };
+  const fetchExternalUserPosts = async ({ account, maxResults = 50 }) => {
+    const userInput = String(account || '').trim();
+    if (!userInput) throw new TypeError('请先粘贴账号链接、@用户名或用户 ID');
+    let userId = '';
+    let username = '';
+    const urlMatch = userInput.match(/^https?:\/\/(?:www\.)?(?:x\.com|twitter\.com|console\.x\.com)\/([^/?#]+)/i);
+    const candidate = urlMatch ? urlMatch[1] : userInput;
+    if (/^\d{5,30}$/.test(candidate)) userId = candidate;
+    else {
+      username = candidate.replace(/^@/, '').replace(/\/$/, '');
+      if (!/^[A-Za-z0-9_]{1,15}$/.test(username)) throw new TypeError('账号格式无效：请用主页链接、@用户名或数字用户 ID');
+    }
+    const bearer = readXApiBearer(activeXApiCredentialPath);
+    if (!bearer) throw new Error('尚未设置 X API Bearer Token。请在「发帖学习」的「X API」区域粘贴开发者后台生成的 Bearer Token。');
+    const max = Math.max(5, Math.min(100, Math.floor(Number(maxResults) || 50)));
+    let quota = {};
+    if (!userId) {
+      const lookup = await xApiRead(`/2/users/by/username/${encodeURIComponent(username)}?user.fields=name,username,public_metrics`, bearer);
+      userId = String(lookup.data?.data?.id || '');
+      username = String(lookup.data?.data?.username || username);
+      if (!userId) throw new Error('X 没有返回该账号的用户信息。');
+    }
+    const query = new URLSearchParams({
+      max_results: String(max),
+      'tweet.fields': 'created_at,public_metrics,non_public_metrics,lang,conversation_id,referenced_tweets',
+      'user.fields': 'name,username,public_metrics',
+      expansions: 'author_id',
+    });
+    const timeline = await xApiRead(`/2/users/${encodeURIComponent(userId)}/tweets?${query}`, bearer);
+    quota = timeline.quota;
+    const author = (timeline.data?.includes?.users || [])[0] || {};
+    const posts = (timeline.data?.data || []).map(tweet => {
+      const metrics = tweet.public_metrics || {};
+      const organic = tweet.non_public_metrics || {};
+      const impressionValue = organic.impression_count ?? metrics.impression_count;
+      return {
+        id: String(tweet.id),
+        text: String(tweet.text || '').slice(0, 4000),
+        createdAt: tweet.created_at || null,
+        lang: tweet.lang || '',
+        metrics: {
+          likes: Number(metrics.like_count) || 0,
+          reposts: Number(metrics.retweet_count) || 0,
+          replies: Number(metrics.reply_count) || 0,
+          quotes: Number(metrics.quote_count) || 0,
+          impressions: impressionValue === undefined || impressionValue === null || impressionValue === '' ? null : (Number.isFinite(Number(impressionValue)) ? Number(impressionValue) : null),
+        },
+      };
+    });
+    return {
+      userId,
+      username: author.username || username || userId,
+      displayName: author.name || '',
+      posts,
+      quota,
+      fetchedAt: new Date(clock()).toISOString(),
+      source: 'x-api-v2',
+    };
+  };
   const readSharedConfig = () => {
     let raw;
     try { raw = readFileSync(activeConfigPath, 'utf8'); }
@@ -3297,7 +3560,8 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       }
     } catch {}
     return {
-      ok: true, pluginVersion: LOADED_VERSION, diskVersion: readPluginVersion(), actions: SERVICE_ACTIONS, capabilities: { serialStyle: true, serialModel: true }, config: maskTrendCookies(shared.config), configSource: shared.source, configError: shared.error || '', configPath: activeConfigPath, configHash,
+      ok: true, pluginVersion: LOADED_VERSION, diskVersion: readPluginVersion(), actions: SERVICE_ACTIONS, capabilities: { serialStyle: true, serialModel: true, externalXLearning: true }, config: maskTrendCookies(shared.config), configSource: shared.source, configError: shared.error || '', configPath: activeConfigPath, configHash,
+      xApi: xApiCredentialStatus(activeXApiCredentialPath),
       runtimeConfigApplied: shared.source === 'shared', runtimeCapabilities, fieldSide: FIELD_SIDE,
       dshModels,
       postQueue: postQueue.queue,
@@ -4226,6 +4490,77 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
           + (aiInfo.error ? ` AI 筛选部分失败：${aiInfo.error}（已保留关键词结果）` : ''),
       };
     }
+
+    if (request.action === 'set-x-api-token') {
+      const token = String(request.token || '').trim();
+      if (!token) throw new TypeError('请粘贴 X Developer Console 中生成的 App-only Bearer Token；App ID 不是访问 Token');
+      if (token.length < 40 || token.length > 4096 || /\s/.test(token)) throw new TypeError('Bearer Token 格式无效。请粘贴完整 Token，不要粘贴 App ID 或 Client Secret。');
+      const credentialPath = activeXApiCredentialPath;
+      const xApi = storeXApiBearer(token, credentialPath, clock());
+      return { ok: true, action: 'set-x-api-token', xApi, note: 'Token 已保存在本机独立凭据文件（权限 0600）。完整值不会回传给页面或写入共享配置。' };
+    }
+    if (request.action === 'clear-x-api-token') {
+      const credentialPath = activeXApiCredentialPath;
+      try { unlinkSync(credentialPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      return { ok: true, action: 'clear-x-api-token', xApi: xApiCredentialStatus(credentialPath), note: 'X API Token 已从本地凭据文件删除。' };
+    }
+    if (request.action === 'fetch-analyze-user') {
+      const credentialPath = activeXApiCredentialPath;
+      const bearer = readXApiBearer(credentialPath);
+      if (!bearer) throw new Error('请先设置 X API App-only Bearer Token。只有 App ID 不能调用 API。');
+      const account = String(request.account || '').trim();
+      if (account.length > 300) throw new TypeError('账号地址过长。');
+      const maxResults = Math.max(5, Math.min(100, Math.floor(Number(request.maxResults) || 40)));
+      const result = await fetchXUserTimeline({ account, token: bearer, maxResults, fetchImpl, now: clock() });
+      if (!result.posts.length) throw new Error(`@${result.username} 没有返回可分析的帖子。请确认账号公开且 App 有 API 读取额度。`);
+      const modelCfg = getConfig();
+      const learningCfg = modelCfg.learningSettings || {};
+      const model = learningCfg.model || modelCfg.postSettings?.model || modelCfg.model?.name || 'gpt-6-luna';
+      const port = modelCfg.model?.endpointPort || 3040;
+      const samples = result.posts.map(post => ({
+        text: post.text,
+        impressions: post.metrics.impressions,
+        likes: post.metrics.likes,
+        comments: post.metrics.replies,
+      }));
+      const analysis = await learningsAnalyzer(samples, {
+        model, port, kind: 'external_account',
+        extra: `仅分析账号 @${result.username} 自行发布的公开帖子，样本数 ${samples.length}。只提炼其表达套路与用词，绝不可模仿身份或照抄内容。`,
+      });
+      const entry = {
+        username: result.username,
+        userId: result.userId,
+        displayName: result.displayName,
+        fetchedAt: result.fetchedAt,
+        fetchedCount: result.posts.length,
+        analyzedCount: samples.length,
+        quota: result.quota,
+        metricsNotice: result.posts.some(post => post.metrics.impressions !== null)
+          ? '接口返回了曝光数。'
+          : '当前 X App/API 权限未返回 impression_count；分析仍使用可用的互动数据和文本。',
+        styleGuide: analysis.styleGuide,
+        hotWords: analysis.hotWords || [],
+        winningTopics: analysis.winningTopics || [],
+        patterns: analysis.patterns.map(pattern => ({ title: pattern.title, structure: pattern.structure, hooks: pattern.hooks })),
+        // Third-party post text is used transiently for analysis only; persist aggregate findings, not source text.
+      };
+      const { payload } = mutateLearnings(current => {
+        current.externalAccounts = [entry, ...(current.externalAccounts || []).filter(item => item.userId !== entry.userId)].slice(0, 20);
+      }, activeLearningsPath);
+      return {
+        ok: true, action: 'fetch-analyze-user', account: entry,
+        quota: result.quota, learnings: payload,
+        note: `已抓取 @${entry.username} 的 ${entry.fetchedCount} 条帖子并完成分析。${entry.metricsNotice}`,
+      };
+    }
+    if (request.action === 'remove-external-account-analysis') {
+      const userId = String(request.userId || '').trim().slice(0, 32);
+      if (!userId) throw new TypeError('缺少要删除的账号 ID');
+      const { payload } = mutateLearnings(current => {
+        current.externalAccounts = (current.externalAccounts || []).filter(item => String(item.userId) !== userId);
+      }, activeLearningsPath);
+      return { ok: true, action: 'remove-external-account-analysis', learnings: payload, note: '该账号分析记录已删除。' };
+    }
     if (request.action === 'learn-manual') {
       const raw = String(request.text || '').trim();
       if (!raw) throw new TypeError('请先粘贴要高曝光推文内容');
@@ -4461,6 +4796,7 @@ export const SERVICE_ACTIONS = [
   'start', 'stop', 'restart', 'restart-watchdog', 'start-watchdog',
   'enqueue-post', 'remove-queued-post', 'clear-post-queue',
   'remove-manual-draft', 'clear-manual-drafts', 'generate-draft-posts', 'analyze-reference-post',
+  'set-x-api-token', 'clear-x-api-token', 'fetch-analyze-user', 'remove-external-account-analysis',
   'save-serial', 'delete-serial', 'write-serial-chapter', 'delete-serial-chapter',
   'learn-manual', 'remove-learning', 'clear-learnings', 'promote-topic', 'save-style-guide',
   'trigger-learn', 'fetch-trends', 'ensure-chrome', 'chrome-login-status', 'sync-login',

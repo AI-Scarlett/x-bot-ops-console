@@ -628,6 +628,194 @@ test('a serial keeps its own writing style and model, and the style reaches the 
   } finally { f.cleanup(); }
 });
 
+
+test('X account input accepts console app URLs, usernames and numeric ids only', async () => {
+  const { normalizeXAccount } = await import('../index.js');
+  assert.deepEqual(normalizeXAccount('https://console.x.com/accounts/2064155484374847488/apps/33038689'), { userId: '2064155484374847488', username: '' });
+  assert.deepEqual(normalizeXAccount('@some_user'), { userId: '', username: 'some_user' });
+  assert.deepEqual(normalizeXAccount('2064155484374847488'), { userId: '2064155484374847488', username: '' });
+  assert.throws(() => normalizeXAccount('https://evil.example/@someone'), /账号格式无效/);
+  assert.throws(() => normalizeXAccount('hello world'), /账号格式无效/);
+});
+
+test('X timeline parser keeps posts bounded and never invents impressions from likes', async () => {
+  const { parseXUserTimeline } = await import('../index.js');
+  const parsed = parseXUserTimeline({
+    includes: { users: [{ id: '123', username: 'alice', name: 'Alice' }] },
+    data: [
+      { id: '1', text: '第一条公开帖子', created_at: '2026-11-12T00:00:00Z', public_metrics: { like_count: 7, retweet_count: 2, reply_count: 3, quote_count: 1 } },
+      { id: '2', text: '第二条', public_metrics: { like_count: 2, impression_count: 99 } },
+    ],
+  });
+  assert.equal(parsed.username, 'alice');
+  assert.equal(parsed.posts.length, 2);
+  assert.equal(parsed.posts[0].metrics.likes, 7);
+  assert.equal(parsed.posts[0].metrics.impressions, null);
+  assert.equal(parsed.posts[1].metrics.impressions, 99);
+});
+
+test('X timeline fetch uses app-only Bearer, allowlisted X v2 endpoints, and reports quotas', async () => {
+  const { fetchXUserTimeline } = await import('../index.js');
+  const requests = [];
+  const fetchImpl = async (url, options) => {
+    requests.push({ url: String(url), options });
+    const body = String(url).includes('/users/by/username/')
+      ? { data: { id: '123456', username: 'alice', name: 'Alice' } }
+      : { data: [{ id: '987654321', text: '一条公开帖子', created_at: '2026-11-12T00:00:00Z', public_metrics: { like_count: 3, retweet_count: 1, reply_count: 0, quote_count: 0 } }], includes: { users: [{ id: '123456', username: 'alice', name: 'Alice' }] } };
+    return { ok: true, status: 200, headers: { get: name => ({ 'x-rate-limit-limit': '100', 'x-rate-limit-remaining': '97', 'x-rate-limit-reset': '1790000000' }[name] || null) }, json: async () => body };
+  };
+  const result = await fetchXUserTimeline({ account: 'https://x.com/alice', token: 'B'.repeat(120), maxResults: 25, fetchImpl, now: Date.parse('2026-11-12T12:00:00Z') });
+  assert.equal(result.username, 'alice');
+  assert.equal(result.posts.length, 1);
+  assert.equal(result.quota.remaining, 97);
+  assert.equal(requests.length, 2, 'username lookup then timeline');
+  for (const req of requests) {
+    assert.ok(req.url.startsWith('https://api.x.com/2/'));
+    assert.equal(req.options.method, 'GET');
+    assert.equal(req.options.headers.authorization, `Bearer ${'B'.repeat(120)}`);
+    assert.doesNotMatch(req.url, /console\.x\.com/);
+  }
+});
+
+test('app-only credential store masks tokens and removes the file cleanly', async () => {
+  const { storeXApiBearer, xApiCredentialStatus, readXApiBearer } = await import('../index.js');
+  const f = fixture();
+  try {
+    const path = join(f.dir, 'x-api-credential.json');
+    assert.throws(() => storeXApiBearer('123', path), /格式无效/);
+    const token = 'B'.repeat(120);
+    const status = storeXApiBearer(token, path, Date.parse('2026-11-12T12:00:00Z'));
+    assert.equal(status.configured, true);
+    assert.equal(status.masked, '••••BBBB');
+    assert.equal(readXApiBearer(path), token);
+    const stat = (await import('node:fs')).statSync(path);
+    assert.equal(stat.mode & 0o777, 0o600);
+    assert.doesNotMatch(JSON.stringify(status), new RegExp(token));
+  } finally { f.cleanup(); }
+});
+
+
+test('X account parser recognizes Developer Console account URLs and rejects unrelated URLs', async () => {
+  const { normalizeXAccount } = await import('../index.js');
+  assert.deepEqual(normalizeXAccount('https://console.x.com/accounts/2064155484374847488/apps/33038689'), { userId: '2064155484374847488', username: '' });
+  assert.deepEqual(normalizeXAccount('@some_user'), { userId: '', username: 'some_user' });
+  assert.deepEqual(normalizeXAccount('2064155484374847488'), { userId: '2064155484374847488', username: '' });
+  assert.deepEqual(normalizeXAccount('https://x.com/alice'), { userId: '', username: 'alice' });
+  assert.throws(() => normalizeXAccount('https://evil.example/alice'), /账号格式无效/);
+  assert.throws(() => normalizeXAccount('not a username'), /账号格式无效/);
+});
+
+test('X timeline parser does not mislabel likes as impression counts', async () => {
+  const { parseXUserTimeline } = await import('../index.js');
+  const parsed = parseXUserTimeline({
+    includes: { users: [{ id: '123', username: 'alice', name: 'Alice' }] },
+    data: [
+      { id: '1', text: '第一条公开帖子', created_at: '2026-11-12T00:00:00Z', public_metrics: { like_count: 7, retweet_count: 2, reply_count: 3, quote_count: 1 } },
+      { id: '2', text: '第二条', public_metrics: { like_count: 2, impression_count: 99 } },
+    ],
+  });
+  assert.equal(parsed.username, 'alice');
+  assert.equal(parsed.posts.length, 2);
+  assert.equal(parsed.posts[0].metrics.likes, 7);
+  assert.equal(parsed.posts[0].metrics.impressions, null);
+  assert.equal(parsed.posts[1].metrics.impressions, 99);
+});
+
+test('X timeline fetch uses only api.x.com v2 read endpoints and preserves rate quota', async () => {
+  const { fetchXUserTimeline } = await import('../index.js');
+  const requests = [];
+  const fetchImpl = async (url, options) => {
+    requests.push({ url: String(url), options });
+    const body = String(url).includes('/users/by/username/')
+      ? { data: { id: '123456', username: 'alice', name: 'Alice' } }
+      : { data: [{ id: '987654321', text: '一条公开帖子', created_at: '2026-11-12T00:00:00Z', public_metrics: { like_count: 3, retweet_count: 1, reply_count: 0, quote_count: 0 } }], includes: { users: [{ id: '123456', username: 'alice', name: 'Alice' }] } };
+    return { ok: true, status: 200, headers: { get: name => ({ 'x-rate-limit-limit': '100', 'x-rate-limit-remaining': '97', 'x-rate-limit-reset': '1790000000' }[name] || null) }, json: async () => body };
+  };
+  const result = await fetchXUserTimeline({ account: 'https://x.com/alice', token: 'B'.repeat(120), maxResults: 25, fetchImpl, now: Date.parse('2026-11-12T12:00:00Z') });
+  assert.equal(result.username, 'alice');
+  assert.equal(result.posts.length, 1);
+  assert.equal(result.quota.remaining, 97);
+  assert.equal(requests.length, 2, 'username lookup then timeline');
+  for (const req of requests) {
+    assert.ok(req.url.startsWith('https://api.x.com/2/'));
+    assert.equal(req.options.method, 'GET');
+    assert.equal(req.options.headers.authorization, `Bearer ${'B'.repeat(120)}`);
+    assert.doesNotMatch(req.url, /console\.x\.com/);
+  }
+});
+
+test('X URL bearer-file write fails closed and removes token if permissions cannot be set', async () => {
+  const fs = await import('node:fs');
+  const { storeXApiBearer } = await import('../index.js');
+  const f = fixture();
+  const path = join(f.dir, 'credential.json');
+  let calls = 0;
+  try {
+    const safeSetMode = fs.chmodSync;
+    const failAfterTempWrite = (...args) => {
+      calls += 1;
+      if (calls >= 2) throw new Error('chmod blocked');
+      return safeSetMode(...args);
+    };
+    assert.throws(() => storeXApiBearer('BearerSecret'.repeat(10), path, Date.now(), failAfterTempWrite), /chmod blocked/);
+    assert.equal(existsSync(path), false, 'must not leave an unsafe credential file');
+    assert.equal(readdirSync(f.dir).some(name => name.includes('.tmp.')), false, 'must remove its temporary secret file');
+  } finally { f.cleanup(); }
+});
+
+test('X 429 reports the reset quota instead of retrying silently', async () => {
+  const { fetchXUserTimeline } = await import('../index.js');
+  const fetchImpl = async () => ({ ok: false, status: 429, headers: { get: name => ({ 'x-rate-limit-limit': '50', 'x-rate-limit-remaining': '0', 'x-rate-limit-reset': '1790000000' }[name] || null) }, json: async () => ({ errors: [{ message: 'Rate limit exceeded' }] }) });
+  await assert.rejects(fetchXUserTimeline({ account: '123456789', token: 'B'.repeat(120), fetchImpl }), error => {
+    assert.match(error.message, /触发限流/);
+    assert.equal(error.status, 429);
+    assert.equal(error.quota.remaining, 0);
+    return true;
+  });
+});
+
+test('X App-only token is stored in a private file and status never returns the secret', async () => {
+  const { storeXApiBearer, xApiCredentialStatus, readXApiBearer } = await import('../index.js');
+  const f = fixture();
+  try {
+    const path = join(f.dir, 'x-api-credential.json');
+    assert.throws(() => storeXApiBearer('2064155484374847488', path), /格式无效/);
+    const token = 'BearerSecret'.repeat(10);
+    const status = storeXApiBearer(token, path, Date.parse('2026-11-12T12:00:00Z'));
+    assert.equal(status.configured, true);
+    assert.equal(readXApiBearer(path), token);
+    assert.equal((await import('node:fs')).statSync(path).mode & 0o777, 0o600);
+    assert.doesNotMatch(JSON.stringify(status), new RegExp(token));
+  } finally { f.cleanup(); }
+});
+
+test('manual X account analysis stores a per-account result but never writes a post queue item', async () => {
+  const f = fixture();
+  try {
+    const tokenPath = join(f.dir, 'x-api-credential.json');
+    const { storeXApiBearer } = await import('../index.js');
+    storeXApiBearer('BearerSecret'.repeat(10), tokenPath);
+    const learningPath = join(f.dir, 'learnings.json');
+    const queuePath = join(f.dir, 'post_queue.json');
+    const fetchImpl = async url => ({
+      ok: true, status: 200,
+      headers: { get: name => ({ 'x-rate-limit-limit': '50', 'x-rate-limit-remaining': '47', 'x-rate-limit-reset': '1790000000' }[name] || null) },
+      json: async () => String(url).includes('/users/by/username/')
+        ? { data: { id: '123456789', username: 'alice', name: 'Alice' } }
+        : { data: [{ id: '9', text: '她只问一句，余却想了很久。', public_metrics: { like_count: 11, retweet_count: 2, reply_count: 1, quote_count: 0 } }], includes: { users: [{ id: '123456789', username: 'alice', name: 'Alice' }] } },
+    });
+    const service = createService({ paths: f.paths, configPath: join(f.dir, 'config.json'), queuePath, learningsPath: learningPath, fetchImpl, platform: 'darwin', learningsAnalyzer: async samples => ({ styleGuide: '先反问再转折', winningTopics: [], hotWords: ['转折'], patterns: [{ title: '短反差', structure: '一句铺垫再翻转', hooks: ['她只问一句'] }] }) });
+    const result = await service.action({ action: 'fetch-analyze-user', account: 'https://console.x.com/accounts/123456789/apps/33038689', maxResults: 20 });
+    assert.equal(result.account.username, 'alice');
+    assert.equal(result.account.fetchedCount, 1);
+    assert.equal(result.quota.remaining, 47);
+    const stored = JSON.parse(readFileSync(learningPath, 'utf8'));
+    assert.equal(stored.externalAccounts[0].username, 'alice');
+    assert.deepEqual(stored.externalAccounts[0].hotWords, ['转折']);
+    assert.equal(existsSync(queuePath), false, 'external learning must not even create or enqueue a post queue');
+  } finally { f.cleanup(); }
+});
+
 test('the server lists the actions it supports so a stale panel can be detected', async () => {
   const f = fixture();
   try {
