@@ -497,7 +497,11 @@ window.__ModuleLoader__.load({
           }
           setConfigHash(data.configHash ?? null);
           latestSaveHash.current = data.configHash ?? null;
-          if (Array.isArray(data.manualDrafts) && !generatingDrafts) setPreviewDrafts(data.manualDrafts);
+          if (Array.isArray(data.manualDrafts) && !generatingDrafts) {
+            // The preview lists the manual drafts only. Drafts the automatic
+            // poster queued are kept as a backup, not offered here.
+            setPreviewDrafts(data.manualDrafts.filter(item => item?.shelf !== 'auto'));
+          }
           setError('');
         } catch (err) {
           setError(`${t('unavailable')} ${err.message || ''}`);
@@ -530,7 +534,12 @@ window.__ModuleLoader__.load({
           else if (action === 'update-plugin') { /* handled by caller */ }
           else if (value.launchRequested) setNotice(t('launchRequested'));
           else if (value.note) setNotice(value.note);
-          if (Array.isArray(value.manualDrafts)) setPreviewDrafts(value.manualDrafts);
+          // Only the manual shelf belongs in the preview; anything else the
+          // server reports is the automatic poster's business.
+          if (Array.isArray(value.manualDrafts)) {
+            const manualOnly = value.manualDrafts.filter(item => item?.shelf !== 'auto');
+            setPreviewDrafts(manualOnly);
+          }
           await refresh();
           return value;
         } catch (err) {
@@ -2587,7 +2596,7 @@ window.__ModuleLoader__.load({
                         commitToQueue: false,
                       });
                       if (res && Array.isArray(res.generated) && res.generated.length) {
-                        if (Array.isArray(res.manualDrafts)) setPreviewDrafts(res.manualDrafts);
+                        if (Array.isArray(res.manualDrafts)) setPreviewDrafts(res.manualDrafts.filter(item => item?.shelf !== 'auto'));
                         else setPreviewDrafts(res.generated);
                         setNotice(`🎉 成功生成 ${res.generated.length} 条推文草稿！可挑选入队；草稿会在本页保留 24 小时，入队后也不会清掉。${res.failed ? `（另有 ${res.failed} 条失败）` : ''}`);
                       } else if (!res) {
@@ -2662,7 +2671,7 @@ window.__ModuleLoader__.load({
                       setBusy(true);
                       try {
                         const res = await act('clear-manual-drafts');
-                        setPreviewDrafts(Array.isArray(res?.manualDrafts) ? res.manualDrafts : []);
+                        setPreviewDrafts(Array.isArray(res?.manualDrafts) ? res.manualDrafts.filter(item => item?.shelf !== 'auto') : []);
                         setNotice('已清空 24 小时草稿库。');
                       } catch (err) {
                         setError(err.message || String(err));
@@ -2756,7 +2765,7 @@ window.__ModuleLoader__.load({
                               id: item.id || '',
                               text: item.text || '',
                             });
-                            if (Array.isArray(res?.manualDrafts)) setPreviewDrafts(res.manualDrafts);
+                            if (Array.isArray(res?.manualDrafts)) setPreviewDrafts(res.manualDrafts.filter(item => item?.shelf !== 'auto'));
                             setNotice('已删除这条草稿。');
                           } catch (err) {
                             setError(err.message || String(err));

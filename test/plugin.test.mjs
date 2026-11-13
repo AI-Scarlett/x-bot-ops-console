@@ -816,6 +816,38 @@ test('manual X account analysis stores a per-account result but never writes a p
   } finally { f.cleanup(); }
 });
 
+test('the manual draft preview excludes drafts the automatic poster queued', async () => {
+  const f = fixture();
+  try {
+    const draftsPath = join(f.dir, 'manual_drafts.json');
+    const service = createService({
+      paths: f.paths, configPath: join(f.dir, 'config.json'), manualDraftsPath: draftsPath, platform: 'darwin',
+      // A deterministic stand-in for the model, so the test does not need the
+      // local model service.
+      tweetGenerator: async () => '余昨夜见一人于阶下。\n其服饰甚旧，而言语从容。\n尔若遇之，可愿与我同去一观乎？',
+    });
+    // A draft generated in the manual panel is a candidate.
+    const manual = await service.action({ action: 'generate-draft-posts', count: 1, commitToQueue: false, prompt: '写一条测试稿' });
+    assert.ok(manual.generated.length >= 1);
+    const manualIds = manual.manualDrafts.map(item => item.id);
+    assert.ok(manualIds.length >= 1);
+
+    // The same generator with commitToQueue sends straight to the queue; those
+    // drafts are a backup of the automatic poster, not preview candidates.
+    const auto = await service.action({ action: 'generate-draft-posts', count: 1, commitToQueue: true, prompt: '写一条另一条测试稿' });
+    assert.ok(auto.generated.length >= 1);
+    const autoId = auto.generated[0].id;
+    assert.ok(!auto.manualDrafts.some(item => item.id === autoId), 'an automatically queued draft must not appear in the manual preview');
+    assert.ok(manual.manualDrafts.every(item => item.shelf === 'manual'), 'preview drafts belong to the manual shelf');
+
+    // It is still kept on disk, only on the other shelf.
+    const all = JSON.parse(readFileSync(draftsPath, 'utf8')).items;
+    const stored = all.find(item => item.id === autoId);
+    assert.ok(stored, 'the automatic draft is still backed up');
+    assert.equal(stored.shelf, 'auto');
+  } finally { f.cleanup(); }
+});
+
 test('the server lists the actions it supports so a stale panel can be detected', async () => {
   const f = fixture();
   try {

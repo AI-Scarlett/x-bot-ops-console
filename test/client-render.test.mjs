@@ -483,6 +483,18 @@ test('the learning panel exposes manual X account fetch and safe token setup', (
   } finally { app.close(); }
 });
 
+test('the candidate preview only renders the manual shelf', () => {
+  const state = structuredClone(sampleState);
+  const app = mount({ tab: 'manualGen', state });
+  try {
+    // The preview list is the server's manual shelf. The client renders what it
+    // receives, and the client-side filter drops anything marked automatic.
+    const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+    assert.match(source, /manualDrafts\.filter\(item => item\?\.shelf !== 'auto'\)/);
+    assert.match(source, /value\.manualDrafts\.filter\(item => item\?\.shelf !== 'auto'\)/);
+  } finally { app.close(); }
+});
+
 test('the manual batch panel renders style, model, length and reference controls', async () => {
   const app = mount({ tab: 'manualGen' });
   try {

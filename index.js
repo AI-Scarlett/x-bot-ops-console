@@ -376,7 +376,7 @@ export function pruneManualDrafts(items, nowMs = Date.now(), ttlMs = MANUAL_DRAF
   });
 }
 
-export function readManualDrafts(draftsPath = MANUAL_DRAFTS_PATH, nowMs = Date.now()) {
+export function readManualDrafts(draftsPath = MANUAL_DRAFTS_PATH, nowMs = Date.now(), { shelf = 'all', queuedTexts = null } = {}) {
   let items = [];
   try {
     if (existsSync(draftsPath)) {
@@ -387,10 +387,12 @@ export function readManualDrafts(draftsPath = MANUAL_DRAFTS_PATH, nowMs = Date.n
   } catch { items = []; }
   // The expiry time travels with the draft so the panel can show when a
   // candidate will be dropped instead of promising "24 hours" invisibly.
-  return pruneManualDrafts(items, nowMs).map(item => ({
+  const kept = pruneManualDrafts(items, nowMs).map(item => ({
     ...item,
+    shelf: draftShelf(item, queuedTexts),
     expiresAt: new Date(parseIsoMs(item.createdAt) + MANUAL_DRAFT_TTL_MS).toISOString(),
   }));
+  return shelf === 'all' ? kept : kept.filter(item => item.shelf === shelf);
 }
 
 export function writeManualDrafts(items, draftsPath = MANUAL_DRAFTS_PATH, nowMs = Date.now()) {
@@ -413,7 +415,25 @@ export function mutateManualDrafts(mutator, draftsPath = MANUAL_DRAFTS_PATH, now
   }, draftsPath);
 }
 
-function rememberManualDraft(item, draftsPath = MANUAL_DRAFTS_PATH, nowMs = Date.now()) {
+// A draft belongs to one of two shelves. `manual` is what the operator
+// generated in the 手动AI创作 panel and may still pick from; `auto` is only a
+// backup of drafts the automatic poster already queued. The preview list shows
+// the manual shelf alone, so automatically queued drafts stop appearing there.
+export const MANUAL_DRAFT_SOURCES = new Set(['ai_draft', 'ai_draft_custom', 'ai_draft_reference', 'manual']);
+
+export function draftShelf(item, queuedTexts = null) {
+  if (!item || typeof item !== 'object') return 'auto';
+  if (item.shelf === 'manual' || item.shelf === 'auto') return item.shelf;
+  // Older records carry no shelf. The source tells them apart: the manual
+  // panel writes these sources, while the automatic poster writes its own.
+  if (!MANUAL_DRAFT_SOURCES.has(item.source)) return 'auto';
+  // Both paths share a source, so a draft that is already in the send queue
+  // belongs to the automatic poster's work, not to the preview.
+  if (queuedTexts && queuedTexts.has(String(item.text || '').trim())) return 'auto';
+  return 'manual';
+}
+
+function rememberManualDraft(item, draftsPath = MANUAL_DRAFTS_PATH, nowMs = Date.now(), shelf = 'manual') {
   if (!item || !String(item.text || '').trim()) return;
   mutateManualDrafts(current => {
     const id = String(item.id || `manual_${nowMs}_${Math.random().toString(36).slice(2, 6)}`);
@@ -423,6 +443,7 @@ function rememberManualDraft(item, draftsPath = MANUAL_DRAFTS_PATH, nowMs = Date
       text: String(item.text || '').trim(),
       source: item.source || 'manual',
       theme: item.theme || '',
+      shelf,
       createdAt: (existing && existing.createdAt) || item.createdAt || new Date(nowMs).toISOString(),
       // Only a real enqueue counts. Regenerating or re-reading the same draft
       // must not make it look queued.
@@ -3268,7 +3289,7 @@ export function readPluginVersion(packageUrl = new URL('./package.json', import.
 // version while the old code was still serving requests.
 const LOADED_VERSION = readPluginVersion();
 
-export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGETS, configPath = CONFIG_PATH, targetsPath = null, platform = process.platform, spawnProcess = spawn, queuePath = null, learningsPath = null, backupDir = null, trendsPath = null, manualDraftsPath = null, fetchImpl = globalThis.fetch, learningsAnalyzer = analyzeLearningSamples } = {}) {
+export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGETS, configPath = CONFIG_PATH, targetsPath = null, platform = process.platform, spawnProcess = spawn, queuePath = null, learningsPath = null, backupDir = null, trendsPath = null, manualDraftsPath = null, fetchImpl = globalThis.fetch, learningsAnalyzer = analyzeLearningSamples, tweetGenerator = generateTweetViaLmh } = {}) {
   let activeConfigPath = configPath;
   const isCustomConfig = activeConfigPath && dirname(activeConfigPath) !== dirname(CONFIG_PATH);
   const baseDir = isCustomConfig ? dirname(activeConfigPath) : null;
@@ -3282,6 +3303,17 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
   const activeTrendsPath = trendsPath || (baseDir ? join(baseDir, 'trends.json') : TRENDS_PATH);
   const activeBackupDir = backupDir || (baseDir ? join(baseDir, 'backups') : CONFIG_BACKUP_DIR);
   const currentTargets = () => (targetsPath ? resolveTargets(paths, targetsPath) : paths);
+  // The drafts already sitting in the send queue belong to the automatic
+  // poster; the manual preview must not offer them again.
+  const queuedDraftTexts = () => {
+    const texts = new Set();
+    for (const item of readPostQueue(activeQueuePath).queue || []) {
+      const text = String(item.text || '').trim();
+      if (text) texts.add(text);
+    }
+    return texts;
+  };
+  const manualDraftsFor = (shelf = 'manual') => readManualDrafts(activeManualDraftsPath, clock(), { shelf, queuedTexts: queuedDraftTexts() });
   const xApiRead = async (path, bearer) => {
     if (typeof fetchImpl !== 'function') throw new Error('当前运行环境没有 HTTPS 请求能力。');
     const url = new URL(path, 'https://api.x.com');
@@ -3565,7 +3597,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       runtimeConfigApplied: shared.source === 'shared', runtimeCapabilities, fieldSide: FIELD_SIDE,
       dshModels,
       postQueue: postQueue.queue,
-      manualDrafts: readManualDrafts(activeManualDraftsPath, clock()),
+      manualDrafts: manualDraftsFor('manual'),
       serials: readSerials(activeSerialsPath).tasks,
       postHistory: postHistory.slice(-20),
       learnings: readLearnings(activeLearningsPath),
@@ -3639,7 +3671,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         action: 'enqueue-post',
         item: newItem,
         queue: payload.queue,
-        manualDrafts: readManualDrafts(activeManualDraftsPath, clock()),
+        manualDrafts: manualDraftsFor('manual'),
         note: urgent ? '已成功将推文设置为【立即插队发送】！发帖 Worker 会在当前周期优先发出。' : '推文已加入待发队列，并在手动创作页保留 24 小时。',
       };
     }
@@ -3657,13 +3689,14 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         }
         if (text) current.items = current.items.filter(item => String(item.text || '').trim() !== text);
       }, activeManualDraftsPath, clock());
-      return { ok: true, action: 'remove-manual-draft', manualDrafts: items, note: '已从 24 小时草稿库删除。' };
+      return { ok: true, action: 'remove-manual-draft', manualDrafts: manualDraftsFor('manual'), note: '已从 24 小时草稿库删除。' };
     }
     if (request.action === 'clear-manual-drafts') {
+      // Clearing the preview library must not touch the automatic poster's backup.
       const { items } = mutateManualDrafts(current => {
-        current.items = [];
+        current.items = current.items.filter(item => draftShelf(item) !== 'manual');
       }, activeManualDraftsPath, clock());
-      return { ok: true, action: 'clear-manual-drafts', manualDrafts: items, note: '已清空本页 24 小时草稿库。' };
+      return { ok: true, action: 'clear-manual-drafts', manualDrafts: manualDraftsFor('manual'), note: '已清空本页 24 小时草稿库。' };
     }
     if (request.action === 'save-serial') {
       const title = String(request.title || '').trim().slice(0, 60);
@@ -4050,7 +4083,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         : basePrompt + themeBlock + learningBlock + subjectBlock + peopleBlock + formatRuleFor(theme);
         const styleProblem = text => draftStyleProblem(text, styleKey);
         try {
-          let rawDraft = await generateTweetViaLmh(prompt, { model: genModel, port });
+          let rawDraft = await tweetGenerator(prompt, { model: genModel, port });
           let draftText = draftFmt.lineCount > 0
             ? String(rawDraft || '').trim()
             : enforceOneSentencePerLine(rawDraft);
@@ -4079,7 +4112,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
             // Corrective retries that name every violation.
             const retryPrompt = `${prompt}\n\n【上一次不合格，必须逐条修正】\n- ${verdict.reasons.join('\n- ')}`
               + (draftFmt.lineCount === 0 ? '' : `\n- 严格保持 ${draftFmt.lineCount} 行`);
-            rawDraft = await generateTweetViaLmh(retryPrompt, { model: genModel, port });
+            rawDraft = await tweetGenerator(retryPrompt, { model: genModel, port });
             draftText = draftFmt.lineCount > 0
               ? String(rawDraft || '').trim()
               : enforceOneSentencePerLine(rawDraft);
@@ -4170,7 +4203,9 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         const usedNow = generated.map(item => item.hotTopic).filter(Boolean);
         if (usedNow.length) rememberUsedHotTopics(usedNow);
         for (const item of generated) {
-          rememberManualDraft(item, activeManualDraftsPath, clock());
+          // These went straight into the send queue, so they are a backup of the
+          // automatic poster's work, not candidates for the manual preview.
+          rememberManualDraft(item, activeManualDraftsPath, clock(), 'auto');
         }
         const { payload } = mutatePostQueue((current) => {
           current.queue.push(...generated);
@@ -4180,7 +4215,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
           action: 'generate-draft-posts',
           generated,
           queue: payload.queue,
-          manualDrafts: readManualDrafts(activeManualDraftsPath, clock()),
+          manualDrafts: manualDraftsFor('manual'),
           failed: failures.length,
           note: `已成功由大模型生成并追加 ${generated.length} 条推文草稿入队！草稿已在手动创作页备份保留 24 小时。${failures.length ? `另有 ${failures.length} 条生成失败。` : ''}`,
         };
@@ -4190,7 +4225,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         action: 'generate-draft-posts',
         generated,
         failed: failures.length,
-        manualDrafts: readManualDrafts(activeManualDraftsPath, clock()),
+        manualDrafts: manualDraftsFor('manual'),
         note: `已成功生成 ${generated.length} 条推文草稿！可预览并挑选需要的内容加入队列。草稿会在本页保留 24 小时。`,
       };
     }
