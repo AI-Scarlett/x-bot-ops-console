@@ -848,6 +848,55 @@ test('the manual draft preview excludes drafts the automatic poster queued', asy
   } finally { f.cleanup(); }
 });
 
+
+test('the content style rides next to the writing style and reaches the prompt', async () => {
+  const { contentStyleBlock, resolveContentStyle, serialChapterPrompt } = await import('../index.js');
+  const block = contentStyleBlock('仙侠');
+  assert.match(block, /内容风格：仙侠/);
+  assert.match(block, /语言形式仍严格按上面的文风要求/);
+  // No content style means no directive at all.
+  assert.equal(contentStyleBlock(''), '');
+  assert.equal(contentStyleBlock('   '), '');
+  // The theme's own value wins over the global one.
+  assert.equal(resolveContentStyle({ contentStyle: '武侠' }, { contentStyle: '仙侠' }), '武侠');
+  assert.equal(resolveContentStyle({}, { contentStyle: '仙侠' }), '仙侠');
+  assert.equal(resolveContentStyle(null, {}), '');
+  // A serial carries its own content style next to its writing style.
+  const prompt = serialChapterPrompt({
+    task: { title: '山海', style: 'classical', contentStyle: '爽文', premise: '设定', chapters: [] },
+    cast: [], chapterNo: 1,
+  });
+  assert.match(prompt, /内容风格：爽文/);
+  assert.match(prompt, /文言文/);
+});
+
+test('the content style is validated and stored per theme and globally', async () => {
+  const { validateConfig, DEFAULT_CONFIG } = await import('../index.js');
+  const config = structuredClone(DEFAULT_CONFIG);
+  config.postSettings.contentStyle = '  仙侠  ';
+  config.postSettings.topicMix = [{ id: 'a', label: '故事', weight: 100, prompt: '', contentStyle: ' 武侠 ' }];
+  const validated = validateConfig(config);
+  assert.equal(validated.postSettings.contentStyle, '仙侠');
+  assert.equal(validated.postSettings.topicMix[0].contentStyle, '武侠');
+
+  const bad = structuredClone(DEFAULT_CONFIG);
+  bad.postSettings.contentStyle = 42;
+  assert.throws(() => validateConfig(bad), /内容风格无效/);
+  const tooLong = structuredClone(DEFAULT_CONFIG);
+  tooLong.postSettings.topicMix = [{ id: 'a', label: '故事', weight: 100, prompt: '', contentStyle: 'x'.repeat(80) }];
+  assert.throws(() => validateConfig(tooLong), /内容风格不能超过 60 字/);
+});
+
+test('changing the content style invalidates queued drafts', async () => {
+  const { postSettingsSignature } = await import('../index.js');
+  const base = { customPrompt: 'x', topicMix: [{ id: 'a', label: '故事', weight: 100, prompt: '' }] };
+  const withStyle = { ...base, contentStyle: '仙侠' };
+  assert.notEqual(postSettingsSignature(base), postSettingsSignature(withStyle));
+  // A theme's own content style is part of the fingerprint too.
+  const themed = { ...base, topicMix: [{ id: 'a', label: '故事', weight: 100, prompt: '', contentStyle: '武侠' }] };
+  assert.notEqual(postSettingsSignature(base), postSettingsSignature(themed));
+});
+
 test('the server lists the actions it supports so a stale panel can be detected', async () => {
   const f = fixture();
   try {

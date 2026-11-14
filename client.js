@@ -445,7 +445,9 @@ window.__ModuleLoader__.load({
       const [draftGenMaxChars, setDraftGenMaxChars] = React.useState(genPrefs.maxChars === undefined || genPrefs.maxChars === null ? '' : genPrefs.maxChars);
       const [draftReference, setDraftReference] = React.useState(typeof genPrefs.reference === 'string' ? genPrefs.reference : '');
       const [draftCast, setDraftCast] = React.useState(Array.isArray(genPrefs.cast) ? genPrefs.cast : []);
-      const [serialForm, setSerialForm] = React.useState({ id: '', title: '', premise: '', reference: '', style: '', model: '', cast: [], customCast: [] });
+      // 本次生成的内容风格：留空跟随全局，只对这一批生效。
+      const [draftGenContentStyle, setDraftGenContentStyle] = React.useState(typeof genPrefs.contentStyle === 'string' ? genPrefs.contentStyle : '');
+      const [serialForm, setSerialForm] = React.useState({ id: '', title: '', premise: '', reference: '', style: '', contentStyle: '', model: '', cast: [], customCast: [] });
       const [serialOpen, setSerialOpen] = React.useState('');
       const [serialWriting, setSerialWriting] = React.useState(false);
       const [draftAnalysis, setDraftAnalysis] = React.useState('');
@@ -1828,6 +1830,15 @@ window.__ModuleLoader__.load({
                 mode === 'random' ? randomRows : fixedRow);
             })(),
 
+            h('label', { style: { ...labelStyle, marginTop: 10 } }, '内容风格（题材调性，可留空）：', h(SideBadge, { side: 'post' })),
+            h('input', {
+              style: inputStyle, maxLength: 60,
+              placeholder: '例如：仙侠 / 武侠 / 爽文 / 悬疑',
+              value: config?.postSettings?.contentStyle || '',
+              onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), contentStyle: e.target.value } })),
+            }),
+            h('small', { style: { display: 'block', color: C.faint, fontSize: 11, marginTop: 4, lineHeight: 1.6 } },
+              '内容风格决定「写什么题材、什么调性」，文风决定「用什么语言写」。两者并列生效：文风选文言文、内容风格填仙侠，就用文言写仙侠。留空表示不限定；每条主题也可以单独填自己的内容风格来覆盖这里。'),
             h('label', { style: { ...labelStyle, marginTop: 10 } }, '原创发帖文案提示词（自定义 Prompt）：', h(SideBadge, { side: 'post' })),
             h('textarea', { style: { ...inputStyle, minHeight: 90 }, value: config?.postSettings?.customPrompt || '', onChange: e => updateConfig(c => ({ ...c, postSettings: { ...(c.postSettings || {}), customPrompt: e.target.value } })) }),
             h('label', { style: { ...labelStyle, marginTop: 10 } }, '随机发帖话题灵感池（逗号分隔）：', h(SideBadge, { side: 'post' })),
@@ -2169,6 +2180,18 @@ window.__ModuleLoader__.load({
                       h('option', { value: 'english' }, '英文'),
                       h('option', { value: 'chuci' }, '楚辞')),
                     h('label', {
+                      title: '这条主题的内容风格（题材调性），留空则跟随上面的全局内容风格',
+                      style: { display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, color: C.muted },
+                    },
+                      '内容风格',
+                      h('input', {
+                        type: 'text', maxLength: 60,
+                        style: { ...inputStyle, flex: '0 1 150px', minWidth: 120, margin: 0, padding: '4px 6px', fontSize: 12 },
+                        placeholder: '留空跟随全局',
+                        value: item.contentStyle ?? '',
+                        onChange: e => patch(item.id, { contentStyle: e.target.value }),
+                      })),
+                    h('label', {
                       title: '北京时间。两个都留空就是全天可发；填了之后只在这个时段生成和发送，同一天只发一条',
                       style: { display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, color: (item.sendStartHour !== '' && item.sendStartHour !== undefined) ? C.accent : C.muted },
                     },
@@ -2470,6 +2493,20 @@ window.__ModuleLoader__.load({
                       saveGenPrefs({ maxChars: next });
                     },
                   })
+                ),
+                h('label', { style: { ...labelStyle, flex: '0 0 220px', margin: 0 } },
+                  '本次内容风格：',
+                  h('input', {
+                    type: 'text', maxLength: 60, style: inputStyle,
+                    placeholder: config?.postSettings?.contentStyle
+                      ? `留空跟随全局（当前 ${config.postSettings.contentStyle}）`
+                      : '留空跟随全局，例如：仙侠 / 武侠 / 爽文',
+                    value: draftGenContentStyle,
+                    onChange: e => {
+                      setDraftGenContentStyle(e.target.value);
+                      saveGenPrefs({ contentStyle: e.target.value });
+                    },
+                  })
                 )),
               draftGenStyle === 'english'
                 ? h('div', { style: { fontSize: 11, color: C.muted, marginBottom: 6, lineHeight: 1.6 } },
@@ -2593,6 +2630,7 @@ window.__ModuleLoader__.load({
                         reference: draftReference.trim(),
                         referenceAnalysis: draftAnalysis,
                         cast: draftCast,
+                        contentStyle: draftGenContentStyle.trim(),
                         commitToQueue: false,
                       });
                       if (res && Array.isArray(res.generated) && res.generated.length) {
@@ -2812,6 +2850,14 @@ window.__ModuleLoader__.load({
                   h('option', { value: 'vernacular' }, '白话文'),
                   h('option', { value: 'classical' }, '文言文'),
                   h('option', { value: 'english' }, '英文'))),
+              h('label', { style: { ...labelStyle, flex: '0 0 220px', margin: 0 } },
+                '内容风格：',
+                h('input', {
+                  type: 'text', maxLength: 60, style: { ...inputStyle, margin: '6px 0 4px' },
+                  placeholder: '留空不限定，例如：仙侠 / 武侠 / 爽文',
+                  value: serialForm.contentStyle || '',
+                  onChange: e => setSerialForm(form => ({ ...form, contentStyle: e.target.value })),
+                })),
             ),
             h(ModelPicker, {
               value: serialForm.model,
@@ -2861,7 +2907,7 @@ window.__ModuleLoader__.load({
                 onClick: () => setSerialForm(form => ({ ...form, customCast: [...(form.customCast || []), { name: '', persona: '' }] })),
               }, '＋ 添加自定义人物')),
             h('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 } },
-              serialForm.id ? h('button', { type: 'button', style: buttonStyle(false), onClick: () => setSerialForm({ id: '', title: '', premise: '', reference: '', style: '', model: '', cast: [], customCast: [] }) }, '取消编辑') : null,
+              serialForm.id ? h('button', { type: 'button', style: buttonStyle(false), onClick: () => setSerialForm({ id: '', title: '', premise: '', reference: '', style: '', contentStyle: '', model: '', cast: [], customCast: [] }) }, '取消编辑') : null,
               h('button', {
                 type: 'button', disabled: busy, style: buttonStyle(true),
                 onClick: async () => {
@@ -2874,7 +2920,7 @@ window.__ModuleLoader__.load({
                       ? `${serialForm.premise}\n\n${directive}`
                       : serialForm.premise;
                     const res = await act('save-serial', undefined, { ...serialForm, premise });
-                    setSerialForm({ id: '', title: '', premise: '', reference: '', style: '', model: '', cast: [], customCast: [] });
+                    setSerialForm({ id: '', title: '', premise: '', reference: '', style: '', contentStyle: '', model: '', cast: [], customCast: [] });
                     if (res?.serial?.id) setSerialOpen(res.serial.id);
                     setNotice(res?.note || '连载已保存。');
                   } catch (err) { setError(err.message || String(err)); }
@@ -2888,12 +2934,13 @@ window.__ModuleLoader__.load({
                   (serial.chapters || []).length ? `已写 ${(serial.chapters || []).length} 章` : '还没写。点右边「写第 1 章」，写好后在这张卡片里复制，自己去发。',
                   ((serial.cast || []).length + (serial.customCast || []).length) ? ` · 出场 ${(serial.cast || []).length + (serial.customCast || []).length} 人` : '',
                   serial.style ? ` · ${({ classical: '文言文', vernacular: '白话文', english: '英文' })[serial.style] || serial.style}` : '',
+                  serial.contentStyle ? ` · ${serial.contentStyle}` : '',
                   serial.model ? ` · ${serial.model}` : '')),
               h('div', { style: { display: 'flex', gap: 6 } },
                 h('button', { type: 'button', style: buttonStyle(false), onClick: () => setSerialOpen(serialOpen === serial.id ? '' : serial.id) }, serialOpen === serial.id ? '收起' : '展开'),
                 h('button', {
                   type: 'button', style: buttonStyle(false),
-                  onClick: () => setSerialForm({ id: serial.id, title: serial.title, premise: serial.premise, reference: serial.reference || '', style: serial.style || '', model: serial.model || '', cast: serial.cast || [], customCast: serial.customCast || [] }),
+                  onClick: () => setSerialForm({ id: serial.id, title: serial.title, premise: serial.premise, reference: serial.reference || '', style: serial.style || '', contentStyle: serial.contentStyle || '', model: serial.model || '', cast: serial.cast || [], customCast: serial.customCast || [] }),
                 }, '改设定'),
                 h('button', {
                   type: 'button', disabled: busy || serialWriting, style: buttonStyle(true),

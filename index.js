@@ -115,6 +115,7 @@ export const FIELD_SIDE = Object.freeze({
   'postSettings.dedupe': 'post',
   'postSettings.format': 'post',
   'postSettings.style': 'post',
+  'postSettings.contentStyle': 'post',
   'postSettings.restEveryPosts': 'post',
   'postSettings.restMinutes': 'post',
   'postSettings.learningInfluence': 'post',
@@ -343,17 +344,39 @@ export function serialStyleBlock(styleKey) {
   return SERIAL_STYLE_BLOCKS[String(styleKey || '').trim().toLowerCase()] || '';
 }
 
+// The content style is the genre and tone (仙侠, 武侠, 爽文…), not the
+// language. It sits next to the writing style: the style decides how the
+// words look, the content style decides what the story is about.
+export function contentStyleBlock(contentStyle) {
+  const text = String(contentStyle || '').trim();
+  if (!text) return '';
+  return `【内容风格：${text}（题材调性，硬性要求）】本篇必须写成「${text}」的内容风格：`
+    + `选题、世界观、意象、人物关系、冲突类型和结局走向都围绕这个调性展开，`
+    + `让读者一眼看出是${text}的味道。`
+    + `内容风格只决定写什么和什么调性，语言形式仍严格按上面的文风要求，不要因为换了内容风格就改变文风。`;
+}
+
+// The content style that applies here: the theme's own value wins over the
+// global one.
+export function resolveContentStyle(theme, postCfg) {
+  const themeValue = isRecord(theme) ? String(theme.contentStyle || '').trim() : '';
+  if (themeValue) return themeValue;
+  return String((postCfg || {}).contentStyle || '').trim();
+}
+
 // The chapter prompt: the premise, the reference and everything already written,
 // so a new chapter continues instead of restarting.
 export function serialChapterPrompt({ task, cast, chapterNo }) {
   const people = (cast || []).map(person => `- ${person.name}${person.gender ? `（${person.gender}）` : ''}：${person.persona}`).join('\n');
   const written = (task.chapters || []).map(chapter => `第${chapter.no}章 ${chapter.title || ''}\n${chapter.text}`).join('\n\n');
   const style = serialStyleBlock(task.style);
+  const contentStyle = contentStyleBlock(task.contentStyle);
   return [
     '你在续写一部连载长文。只输出本章正文，不要前言、不要解释、不要复述设定。',
     `这一章是第${chapterNo}章。`,
     task.title ? `作品名：${task.title}` : '',
     style ? `\n${style}` : '',
+    contentStyle ? `\n${contentStyle}` : '',
     task.premise ? `\n【基础剧情与设定】\n${task.premise}` : '',
     task.reference ? `\n【内容参考（只借鉴其写法、节奏和细节，不要照抄，不要写成同一件事）】\n${task.reference}` : '',
     people ? `\n【出场人物（用列出的称呼，性格与关系按人设写，正文不要出现用户名和 @）】\n${people}` : '',
@@ -1175,13 +1198,16 @@ export function postSettingsSignature(postCfg) {
     .map(item => {
       const style = String(item.style || '').trim();
       const model = String(item.model || '').trim();
+      const contentStyle = String(item.contentStyle || '').trim();
       // Only a theme that picks its own style, model or length range changes the
       // fingerprint, so an untouched config keeps the same signature as before.
       const range = themeOwnRange(item);
       const rangeSuffix = range.minChars || range.maxChars ? `::${range.minChars || ''}:${range.maxChars || ''}` : '';
       const windowSuffix = (item.sendStartHour !== undefined && item.sendEndHour !== undefined)
         ? `::${item.sendStartHour}-${item.sendEndHour}` : '';
-      const suffix = (style || model || rangeSuffix || windowSuffix) ? `::${style}::${model}${rangeSuffix}${windowSuffix}` : '';
+      const styleSuffix = contentStyle ? `::${contentStyle}` : '';
+      const suffix = (style || model || rangeSuffix || windowSuffix || styleSuffix)
+        ? `::${style}::${model}${rangeSuffix}${windowSuffix}${styleSuffix}` : '';
       return `${item.label}:${item.weight}:${item.prompt || ''}${suffix}`;
     })
     .join(';');
@@ -1193,6 +1219,7 @@ export function postSettingsSignature(postCfg) {
     String(influence),
     pc.oneSentencePerLine === false ? '0' : '1',
     (Array.isArray(pc.topics) ? pc.topics : []).map(String).join(','),
+    String(pc.contentStyle || '').trim(),
   ];
   return createHash('sha1').update(parts.join('|'), 'utf8').digest('hex').slice(0, 16);
 }
@@ -2276,6 +2303,8 @@ const DEFAULT_CONFIG = Object.freeze({
       bannedPatterns: ['君不见', '诸君', '敢问诸君', '君以为然', '敢问', '《X赋》', '赋体'],
       hardBottomLines: '只写虚构、自愿的成年人；不写未成年人、露骨性行为过程、生殖器、裸体细节；不写胁迫、偷拍、灌醉/下药；不违法、不仇恨、不歧视。',
     },
+    // The genre and tone (仙侠, 武侠, 爽文…), next to the writing style.
+    contentStyle: '',
     // Every wording fragment of the style prompt lives here so nothing is fixed.
     style: {
       persona: '用浅显文言写。自称余/吾，称对方君/卿/尔，不用我/你作主语。写虚构成年人之间自愿的暧昧、男女博弈、相亲彩礼、渣男渣女，或骂一件具体的事。',
@@ -2856,6 +2885,11 @@ function validateConfig(input) {
     if (copy.postSettings.intervalMinutes !== undefined && (!Number.isInteger(copy.postSettings.intervalMinutes) || copy.postSettings.intervalMinutes < 1 || copy.postSettings.intervalMinutes > 1440)) throw new TypeError('发帖分钟间隔设置无效');
     if (copy.postSettings.intervalSeconds !== undefined && (!Number.isInteger(copy.postSettings.intervalSeconds) || copy.postSettings.intervalSeconds < 30 || copy.postSettings.intervalSeconds > 86400)) throw new TypeError('发帖秒级间隔设置无效');
     if (copy.postSettings.customPrompt !== undefined && typeof copy.postSettings.customPrompt !== 'string') throw new TypeError('发帖提示词无效');
+    if (copy.postSettings.contentStyle !== undefined) {
+      if (typeof copy.postSettings.contentStyle !== 'string') throw new TypeError('内容风格无效');
+      if (copy.postSettings.contentStyle.trim().length > 60) throw new TypeError('内容风格不能超过 60 字');
+      copy.postSettings.contentStyle = copy.postSettings.contentStyle.trim();
+    }
     if (copy.postSettings.model !== undefined && typeof copy.postSettings.model !== 'string') throw new TypeError('发帖模型设置无效');
     if (copy.postSettings.topics !== undefined && !Array.isArray(copy.postSettings.topics)) throw new TypeError('发帖灵感池设置无效');
     if (copy.postSettings.intervalMode !== undefined && !['fixed', 'random'].includes(copy.postSettings.intervalMode)) throw new TypeError('发帖间隔模式只能是固定或随机');
@@ -3089,6 +3123,13 @@ function validateConfig(input) {
         }
         if (item.minChars !== undefined && item.maxChars !== undefined && item.minChars > item.maxChars) {
           throw new TypeError(`主题「${item.label}」的字数下限不能大于上限`);
+        }
+        // A theme may carry its own content style; empty means the global one.
+        if (item.contentStyle !== undefined && item.contentStyle !== null) {
+          if (typeof item.contentStyle !== 'string') throw new TypeError(`主题「${item.label}」的内容风格无效`);
+          if (item.contentStyle.trim().length > 60) throw new TypeError(`主题「${item.label}」的内容风格不能超过 60 字`);
+          item.contentStyle = item.contentStyle.trim();
+          if (!item.contentStyle) delete item.contentStyle;
         }
         // The people this theme's stories are allowed to use. Empty means the
         // theme writes without any named person, so a story never pulls in
@@ -3704,6 +3745,8 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       const premise = String(request.premise || '').trim().slice(0, SERIAL_LIMITS.premiseChars);
       if (!premise) throw new TypeError('请先写基础剧情和设定');
       const reference = String(request.reference || '').trim().slice(0, SERIAL_LIMITS.referenceChars);
+      // The serial keeps its own content style, next to its writing style.
+      const contentStyle = String(request.contentStyle || '').trim().slice(0, 60);
       // Writing style and a fixed model, both per serial.
       const rawStyle = String(request.style || '').trim().toLowerCase();
       const style = ['classical', 'vernacular', 'english'].includes(rawStyle) ? rawStyle : '';
@@ -3726,6 +3769,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
           existing.premise = premise;
           existing.reference = reference;
           existing.style = style;
+          existing.contentStyle = contentStyle;
           existing.model = model;
           existing.cast = cast;
           existing.customCast = customCast;
@@ -3735,7 +3779,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         }
         saved = {
           id: `serial_${clock()}_${Math.random().toString(36).slice(2, 6)}`,
-          title, premise, reference, style, model, cast, customCast,
+          title, premise, reference, style, contentStyle, model, cast, customCast,
           chapters: [],
           createdAt: new Date(clock()).toISOString(),
           updatedAt: new Date(clock()).toISOString(),
@@ -3941,6 +3985,10 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         chuci: '【本条文风：楚辞（硬性要求，优先于上面的文风描述）】用楚辞体写：必须有「兮」字句式，可用香草江岸（蕙、杜若、江离、芙蓉）作意象，婉转含蓄，不要写成现代口语。',
       };
       const styleBlock = styleKey ? STYLE_BLOCKS[styleKey] : '';
+      // The content style is the genre and tone; the style above stays the
+      // language. A batch may override the global content style for this run.
+      // It is applied per theme below, so it is not added to the base prompt.
+      const batchContentStyle = String(request.contentStyle || '').trim();
       const basePrompt = oneOffPrompt
         ? oneOffPrompt + (styleBlock ? `\n\n${styleBlock}` : '')
         : (slotPrompt ? `${globalPrompt}\n\n【当前时段文风：${slotLabel || '分时文风'}】${slotPrompt}` : globalPrompt)
@@ -4051,9 +4099,15 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         const topic = hotTopic || pool[Math.floor(Math.random() * pool.length)];
         const theme = themePlan[i] || pickTopicTheme(postCfg.topicMix);
         const draftFmt = draftFmtFor(theme);
+        // The theme's own content style wins over the global one; the batch
+        // override wins over both.
+        const themeContentStyle = contentStyleBlock(
+          batchContentStyle || resolveContentStyle(theme, postCfg),
+        );
         const themeBlock = theme
           ? `\n\n【本条主题方向：${theme.label}】（约占 ${theme.weight}%）${theme.prompt ? ` ${theme.prompt}` : ''}`
           : '';
+        const themeContentBlock = themeContentStyle ? `\n\n${themeContentStyle}` : '';
         const subjectSource = hotTopic ? '今日热点' : '优先话题';
         const subjectBlock = topic
           ? `\n\n【本条话题：${topic}】（来源：${subjectSource}）`
@@ -4079,8 +4133,8 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       const themeCast = Array.isArray(theme?.cast) ? theme.cast : [];
       const peopleBlock = castBlock(sharedCfg, castPicks === null ? themeCast : castPicks);
       const prompt = reference
-        ? effectiveBasePrompt + referenceBlock + peopleBlock + learningBlock + formatRuleFor(theme)
-        : basePrompt + themeBlock + learningBlock + subjectBlock + peopleBlock + formatRuleFor(theme);
+        ? effectiveBasePrompt + referenceBlock + themeContentBlock + peopleBlock + learningBlock + formatRuleFor(theme)
+        : basePrompt + themeBlock + themeContentBlock + learningBlock + subjectBlock + peopleBlock + formatRuleFor(theme);
         const styleProblem = text => draftStyleProblem(text, styleKey);
         try {
           let rawDraft = await tweetGenerator(prompt, { model: genModel, port });
