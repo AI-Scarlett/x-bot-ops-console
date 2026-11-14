@@ -4132,6 +4132,10 @@ window.__ModuleLoader__.load({
           draftDirty ? h('span', { style: { color: C.accent, fontSize: 13, fontWeight: '500' } }, '● 有未保存的修改') : h('span', { style: { color: C.faint, fontSize: 12 } }, '所有修改点击保存后，两端工作进程每轮读取生效。')),
 
         confirmModal ? h('div', {
+          // macOS Desktop (DSH >= 0.2.2-rc.2) only auto-excludes controls inside
+          // data-window-drag rows. This overlay covers the draggable header, so
+          // its visible box must opt out explicitly or the buttons drag the window.
+          'data-window-drag-exclude': DESKTOP ? '' : undefined,
           style: {
             position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
             background: 'rgba(0, 0, 0, 0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center',

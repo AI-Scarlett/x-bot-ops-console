@@ -77,6 +77,9 @@ test('Desktop UI uses relative DSH route and Chinese-first controls', () => {
   assert.match(source, /const pageStyle = /);
   assert.match(source, /SafeBoundary/);
   assert.doesNotMatch(source, /window\.confirm/);
+  // DSH >= 0.2.2-rc.2: overlays covering the macOS drag header must declare
+  // their own window region or their controls drag the window instead.
+  assert.match(source, /'data-window-drag-exclude': DESKTOP \? '' : undefined/);
 });
 
 test('local target overrides are read from a user-owned file and validated', () => {
