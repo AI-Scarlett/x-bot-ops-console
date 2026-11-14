@@ -1411,6 +1411,15 @@ window.__ModuleLoader__.load({
               side: 'comment',
               label: '💬 自动评论专用大模型：'
             }),
+            h('label', { style: { ...labelStyle, marginTop: 12 } }, '内容风格（题材调性，可留空）：', h(SideBadge, { side: 'comment' })),
+            h('input', {
+              style: inputStyle, maxLength: 60,
+              placeholder: '例如：仙侠 / 武侠 / 爽文 / 悬疑',
+              value: config?.commentSettings?.contentStyle || '',
+              onChange: e => updateConfig(c => ({ ...c, commentSettings: { ...(c.commentSettings || {}), contentStyle: e.target.value } })),
+            }),
+            h('small', { style: { display: 'block', color: C.faint, fontSize: 11, marginTop: 4, lineHeight: 1.6 } },
+              '和发帖的内容风格同一用法：决定「评论什么题材、什么调性」，文风决定「用什么语言写」。文风是文言文、这里填仙侠，就用文言写仙侠味的评论。留空表示不限定。'),
             h('label', { style: { ...labelStyle, marginTop: 12 } }, '💬 自动评论人设与文风提示词（Prompt）：', h(SideBadge, { side: 'comment' })),
             h('textarea', {
               style: { ...inputStyle, minHeight: 80 },
@@ -1547,6 +1556,15 @@ window.__ModuleLoader__.load({
               side: 'reply',
               label: '↩️ 提及回复专用大模型：'
             }),
+            h('label', { style: { ...labelStyle, marginTop: 12 } }, '内容风格（题材调性，可留空）：', h(SideBadge, { side: 'reply' })),
+            h('input', {
+              style: inputStyle, maxLength: 60,
+              placeholder: '例如：仙侠 / 武侠 / 爽文 / 悬疑',
+              value: config?.replySettings?.contentStyle || '',
+              onChange: e => updateConfig(c => ({ ...c, replySettings: { ...(c.replySettings || {}), contentStyle: e.target.value } })),
+            }),
+            h('small', { style: { display: 'block', color: C.faint, fontSize: 11, marginTop: 4, lineHeight: 1.6 } },
+              '和发帖的内容风格同一用法：决定「回复什么题材、什么调性」，文风决定「用什么语言写」。留空表示不限定。'),
             h('label', { style: { ...labelStyle, marginTop: 12 } }, '↩️ 提及回复全局补充提示词（Prompt）：', h(SideBadge, { side: 'reply' })),
             h('textarea', {
               style: { ...inputStyle, minHeight: 80 },

@@ -873,6 +873,27 @@ test('the content style rides next to the writing style and reaches the prompt',
   assert.match(prompt, /文言文/);
 });
 
+test('comment and reply settings accept a content style of their own', async () => {
+  const config = clone(DEFAULT_CONFIG);
+  config.commentSettings.contentStyle = '  仙侠  ';
+  config.replySettings.contentStyle = '武侠';
+  const validated = validateConfig(config);
+  assert.equal(validated.commentSettings.contentStyle, '仙侠');
+  assert.equal(validated.replySettings.contentStyle, '武侠');
+
+  const bad = clone(DEFAULT_CONFIG);
+  bad.commentSettings.contentStyle = 42;
+  assert.throws(() => validateConfig(bad), /评论内容风格无效/);
+
+  const tooLong = clone(DEFAULT_CONFIG);
+  tooLong.replySettings.contentStyle = 'x'.repeat(80);
+  assert.throws(() => validateConfig(tooLong), /回复内容风格不能超过 60 字/);
+
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.match(source, /commentSettings\?\.contentStyle/);
+  assert.match(source, /replySettings\?\.contentStyle/);
+});
+
 test('the content style is validated and stored per theme and globally', async () => {
   const { validateConfig, DEFAULT_CONFIG } = await import('../index.js');
   const config = structuredClone(DEFAULT_CONFIG);

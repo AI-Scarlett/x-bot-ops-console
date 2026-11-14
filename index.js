@@ -82,12 +82,14 @@ export const FIELD_SIDE = Object.freeze({
   'rules.mentionPauseDuringFullStop': 'reply',
   'commentSettings.model': 'comment',
   'commentSettings.customPrompt': 'comment',
+  'commentSettings.contentStyle': 'comment',
   'commentSettings.skipKeywords': 'comment',
   'commentSettings.extraFinanceKeywords': 'comment',
   'commentSettings.minLength': 'comment',
   'commentSettings.maxLength': 'comment',
   'replySettings.model': 'reply',
   'replySettings.customPrompt': 'reply',
+  'replySettings.contentStyle': 'reply',
   'replySettings.lengthRule': 'reply',
   'replySettings.cannedForbidden': 'reply',
   'replySettings.thinReplyExtra': 'reply',
@@ -2223,6 +2225,8 @@ const DEFAULT_CONFIG = Object.freeze({
   commentSettings: {
     model: '',
     customPrompt: '',
+    // Genre and tone, parallel to the writing style. Empty means unconstrained.
+    contentStyle: '',
     // Words that make the worker skip a post entirely.
     skipKeywords: [],
     extraFinanceKeywords: [],
@@ -2232,6 +2236,7 @@ const DEFAULT_CONFIG = Object.freeze({
   replySettings: {
     model: '',
     customPrompt: '',
+    contentStyle: '',
     // Built-in prompt fragments, surfaced in the UI so they can be edited.
     lengthRule: '10到28字。结尾不要用“。”或“.”。可用省略号、感叹号、一个表情、文言语气词，或者不加标点。',
     cannedForbidden: '禁止“评论区卧虎藏龙”“感谢分享”“支持一下”“同谋共济”“投书密语”这类套话，禁止方括号表情。',
@@ -2821,11 +2826,21 @@ function validateConfig(input) {
       copy.commentSettings[key] = value;
     }
     if (copy.commentSettings.minLength > copy.commentSettings.maxLength) throw new TypeError('评论最短长度不能大于最长长度');
+    if (copy.commentSettings.contentStyle !== undefined) {
+      if (typeof copy.commentSettings.contentStyle !== 'string') throw new TypeError('评论内容风格无效');
+      if (copy.commentSettings.contentStyle.trim().length > 60) throw new TypeError('评论内容风格不能超过 60 字');
+      copy.commentSettings.contentStyle = copy.commentSettings.contentStyle.trim();
+    }
   }
   if (copy.replySettings !== undefined) {
     if (!isRecord(copy.replySettings) || (copy.replySettings.model !== undefined && typeof copy.replySettings.model !== 'string') || (copy.replySettings.customPrompt !== undefined && typeof copy.replySettings.customPrompt !== 'string')) throw new TypeError('回复个性化设置无效');
     if (copy.replySettings.personaOverride !== undefined && (typeof copy.replySettings.personaOverride !== 'string' || copy.replySettings.personaOverride.length > 2000)) throw new TypeError('人设覆盖文本无效');
     if (copy.replySettings.likeOnReply !== undefined && typeof copy.replySettings.likeOnReply !== 'boolean') throw new TypeError('回复后顺手点赞开关无效');
+    if (copy.replySettings.contentStyle !== undefined) {
+      if (typeof copy.replySettings.contentStyle !== 'string') throw new TypeError('回复内容风格无效');
+      if (copy.replySettings.contentStyle.trim().length > 60) throw new TypeError('回复内容风格不能超过 60 字');
+      copy.replySettings.contentStyle = copy.replySettings.contentStyle.trim();
+    }
     if (copy.replySettings.stopKeywords !== undefined) {
       if (!Array.isArray(copy.replySettings.stopKeywords) || copy.replySettings.stopKeywords.length > 200) throw new TypeError('停止回复关键词名单无效');
       copy.replySettings.stopKeywords = [...new Set(copy.replySettings.stopKeywords.map(item => String(item || '').trim()).filter(Boolean))];
