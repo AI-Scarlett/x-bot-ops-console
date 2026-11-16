@@ -468,6 +468,9 @@ window.__ModuleLoader__.load({
       const [externalAnalyzeBusy, setExternalAnalyzeBusy] = React.useState(false);
       const [pickingFolder, setPickingFolder] = React.useState(false);
       const [styleGuideDraft, setStyleGuideDraft] = React.useState('');
+      // The history list can run past a hundred posts; show it in pages so the
+      // whole window stays reachable instead of dying after the first twenty.
+      const [historyShown, setHistoryShown] = React.useState(20);
       const [bannedDraft, setBannedDraft] = React.useState('');
       // 清空学习成果只是页面上的待保存标记，点底部「保存」才写盘。
       const [learningsClearPending, setLearningsClearPending] = React.useState(false);
@@ -1644,6 +1647,25 @@ window.__ModuleLoader__.load({
             h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 10 } },
               h('h2', { style: { margin: 0, fontSize: 16 } }, '📋 待发推文队列看板（按序或加急发布）'),
               h('div', { style: { display: 'flex', gap: 8 } },
+                h('button', {
+                  type: 'button',
+                  disabled: busy || generatingDrafts,
+                  title: '按当前发帖配置立即生成 5 条，直接追加到待发队列末尾',
+                  style: { ...buttonStyle(true), fontSize: 12, padding: '4px 12px' },
+                  onClick: async () => {
+                    setGeneratingDrafts(true);
+                    setNotice('正在生成 5 条并加入待发队列，大约需要一两分钟...');
+                    try {
+                      const res = await act('generate-draft-posts', undefined, { count: 5, commitToQueue: true });
+                      const made = Array.isArray(res?.generated) ? res.generated.length : 0;
+                      setNotice(res?.note || (made ? `已生成 ${made} 条并加入待发队列。` : '这次没有生成出可用的稿子，队列未变化。'));
+                    } catch (err) {
+                      setError(`生成失败：${err.message || String(err)}`);
+                    } finally {
+                      setGeneratingDrafts(false);
+                    }
+                  }
+                }, generatingDrafts ? '⏳ 正在生成 5 条...' : '✨ 手动生成 5 条入队'),
                 state?.postQueue && state.postQueue.length > 0 ? h('button', {
                   type: 'button',
                   disabled: busy,
@@ -2231,6 +2253,19 @@ window.__ModuleLoader__.load({
                       }),
                       h('span', null, '点'),
                       h('span', { style: { fontSize: 11, color: C.faint } }, '留空=全天')),
+                    h('label', {
+                      title: '同一个主题两次发帖之间至少隔这么多分钟，避免同类型连发。留空或 0 表示不限制',
+                      style: { display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, color: item.cooldownMinutes ? C.accent : C.muted },
+                    },
+                      '冷却',
+                      h('input', {
+                        type: 'number', min: 0, max: 1440,
+                        style: { ...inputStyle, width: 72, margin: 0, padding: '4px 6px', fontSize: 12 },
+                        placeholder: '分钟',
+                        value: item.cooldownMinutes ?? '',
+                        onChange: e => patch(item.id, { cooldownMinutes: e.target.value === '' ? '' : Number(e.target.value) }),
+                      }),
+                      h('span', { style: { fontSize: 11, color: C.faint } }, '分钟，留空=不限')),
                     h('label', {
                       title: '这一条主题单独用多少字；留空就沿用上面的全局字数区间',
                       style: { display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, color: C.muted },
@@ -3201,8 +3236,39 @@ window.__ModuleLoader__.load({
               h('div', { style: { fontSize: 12, color: C.muted, marginBottom: 6 } },
                 `上次历史窗学习：${state.learnings.history.lastRunAt} · 分析 ${state.learnings.history.considered} 条 · 达标 ${state.learnings.history.learned} 条`,
                 state.learnings.history.note ? ` · ${state.learnings.history.note}` : ''),
+              // What this run actually produced, right under the summary line:
+              // the patterns, the words that recur, and the plot shapes.
+              (() => {
+                const learned = state.learnings;
+                const words = learned.hotWords || [];
+                const plots = learned.plots || [];
+                const patterns = (learned.patterns || []).filter(p => p.source === 'history');
+                if (!learned.styleGuide && !words.length && !plots.length && !patterns.length) return null;
+                const sourceLabel = source => source === 'history' ? '历史帖子' : (source === 'benchmark' ? 'X 榜单' : (source === 'x_trends' ? 'X 热搜' : '手动粘贴'));
+                return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8, margin: '8px 0 12px' } },
+                  learned.styleGuide ? h('div', { style: { padding: '8px 10px', borderRadius: 8, background: C.layerTwo, border: `1px solid ${C.border}`, fontSize: 12, lineHeight: 1.6 } },
+                    h('strong', null, '套路总结：'), learned.styleGuide) : null,
+                  words.length ? h('div', { style: { fontSize: 12, lineHeight: 1.8 } },
+                    h('strong', null, `高频词（${words.length}）：`),
+                    ...words.map((word, i) => h('span', { key: i, style: { display: 'inline-block', margin: '2px 4px', padding: '1px 8px', borderRadius: 999, background: C.raised, color: C.text } }, word))) : null,
+                  plots.length ? h('div', { style: { fontSize: 12, lineHeight: 1.6 } },
+                    h('strong', null, `故事情节（${plots.length}）：`),
+                    h('ul', { style: { margin: '4px 0 0', paddingLeft: 18 } },
+                      ...plots.map((plot, i) => h('li', { key: i }, plot)))) : null,
+                  patterns.length ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
+                    h('strong', { style: { fontSize: 12 } }, `本次提炼的套路（${patterns.length}）：`),
+                    ...patterns.map(pattern => h('div', { key: pattern.id, style: { padding: '8px 10px', borderRadius: 8, background: C.layerTwo, border: `1px solid ${C.border}` } },
+                      h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginBottom: 3, flexWrap: 'wrap' } },
+                        h('strong', { style: { fontSize: 13 } }, pattern.title),
+                        h('span', { style: { fontSize: 11, color: C.faint, padding: '1px 6px', borderRadius: 4, background: C.raised } }, sourceLabel(pattern.source))),
+                      pattern.structure ? h('div', { style: { fontSize: 12, color: C.text, lineHeight: 1.5 } }, `结构：${pattern.structure}`) : null,
+                      pattern.hooks?.length ? h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 4 } },
+                        h('span', { style: { fontSize: 11, color: C.muted } }, '钩子：'),
+                        ...pattern.hooks.map((hook, i) => h('span', { key: i, style: { fontSize: 11, padding: '2px 8px', borderRadius: 999, background: C.raised, color: C.muted } }, hook))) : null))) : null);
+              })(),
               state.learnings.history.posts?.length ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
-                ...state.learnings.history.posts.slice(0, 20).map((post, idx) => h('div', {
+                h('div', { style: { fontSize: 12, color: C.muted } }, `参与分析的帖子（${state.learnings.history.posts.length} 条）：`),
+                ...state.learnings.history.posts.slice(0, historyShown).map((post, idx) => h('div', {
                   key: post.id || idx,
                   style: {
                     display: 'flex', justifyContent: 'space-between', gap: 10, padding: '8px 10px',
@@ -3215,14 +3281,25 @@ window.__ModuleLoader__.load({
                       post.learned ? h('span', { style: { color: C.success, fontWeight: 'bold' } }, '✓ 已学习') : h('span', { style: { color: C.faint } }, '· 未达标'),
                       h('span', { style: { color: C.faint } }, `曝光 ${post.views ?? '—'} / 赞 ${post.likes ?? '—'} / 评 ${post.comments ?? '—'}`),
                       post.topic ? h('span', { style: { color: C.accent } }, `话题：${post.topic}`) : null),
-                    h('div', { style: { color: C.text, lineHeight: 1.4 } }, (post.text || '').slice(0, 120) + ((post.text || '').length > 120 ? '…' : ''))),
-                  post.topic ? h('button', {
+                    h('div', { style: { color: C.text, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' } }, post.text || '（这条没有正文）')),
+                  (post.text || post.topic) ? h('button', {
                     type: 'button',
-                    title: '以后不要再写这个话题',
-                    style: { ...buttonStyle(false), padding: '2px 8px', fontSize: 11, color: C.error, borderColor: C.error, alignSelf: 'flex-start' },
-                    onClick: () => void act('promote-topic', undefined, { topic: post.topic, target: 'banned' })
+                    title: '以后不要再写这条帖子的内容',
+                    style: { ...buttonStyle(false), padding: '2px 8px', fontSize: 11, color: C.error, borderColor: C.error, alignSelf: 'flex-start', pointerEvents: 'auto' },
+                    onClick: event => {
+                      event.stopPropagation();
+                      const quote = String(post.text || post.topic || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+                      void act('promote-topic', undefined, { topic: quote, target: 'banned' });
+                    }
                   }, '🚫 避写') : null
-                ))
+                )),
+                state.learnings.history.posts.length > historyShown
+                  ? h('button', {
+                    type: 'button',
+                    style: { ...buttonStyle(false), alignSelf: 'flex-start', fontSize: 12 },
+                    onClick: () => setHistoryShown(state.learnings.history.posts.length),
+                  }, `展开全部 ${state.learnings.history.posts.length} 条`)
+                  : null
               ) : null
             ) : h('div', { style: { marginTop: 10, padding: '12px', background: C.layerTwo, borderRadius: 8, fontSize: 12, color: C.faint } },
               '还没有学习记录。点击右上角「🚀 立即学习一次」开始。')
@@ -3864,7 +3941,7 @@ window.__ModuleLoader__.load({
                           h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4, flexWrap: 'wrap' } },
                             h('strong', { style: { fontSize: 13 } }, pattern.title),
                             h('span', { style: { fontSize: 11, color: C.faint, padding: '1px 6px', borderRadius: 4, background: C.raised } },
-                              pattern.source === 'history' ? '历史帖子' : (pattern.source === 'benchmark' ? 'X 榜单' : '手动粘贴'))),
+                              pattern.source === 'history' ? '历史帖子' : (pattern.source === 'benchmark' ? 'X 榜单' : (pattern.source === 'x_trends' ? 'X 热搜' : '手动粘贴')))),
                           pattern.structure ? h('p', { style: { margin: '0 0 4px', fontSize: 12, color: C.text, lineHeight: 1.5 } }, pattern.structure) : null,
                           pattern.hooks?.length ? h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
                             ...pattern.hooks.map((hook, i) => h('span', { key: i, style: { fontSize: 11, padding: '2px 8px', borderRadius: 999, background: C.raised, color: C.muted } }, hook))) : null),

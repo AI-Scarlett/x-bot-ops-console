@@ -1041,7 +1041,7 @@ function normalizeLearnings(data) {
       structure: String(item.structure || '').slice(0, 2000),
       hooks: cleanList(item.hooks, 12).map(hook => hook.slice(0, 300)),
       sample: String(item.sample || '').slice(0, 1000),
-      source: ['history', 'benchmark', 'manual'].includes(item.source) ? item.source : 'manual',
+      source: ['history', 'benchmark', 'manual', 'x_trends'].includes(item.source) ? item.source : 'manual',
       createdAt: typeof item.createdAt === 'string' ? item.createdAt : null,
     }))
     .slice(0, 100);
@@ -1052,6 +1052,7 @@ function normalizeLearnings(data) {
     winningTopics: cleanList(data.winningTopics, 40),
     bannedTopics: cleanList(data.bannedTopics, 40),
     hotWords: cleanList(data.hotWords, 30).map(word => word.slice(0, 20)),
+    plots: cleanList(data.plots, 12).map(plot => plot.slice(0, 200)),
     externalAccounts: (Array.isArray(data.externalAccounts) ? data.externalAccounts : []).filter(isRecord).slice(0, 20).map(item => ({
       username: String(item.username || '').slice(0, 30),
       userId: String(item.userId || '').slice(0, 32),
@@ -1076,7 +1077,15 @@ function normalizeLearnings(data) {
       considered: Number.isFinite(Number(history.considered)) ? Number(history.considered) : 0,
       learned: Number.isFinite(Number(history.learned)) ? Number(history.learned) : 0,
       note: typeof history.note === 'string' ? history.note.slice(0, 500) : '',
-      posts: (Array.isArray(history.posts) ? history.posts : []).filter(isRecord).slice(0, 100),
+      posts: (Array.isArray(history.posts) ? history.posts : []).filter(isRecord).slice(0, 100).map(post => ({
+        id: String(post.id || '').slice(0, 32),
+        text: String(post.text || '').slice(0, 2000),
+        topic: String(post.topic || '').slice(0, 120),
+        views: Number.isFinite(Number(post.views)) ? Number(post.views) : null,
+        likes: Number.isFinite(Number(post.likes)) ? Number(post.likes) : null,
+        comments: Number.isFinite(Number(post.comments)) ? Number(post.comments) : null,
+        learned: post.learned === true,
+      })),
     },
 
     lastCycle: isRecord(data.lastCycle) ? {
@@ -3140,6 +3149,13 @@ function validateConfig(input) {
           throw new TypeError(`主题「${item.label}」的字数下限不能大于上限`);
         }
         // A theme may carry its own content style; empty means the global one.
+        // Minutes before the same theme may be posted again. Empty means no gap.
+        if (item.cooldownMinutes !== undefined && item.cooldownMinutes !== null && item.cooldownMinutes !== '') {
+          const cooldown = Number(item.cooldownMinutes);
+          if (!Number.isInteger(cooldown) || cooldown < 0 || cooldown > 1440) throw new TypeError(`主题「${item.label}」的冷却时间需为 0~1440 分钟`);
+          item.cooldownMinutes = cooldown;
+          if (!cooldown) delete item.cooldownMinutes;
+        }
         if (item.contentStyle !== undefined && item.contentStyle !== null) {
           if (typeof item.contentStyle !== 'string') throw new TypeError(`主题「${item.label}」的内容风格无效`);
           if (item.contentStyle.trim().length > 60) throw new TypeError(`主题「${item.label}」的内容风格不能超过 60 字`);
@@ -4734,7 +4750,9 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       return { ok: true, action: 'remove-learning', learnings: payload, note: '已删除该条学习记录。' };
     }
     if (request.action === 'promote-topic') {
-      const topic = String(request.topic || '').trim().slice(0, 80);
+      // A ban may name a theme, or quote one post. The post text is what makes
+      // the button on a learned post do something visible.
+      const topic = String(request.topic || request.text || '').trim().replace(/\s+/g, ' ').slice(0, 80);
       const target = String(request.target || 'winning');
       if (!topic) throw new TypeError('缺少话题名称');
       const { payload } = mutateLearnings((current) => {
