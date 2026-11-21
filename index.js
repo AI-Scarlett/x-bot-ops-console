@@ -4751,24 +4751,41 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
     }
     if (request.action === 'promote-topic') {
       // A ban may name a theme, or quote one post. The post text is what makes
-      // the button on a learned post do something visible.
+      // the button on a learned post do something visible. Manual bans live in
+      // config so they survive a later learning run and show up on the chip list.
       const topic = String(request.topic || request.text || '').trim().replace(/\s+/g, ' ').slice(0, 80);
       const target = String(request.target || 'winning');
       if (!topic) throw new TypeError('缺少话题名称');
+      if (target === 'banned') {
+        const shared = getConfig();
+        const current = Array.isArray(shared.postSettings?.manualBannedTopics) ? shared.postSettings.manualBannedTopics : [];
+        const next = [...new Set([topic, ...current.map(item => String(item || '').trim()).filter(Boolean)])].slice(0, 200);
+        const validated = validateConfig({ ...shared, postSettings: { ...(shared.postSettings || {}), manualBannedTopics: next } });
+        mkdirSync(dirname(activeConfigPath), { recursive: true, mode: 0o700 });
+        const tmp = `${activeConfigPath}.${process.pid}.ban.tmp`;
+        writeFileSync(tmp, `${JSON.stringify(validated, null, 2)}\n`, { mode: 0o600 });
+        renameSync(tmp, activeConfigPath);
+        const learnings = mutateLearnings((data) => {
+          data.winningTopics = (data.winningTopics || []).filter(item => item !== topic);
+        }, activeLearningsPath).payload;
+        return {
+          ok: true,
+          action: 'promote-topic',
+          learnings,
+          config: clone(validated),
+          configHash: hashCurrentConfig(),
+          note: `已将「${topic}」加入避写名单，生成时会避开这段内容。`,
+        };
+      }
       const { payload } = mutateLearnings((current) => {
-        if (target === 'banned') {
-          current.bannedTopics = [...new Set([topic, ...current.bannedTopics])].slice(0, 40);
-          current.winningTopics = current.winningTopics.filter(item => item !== topic);
-        } else {
-          current.winningTopics = [...new Set([topic, ...current.winningTopics])].slice(0, 40);
-          current.bannedTopics = current.bannedTopics.filter(item => item !== topic);
-        }
+        current.winningTopics = [...new Set([topic, ...current.winningTopics])].slice(0, 40);
+        current.bannedTopics = current.bannedTopics.filter(item => item !== topic);
       }, activeLearningsPath);
       return {
         ok: true,
         action: 'promote-topic',
         learnings: payload,
-        note: target === 'banned' ? `已将「${topic}」加入避写名单。` : `已将「${topic}」标记为优先话题。`,
+        note: `已将「${topic}」标记为优先话题。`,
       };
     }
     if (request.action === 'clear-learnings') {

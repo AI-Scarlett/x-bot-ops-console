@@ -2241,19 +2241,19 @@ test('learnings store normalizes, removes and clears entries', async () => {
     await service.action({ action: 'save-style-guide', styleGuide: '反差开局' });
 
     const after = await service.action({ action: 'state' });
-    assert.deepEqual(after.learnings.bannedTopics, ['股市理财']);
+    assert.ok(after.config.postSettings.manualBannedTopics.includes('股市理财'));
     assert.deepEqual(after.learnings.winningTopics, ['打工账本']);
     assert.equal(after.learnings.styleGuide, '反差开局');
 
     // Promoting a topic to the other side removes it from the first list.
     await service.action({ action: 'promote-topic', topic: '打工账本', target: 'banned' });
     const flipped = await service.action({ action: 'state' });
-    assert.ok(flipped.learnings.bannedTopics.includes('打工账本'));
+    assert.ok(flipped.config.postSettings.manualBannedTopics.includes('打工账本'));
     assert.ok(!flipped.learnings.winningTopics.includes('打工账本'));
 
     await service.action({ action: 'remove-learning', kind: 'banned', id: '打工账本' });
     const removed = await service.action({ action: 'state' });
-    assert.ok(!removed.learnings.bannedTopics.includes('打工账本'));
+    assert.ok(removed.config.postSettings.manualBannedTopics.includes('打工账本'));
 
     const cleared = await service.action({ action: 'clear-learnings' });
     assert.equal(cleared.learnings.styleGuide, '');

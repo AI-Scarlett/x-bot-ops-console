@@ -534,6 +534,12 @@ window.__ModuleLoader__.load({
           }
           const value = data.value || {};
           if (action === 'save-config') { setNotice(value.note || t('saved')); setConfig(value.config); setConfigHash(value.configHash ?? null); latestSaveHash.current = value.configHash ?? null; setDraftDirty(false); }
+          if (action === 'promote-topic' && value.config) {
+            setConfig(value.config);
+            setConfigHash(value.configHash ?? configHash);
+            latestSaveHash.current = value.configHash ?? latestSaveHash.current;
+            setDraftDirty(false);
+          }
           if (action === 'clear-learnings') setLearningsClearPending(false);
           else if (action === 'restore-config-backup') { setNotice(value.note || '配置已从备份恢复'); setConfig(value.config); setConfigHash(value.configHash ?? null); latestSaveHash.current = value.configHash ?? null; setDraftDirty(false); }
           else if (action === 'update-plugin') { /* handled by caller */ }
@@ -3268,7 +3274,14 @@ window.__ModuleLoader__.load({
               })(),
               state.learnings.history.posts?.length ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
                 h('div', { style: { fontSize: 12, color: C.muted } }, `参与分析的帖子（${state.learnings.history.posts.length} 条）：`),
-                ...state.learnings.history.posts.slice(0, historyShown).map((post, idx) => h('div', {
+                ...state.learnings.history.posts.slice(0, historyShown).map((post, idx) => {
+                  const quote = String(post.text || post.topic || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+                  const bannedList = [
+                    ...(config?.postSettings?.manualBannedTopics || []),
+                    ...(state?.learnings?.bannedTopics || []),
+                  ].map(item => String(item || '').replace(/\s+/g, ' ').trim().toLowerCase()).filter(Boolean);
+                  const bannedNow = quote && bannedList.some(item => item === quote.toLowerCase() || item.includes(quote.toLowerCase()) || quote.toLowerCase().includes(item));
+                  return h('div', {
                   key: post.id || idx,
                   style: {
                     display: 'flex', justifyContent: 'space-between', gap: 10, padding: '8px 10px',
@@ -3284,15 +3297,18 @@ window.__ModuleLoader__.load({
                     h('div', { style: { color: C.text, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' } }, post.text || '（这条没有正文）')),
                   (post.text || post.topic) ? h('button', {
                     type: 'button',
-                    title: '以后不要再写这条帖子的内容',
-                    style: { ...buttonStyle(false), padding: '2px 8px', fontSize: 11, color: C.error, borderColor: C.error, alignSelf: 'flex-start', pointerEvents: 'auto' },
+                    title: bannedNow ? '已在避写名单里' : '以后不要再写这条帖子的内容',
+                    disabled: busy || bannedNow,
+                    style: { ...buttonStyle(false), padding: '2px 8px', fontSize: 11, color: bannedNow ? C.faint : C.error, borderColor: bannedNow ? C.border : C.error, alignSelf: 'flex-start', pointerEvents: 'auto', cursor: bannedNow ? 'default' : 'pointer' },
                     onClick: event => {
+                      event.preventDefault();
                       event.stopPropagation();
-                      const quote = String(post.text || post.topic || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+                      if (bannedNow) return;
                       void act('promote-topic', undefined, { topic: quote, target: 'banned' });
                     }
-                  }, '🚫 避写') : null
-                )),
+                  }, bannedNow ? '已避写' : '🚫 避写') : null
+                );
+                }),
                 state.learnings.history.posts.length > historyShown
                   ? h('button', {
                     type: 'button',
