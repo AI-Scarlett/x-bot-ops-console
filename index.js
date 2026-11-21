@@ -1582,7 +1582,8 @@ export function buildLearningPromptBlock(learnings, { maxChars = 1600, influence
   const usableWinners = (learnings.winningTopics || []).filter(topic => !bannedSet.has(String(topic).toLowerCase()));
   if (usableWinners.length) parts.push(`【已验证有效的话题方向】${usableWinners.join('、')}`);
   if (learnings.bannedTopics.length) parts.push(`【必须避开的话题（历史表现差）】${learnings.bannedTopics.join('、')}`);
-  if ((learnings.hotWords || []).length) parts.push(`【高曝光用词（样本里反复出现，写作时自然用上几个，不要堆砌，不要照抄原句）】${learnings.hotWords.slice(0, 20).join('、')}`);
+  if ((learnings.hotWords || []).length) parts.push(`【可选用词（最多自然用 1～2 个，不要堆砌，不要篇篇都用同一批词）】${learnings.hotWords.slice(0, 20).join('、')}`);
+  if ((learnings.plots || []).length) parts.push(`【可借鉴的情节走向（只借鉴节奏，必须换成全新人物、场景和细节，禁止复述同一件事）】\n${learnings.plots.slice(0, 8).map(plot => `- ${plot}`).join('\n')}`);
   if (!parts.length) return '';
   // influence scales how much of the learned guidance reaches the model.
   const strength = Math.max(0, Math.min(100, Number(influence)));
@@ -1590,7 +1591,7 @@ export function buildLearningPromptBlock(learnings, { maxChars = 1600, influence
   const budget = Math.max(80, Math.round(maxChars * (strength / 100)));
   let block = parts.join('\n\n');
   if (block.length > budget) block = `${block.slice(0, budget)}…`;
-  return `\n\n（以下是根据历史爆款总结的参考套路，只借鉴选题方向与结构节奏；行文风格仍必须严格遵循上面的文风要求，不要照抄原句。）\n${block}`;
+  return `\n\n（以下只是参考，不是必须照抄的模板。每条帖子都要写一件全新的事：换人物、换场景、换冲突、换收尾。不要反复用同一批高频词，不要把旧故事换个说法再发一遍。行文风格仍必须严格遵循上面的文风要求。）\n${block}`;
 }
 
 // Pull the first JSON object out of a model reply that may be wrapped in prose
@@ -4738,6 +4739,37 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         note: styleGuide ? '套路总结已保存，下次生成草稿会参考它。' : '套路总结已清空。',
       };
     }
+    if (request.action === 'save-hot-words') {
+      const words = (Array.isArray(request.hotWords) ? request.hotWords : String(request.text || '').split(/[,，、\n]+/))
+        .map(item => String(item || '').trim()).filter(Boolean).slice(0, 30).map(word => word.slice(0, 20));
+      const { payload } = mutateLearnings((current) => {
+        current.hotWords = [...new Set(words)];
+      }, activeLearningsPath);
+      return { ok: true, action: 'save-hot-words', learnings: payload, note: words.length ? `高频词已保存（${words.length} 个）。` : '高频词已清空。' };
+    }
+    if (request.action === 'save-plots') {
+      const plots = (Array.isArray(request.plots) ? request.plots : String(request.text || '').split(/\n+/))
+        .map(item => String(item || '').trim()).filter(Boolean).slice(0, 12).map(plot => plot.slice(0, 200));
+      const { payload } = mutateLearnings((current) => {
+        current.plots = [...new Set(plots)];
+      }, activeLearningsPath);
+      return { ok: true, action: 'save-plots', learnings: payload, note: plots.length ? `故事情节已保存（${plots.length} 条）。` : '故事情节已清空。' };
+    }
+    if (request.action === 'save-pattern') {
+      const id = String(request.id || '');
+      const title = String(request.title || '').trim().slice(0, 200);
+      const structure = String(request.structure || '').trim().slice(0, 2000);
+      const hooks = (Array.isArray(request.hooks) ? request.hooks : String(request.hooksText || '').split(/[,，、\n]+/))
+        .map(item => String(item || '').trim()).filter(Boolean).slice(0, 12).map(hook => hook.slice(0, 300));
+      if (!id) throw new TypeError('缺少套路编号');
+      if (!title) throw new TypeError('套路名称不能为空');
+      const { payload } = mutateLearnings((current) => {
+        const index = current.patterns.findIndex(item => item.id === id);
+        if (index < 0) throw new TypeError('没有这条套路');
+        current.patterns[index] = { ...current.patterns[index], title, structure, hooks };
+      }, activeLearningsPath);
+      return { ok: true, action: 'save-pattern', learnings: payload, note: `套路「${title}」已保存。` };
+    }
     if (request.action === 'remove-learning') {
       const kind = String(request.kind || '');
       const id = String(request.id || '');
@@ -4745,6 +4777,8 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         if (kind === 'pattern') current.patterns = current.patterns.filter(item => item.id !== id);
         else if (kind === 'banned') current.bannedTopics = current.bannedTopics.filter(item => item !== id);
         else if (kind === 'winning') current.winningTopics = current.winningTopics.filter(item => item !== id);
+        else if (kind === 'hot') current.hotWords = current.hotWords.filter(item => item !== id);
+        else if (kind === 'plot') current.plots = current.plots.filter(item => item !== id);
         else throw new TypeError('未知的学习记录类型');
       }, activeLearningsPath);
       return { ok: true, action: 'remove-learning', learnings: payload, note: '已删除该条学习记录。' };
@@ -4938,6 +4972,7 @@ export const SERVICE_ACTIONS = [
   'set-x-api-token', 'clear-x-api-token', 'fetch-analyze-user', 'remove-external-account-analysis',
   'save-serial', 'delete-serial', 'write-serial-chapter', 'delete-serial-chapter',
   'learn-manual', 'remove-learning', 'clear-learnings', 'promote-topic', 'save-style-guide',
+  'save-hot-words', 'save-plots', 'save-pattern',
   'trigger-learn', 'fetch-trends', 'ensure-chrome', 'chrome-login-status', 'sync-login',
   'update-plugin', 'cache-cleanup',
 ];

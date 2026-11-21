@@ -101,7 +101,7 @@ window.__ModuleLoader__.load({
       'generate-draft-posts', 'analyze-reference-post', 'set-x-api-token', 'clear-x-api-token',
       'fetch-analyze-user', 'remove-external-account-analysis', 'save-serial', 'delete-serial',
       'write-serial-chapter', 'delete-serial-chapter', 'learn-manual', 'clear-learnings',
-      'promote-topic', 'save-style-guide', 'trigger-learn', 'fetch-trends', 'update-plugin',
+      'promote-topic', 'save-style-guide', 'save-hot-words', 'save-plots', 'save-pattern', 'trigger-learn', 'fetch-trends', 'update-plugin',
     ];
     function staleServerActions(actions) {
       if (!Array.isArray(actions)) return [];
@@ -468,6 +468,9 @@ window.__ModuleLoader__.load({
       const [externalAnalyzeBusy, setExternalAnalyzeBusy] = React.useState(false);
       const [pickingFolder, setPickingFolder] = React.useState(false);
       const [styleGuideDraft, setStyleGuideDraft] = React.useState('');
+      const [hotWordsDraft, setHotWordsDraft] = React.useState(null);
+      const [plotsDraft, setPlotsDraft] = React.useState(null);
+      const [patternDrafts, setPatternDrafts] = React.useState({});
       // The history list can run past a hundred posts; show it in pages so the
       // whole window stays reachable instead of dying after the first twenty.
       const [historyShown, setHistoryShown] = React.useState(20);
@@ -3852,14 +3855,23 @@ window.__ModuleLoader__.load({
               h('div', { style: { fontSize: 13, fontWeight: '600', marginBottom: 6 } },
                 `🔥 高频曝光词（${learningsClearPending ? 0 : (state?.learnings?.hotWords || []).length}）`),
               h('p', { style: { margin: '0 0 8px', fontSize: 12, color: C.faint, lineHeight: 1.6 } },
-                '从高曝光样本里反复出现的用词里提炼出来，按出现频率排列。生成时会自然用上其中几个，不是整句照搬。'),
-              (learningsClearPending ? [] : (state?.learnings?.hotWords || [])).length
-                ? h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
-                  ...(learningsClearPending ? [] : state.learnings.hotWords).map(word => h('span', {
-                    key: word,
-                    style: { fontSize: 12, padding: '3px 8px', borderRadius: 6, background: C.layerTwo, border: `1px solid ${C.border}`, color: C.text },
-                  }, word)))
-                : h('div', { style: { fontSize: 12, color: C.faint } }, '还没有。跑一次学习后，高曝光样本里反复出现的词会列在这里。')),
+                '可直接改。删掉不想再用的词，或换成你真正想保留的。生成时最多自然用一两个，不会篇篇堆同一批词。'),
+              h('textarea', {
+                style: { ...inputStyle, minHeight: 72, fontSize: 12 },
+                placeholder: '用逗号分隔，例如：反差, 旧约, 董事会',
+                value: learningsClearPending ? '' : (hotWordsDraft !== null ? hotWordsDraft : (state?.learnings?.hotWords || []).join('、')),
+                onChange: e => setHotWordsDraft(e.target.value),
+              }),
+              h('div', { style: { display: 'flex', justifyContent: 'flex-end', marginTop: 6 } },
+                h('button', {
+                  type: 'button', disabled: busy,
+                  style: { ...buttonStyle(false), fontSize: 12, padding: '4px 12px' },
+                  onClick: async () => {
+                    const text = hotWordsDraft !== null ? hotWordsDraft : (state?.learnings?.hotWords || []).join('、');
+                    await act('save-hot-words', undefined, { text });
+                    setHotWordsDraft(null);
+                  }
+                }, '💾 保存高频词'))),
             h('div', { style: { marginTop: 12 } },
               h('div', { style: { fontSize: 13, fontWeight: '600', marginBottom: 6 } },
                 `✅ 优先话题（${learningsClearPending ? 0 : (state?.learnings?.winningTopics || []).length}）`
@@ -3941,6 +3953,28 @@ window.__ModuleLoader__.load({
               })()),
 
             h('div', { style: { marginTop: 12 } },
+              h('div', { style: { fontSize: 13, fontWeight: '600', marginBottom: 6 } },
+                `📖 故事情节（${learningsClearPending ? 0 : (state?.learnings?.plots || []).length}）`),
+              h('p', { style: { margin: '0 0 8px', fontSize: 12, color: C.faint, lineHeight: 1.6 } },
+                '一行一条。不想再写的情节直接删掉；留下的也只借鉴节奏，生成时必须换成新人物和新细节。'),
+              h('textarea', {
+                style: { ...inputStyle, minHeight: 90, fontSize: 12 },
+                placeholder: '一行一条情节骨架，例如：邀约—被拒—自嘲',
+                value: learningsClearPending ? '' : (plotsDraft !== null ? plotsDraft : (state?.learnings?.plots || []).join('\n')),
+                onChange: e => setPlotsDraft(e.target.value),
+              }),
+              h('div', { style: { display: 'flex', justifyContent: 'flex-end', marginTop: 6 } },
+                h('button', {
+                  type: 'button', disabled: busy,
+                  style: { ...buttonStyle(false), fontSize: 12, padding: '4px 12px' },
+                  onClick: async () => {
+                    const text = plotsDraft !== null ? plotsDraft : (state?.learnings?.plots || []).join('\n');
+                    await act('save-plots', undefined, { text });
+                    setPlotsDraft(null);
+                  }
+                }, '💾 保存故事情节'))),
+
+            h('div', { style: { marginTop: 12 } },
               h('div', { style: { fontSize: 13, fontWeight: '600', marginBottom: 6 } }, `🧩 已提炼套路（${learningsClearPending ? 0 : (state?.learnings?.patterns || []).length}）`),
               learningsClearPending
                 ? h('div', { style: { padding: '10px 12px', borderRadius: 8, background: C.raised, border: `1px solid ${C.error}`, fontSize: 12, color: C.error, lineHeight: 1.6 } },
@@ -3948,26 +3982,51 @@ window.__ModuleLoader__.load({
                 : null,
               !learningsClearPending && (state?.learnings?.patterns || []).length
                 ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
-                    ...(state.learnings.patterns).map(pattern => h('div', {
-                      key: pattern.id,
-                      style: { padding: '10px 12px', background: C.layerTwo, borderRadius: 8, border: `1px solid ${C.border}` }
-                    },
-                      h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' } },
-                        h('div', { style: { flex: 1, minWidth: 0 } },
-                          h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4, flexWrap: 'wrap' } },
-                            h('strong', { style: { fontSize: 13 } }, pattern.title),
-                            h('span', { style: { fontSize: 11, color: C.faint, padding: '1px 6px', borderRadius: 4, background: C.raised } },
-                              pattern.source === 'history' ? '历史帖子' : (pattern.source === 'benchmark' ? 'X 榜单' : (pattern.source === 'x_trends' ? 'X 热搜' : '手动粘贴')))),
-                          pattern.structure ? h('p', { style: { margin: '0 0 4px', fontSize: 12, color: C.text, lineHeight: 1.5 } }, pattern.structure) : null,
-                          pattern.hooks?.length ? h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
-                            ...pattern.hooks.map((hook, i) => h('span', { key: i, style: { fontSize: 11, padding: '2px 8px', borderRadius: 999, background: C.raised, color: C.muted } }, hook))) : null),
-                        h('button', {
-                          type: 'button', title: '删除这条套路',
-                          style: { ...buttonStyle(false), padding: '2px 8px', fontSize: 11, color: C.error, borderColor: C.error },
-                          onClick: () => void act('remove-learning', undefined, { kind: 'pattern', id: pattern.id })
-                        }, '✕')))
-                    ))
-                : h('small', { style: { color: C.faint } }, '暂无。三种学习方式任一完成都会产生套路。'),
+                    ...(state.learnings.patterns).map(pattern => {
+                      const draft = patternDrafts[pattern.id] || {};
+                      const title = draft.title !== undefined ? draft.title : (pattern.title || '');
+                      const structure = draft.structure !== undefined ? draft.structure : (pattern.structure || '');
+                      const hooksText = draft.hooksText !== undefined ? draft.hooksText : (pattern.hooks || []).join('、');
+                      const patch = next => setPatternDrafts(current => ({ ...current, [pattern.id]: { title, structure, hooksText, ...next } }));
+                      return h('div', {
+                        key: pattern.id,
+                        style: { padding: '10px 12px', background: C.layerTwo, borderRadius: 8, border: `1px solid ${C.border}` }
+                      },
+                        h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' } },
+                          h('div', { style: { flex: 1, minWidth: 0 } },
+                            h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6, flexWrap: 'wrap' } },
+                              h('input', {
+                                style: { ...inputStyle, margin: 0, flex: 1, minWidth: 120, fontSize: 13, fontWeight: '600' },
+                                value: title,
+                                onChange: e => patch({ title: e.target.value }),
+                              }),
+                              h('span', { style: { fontSize: 11, color: C.faint, padding: '1px 6px', borderRadius: 4, background: C.raised } },
+                                pattern.source === 'history' ? '历史帖子' : (pattern.source === 'benchmark' ? 'X 榜单' : (pattern.source === 'x_trends' ? 'X 热搜' : '手动粘贴')))),
+                            h('textarea', {
+                              style: { ...inputStyle, minHeight: 52, fontSize: 12, margin: '0 0 6px' },
+                              placeholder: '结构：开头—中段—收尾',
+                              value: structure,
+                              onChange: e => patch({ structure: e.target.value }),
+                            }),
+                            h('input', {
+                              style: { ...inputStyle, margin: 0, fontSize: 12 },
+                              placeholder: '钩子，用逗号分隔',
+                              value: hooksText,
+                              onChange: e => patch({ hooksText: e.target.value }),
+                            })),
+                          h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
+                            h('button', {
+                              type: 'button', title: '保存这条套路',
+                              style: { ...buttonStyle(true), padding: '2px 8px', fontSize: 11 },
+                              onClick: () => void act('save-pattern', undefined, { id: pattern.id, title, structure, hooksText }),
+                            }, '保存'),
+                            h('button', {
+                              type: 'button', title: '删除这条套路',
+                              style: { ...buttonStyle(false), padding: '2px 8px', fontSize: 11, color: C.error, borderColor: C.error },
+                              onClick: () => void act('remove-learning', undefined, { kind: 'pattern', id: pattern.id })
+                            }, '✕'))));
+                    }))
+                : h('small', { style: { color: C.faint } }, '暂无。三种学习方式任一完成都会产生套路。不想再用的，改掉或删掉即可。'),
 
               h('div', { style: { marginTop: 16, paddingTop: 12, borderTop: `1px solid ${C.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' } },
                 h('span', { style: { fontSize: 12, color: C.faint, lineHeight: 1.5 } },

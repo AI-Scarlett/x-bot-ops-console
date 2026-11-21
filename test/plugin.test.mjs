@@ -2212,10 +2212,10 @@ test('learning prompt block carries topics but never overrides the writing style
   assert.match(block, /打工账本/);
   assert.match(block, /股市理财/);
   assert.match(block, /谁还没破防过/);
-  assert.match(block, /高曝光用词/);
+  assert.match(block, /可选用词/);
   assert.match(block, /破防/);
   // The style remains the caller's; the block only says to borrow structure.
-  assert.match(block, /行文风格仍必须严格遵循/);
+  assert.match(block, /每条帖子都要写一件全新的事/);
   assert.doesNotMatch(block, /请改用|改为白话|英文/);
   assert.ok(/文言/.test(defaults.postSettings.customPrompt));
 });
@@ -2259,6 +2259,37 @@ test('learnings store normalizes, removes and clears entries', async () => {
     assert.equal(cleared.learnings.styleGuide, '');
     assert.deepEqual(cleared.learnings.patterns, []);
     assert.deepEqual(cleared.learnings.bannedTopics, []);
+  } finally { f.cleanup(); }
+});
+
+test('learning results can be edited in place', async () => {
+  const f = fixture();
+  try {
+    const learningsPath = join(f.dir, 'learnings.json');
+    const service = createService({
+      paths: f.paths,
+      configPath: join(f.dir, 'config.json'),
+      learningsPath,
+      platform: 'darwin',
+    });
+    await service.action({ action: 'save-hot-words', text: '反差, 旧约, 反差' });
+    await service.action({ action: 'save-plots', text: '邀约—被拒—自嘲\n旧信重逢' });
+    const seeded = await service.action({ action: 'state' });
+    assert.deepEqual(seeded.learnings.hotWords, ['反差', '旧约']);
+    assert.deepEqual(seeded.learnings.plots, ['邀约—被拒—自嘲', '旧信重逢']);
+
+    writeFileSync(learningsPath, JSON.stringify({
+      ...seeded.learnings,
+      patterns: [{ id: 'p1', title: '旧套路', structure: '旧结构', hooks: ['旧钩子'] }],
+    }));
+    const saved = await service.action({ action: 'save-pattern', id: 'p1', title: '新套路', structure: '新结构', hooksText: '新钩子A、新钩子B' });
+    assert.equal(saved.learnings.patterns[0].title, '新套路');
+    assert.deepEqual(saved.learnings.patterns[0].hooks, ['新钩子A', '新钩子B']);
+    await service.action({ action: 'remove-learning', kind: 'hot', id: '旧约' });
+    await service.action({ action: 'remove-learning', kind: 'plot', id: '旧信重逢' });
+    const after = await service.action({ action: 'state' });
+    assert.deepEqual(after.learnings.hotWords, ['反差']);
+    assert.deepEqual(after.learnings.plots, ['邀约—被拒—自嘲']);
   } finally { f.cleanup(); }
 });
 
