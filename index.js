@@ -444,7 +444,7 @@ export function mutateManualDrafts(mutator, draftsPath = MANUAL_DRAFTS_PATH, now
 // generated in the 手动AI创作 panel and may still pick from; `auto` is only a
 // backup of drafts the automatic poster already queued. The preview list shows
 // the manual shelf alone, so automatically queued drafts stop appearing there.
-export const MANUAL_DRAFT_SOURCES = new Set(['ai_draft', 'ai_draft_custom', 'ai_draft_reference', 'manual']);
+export const MANUAL_DRAFT_SOURCES = new Set(['ai_draft', 'ai_draft_custom', 'ai_draft_reference', 'ai_draft_serial', 'manual']);
 
 export function draftShelf(item, queuedTexts = null) {
   if (!item || typeof item !== 'object') return 'auto';
@@ -1048,6 +1048,8 @@ function normalizeLearnings(data) {
   const history = isRecord(data.history) ? data.history : {};
   return {
     version: 1,
+    // The 6-point deep breakdown. It is what generation follows most closely.
+    deepGuide: String(data.deepGuide || '').slice(0, 4000),
     styleGuide: String(data.styleGuide || '').slice(0, 4000),
     winningTopics: cleanList(data.winningTopics, 40),
     bannedTopics: cleanList(data.bannedTopics, 40),
@@ -1571,6 +1573,11 @@ export function pickTopicTheme(mix, random = Math.random) {
 // The caller keeps its own writing style; only topics and structure are borrowed.
 export function buildLearningPromptBlock(learnings, { maxChars = 1600, influence = 100 } = {}) {
   const parts = [];
+  // The 6-point breakdown leads: it is the concrete writing instruction, and
+  // it must be followed instead of only borrowing a few hooks.
+  if (learnings.deepGuide) {
+    parts.push(`【高曝光写法拆解（必须逐条照做，语气与文风以上面的设置为准）】\n${learnings.deepGuide}`);
+  }
   if (learnings.styleGuide) parts.push(`【高表现套路总结】\n${learnings.styleGuide}`);
   const hooks = learnings.patterns.flatMap(p => p.hooks).filter(Boolean).slice(0, 10);
   if (hooks.length) parts.push(`【高互动钩子/开头方式】\n${hooks.map(h => `- ${h}`).join('\n')}`);
@@ -1591,7 +1598,7 @@ export function buildLearningPromptBlock(learnings, { maxChars = 1600, influence
   const budget = Math.max(80, Math.round(maxChars * (strength / 100)));
   let block = parts.join('\n\n');
   if (block.length > budget) block = `${block.slice(0, budget)}…`;
-  return `\n\n（以下只是参考，不是必须照抄的模板。每条帖子都要写一件全新的事：换人物、换场景、换冲突、换收尾。不要反复用同一批高频词，不要把旧故事换个说法再发一遍。行文风格仍必须严格遵循上面的文风要求。）\n${block}`;
+  return `\n\n（下面是学习成果。其中「高曝光写法拆解」的 1~6 条是本条的硬性写法要求，必须逐条落实：体裁、结构、开头、收尾、人称与用词、句式模板都要按它来写。内容本身必须是全新的一件事：换人物、换场景、换冲突，不要抄原句，不要反复堆同一批高频词。行文风格仍必须严格遵循上面的文风要求。）\n${block}`;
 }
 
 // Pull the first JSON object out of a model reply that may be wrapped in prose
@@ -1612,10 +1619,19 @@ export function extractJsonObject(text) {
 }
 
 const LEARNING_ANALYST_PROMPT = `你是中文社交媒体的内容策略分析师。下面给出若干「高表现推文样本」。
-请拆解它们为什么能获得高曝光/高互动，并提炼成可以照着写的套路。
+请拆解它们为什么能获得高曝光/高互动，并提炼成可以照着写的结论。
 
 只输出严格 JSON，不要任何解释文字，格式：
-{"styleGuide":"150字以内的整体套路总结（选题角度+情绪+节奏+收尾方式）","winningTopics":["值得继续写的话题方向1","方向2"],"hotWords":["在抓取样本里反复出现、值得参考的词或短语"],"patterns":[{"title":"套路名称","structure":"这条推文的结构拆解（开头—中段—收尾）","hooks":["可复用的开头钩子或句式"]}]}
+{"deepGuide":"1. 体裁与语言：…\\n2. 结构：…\\n3. 开头钩子：…\\n4. 收尾：…\\n5. 人称称呼用词：…\\n6. 可复用句式模板：〔…〕","styleGuide":"150字以内的整体套路总结（选题角度+情绪+节奏+收尾方式）","winningTopics":["值得继续写的话题方向1","方向2"],"hotWords":["在抓取样本里反复出现、值得参考的词或短语"],"plots":["反复出现的情节走向骨架"],"patterns":[{"title":"套路名称","structure":"这条推文的结构拆解（开头—中段—收尾）","hooks":["可复用的开头钩子或句式"]}]}
+
+deepGuide 是最重要的一项，必须严格 6 条，每条都以「1. 」到「6. 」开头、单独成行，直接给可执行的写法结论，这 6 个维度是：
+1. 体裁与语言（文言/白话/中英混/诗体等，以及句子长短、标点习惯）
+2. 结构（几行、每行各干什么、信息如何推进）
+3. 开头怎么勾人（具体手法，不要只说「抓人」）
+4. 收尾怎么落（提问/反转/金句/留白，并写清楚最后一句的句式）
+5. 人称、称呼与用词特征（举 2~3 个样本里真实出现的原词）
+6. 可复用的句式模板（用〔〕占位，不要照抄原句）
+每条尽量 30~80 字，凑够 6 条，不要合并、不要省略。
 patterns 给 2~5 条。赢家话题要是「话题方向」而不是整句原文。
 hotWords 给 5~15 个：从样本里找出反复出现、且看起来在拉高曝光的具体用词或短语（称呼、身体部位、动作、场景、情绪词），按出现频率从高到低排。不要给「的、了、余、曰」这类虚词和每条都有的套话，不要给整句。`;
 
@@ -1807,6 +1823,7 @@ export async function analyzeLearningSamples(samples, { model = 'gpt-6-luna', po
     }));
 
   return {
+    deepGuide: String(parsed.deepGuide || '').slice(0, 4000),
     styleGuide: String(parsed.styleGuide || '').slice(0, 4000),
     winningTopics: (Array.isArray(parsed.winningTopics) ? parsed.winningTopics : [])
       .map(topic => String(topic || '').trim().slice(0, 80))
@@ -3949,6 +3966,9 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       // A one-off prompt overrides the global style prompt for this batch only.
       const oneOffPrompt = typeof request.prompt === 'string' && request.prompt.trim() ? request.prompt.trim() : '';
       const commitToQueue = request.commitToQueue !== false;
+      // A few connected short stories, generated here and kept as preview
+      // drafts. They are throwaway: nothing is written to 连载长文.
+      const serialMode = request.serial === true;
       // Per-batch overrides from the manual generation panel.
       const batchModel = typeof request.model === 'string' ? request.model.trim().slice(0, 60) : '';
       const THEME_STYLE_KEYS = ['classical', 'vernacular', 'english', 'chuci'];
@@ -4128,7 +4148,10 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         // One subject per draft: the hot headline when this draft got one, else a
         // preferred topic. The theme only decides the angle, so the two no
         // longer fight each other and the preferred topics really get used.
-        const topic = hotTopic || pool[Math.floor(Math.random() * pool.length)];
+        // A serial keeps one subject across its parts.
+        const topic = (serialMode && generated.length)
+          ? generated[0].topic
+          : (hotTopic || pool[Math.floor(Math.random() * pool.length)]);
         const theme = themePlan[i] || pickTopicTheme(postCfg.topicMix);
         const draftFmt = draftFmtFor(theme);
         // The theme's own content style wins over the global one; the batch
@@ -4164,9 +4187,18 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       // 手动没勾人时，用这一条主题自己选定的出场人物；主题也没选就一个都不带。
       const themeCast = Array.isArray(theme?.cast) ? theme.cast : [];
       const peopleBlock = castBlock(sharedCfg, castPicks === null ? themeCast : castPicks);
-      const prompt = reference
+      // Later parts of a serial must continue the earlier ones instead of
+      // starting a new story.
+      const serialBlock = (serialMode && generated.length)
+        ? `\n\n【这是同一组连载的第 ${i + 1} 篇，共 ${count} 篇】\n`
+          + `前几篇：\n${generated.slice(-3).map((item, idx) => `第${generated.length - Math.min(3, generated.length) + idx + 1}篇：${item.text}`).join('\n')}\n`
+          + '要求：承接上面的人物、关系与已经发生的情节，只往前推进一小段；'
+          + '不要重新起头，不要重复写过的内容，不要换人设；'
+          + '结尾留一个让人想看下一篇的落点。这一篇要能单独看懂，但接着上一篇读更顺。'
+        : '';
+      const prompt = (reference
         ? effectiveBasePrompt + referenceBlock + themeContentBlock + peopleBlock + learningBlock + formatRuleFor(theme)
-        : basePrompt + themeBlock + themeContentBlock + learningBlock + subjectBlock + peopleBlock + formatRuleFor(theme);
+        : basePrompt + themeBlock + themeContentBlock + learningBlock + subjectBlock + peopleBlock + formatRuleFor(theme)) + serialBlock;
         const styleProblem = text => draftStyleProblem(text, styleKey);
         try {
           let rawDraft = await tweetGenerator(prompt, { model: genModel, port });
@@ -4223,7 +4255,8 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
               theme: reference ? '模仿参考帖' : (theme ? theme.label : ''),
               hotTopic: '',
               political: false,
-              source: reference ? 'ai_draft_reference' : (oneOffPrompt ? 'ai_draft_custom' : 'ai_draft'),
+              serialNo: serialMode ? i + 1 : 0,
+              source: serialMode ? 'ai_draft_serial' : (reference ? 'ai_draft_reference' : (oneOffPrompt ? 'ai_draft_custom' : 'ai_draft')),
               urgent: false,
               createdAt: new Date().toISOString(),
               previewNotes: verdict.ok ? [] : (verdict.reasons || []),
@@ -4312,7 +4345,9 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         generated,
         failed: failures.length,
         manualDrafts: manualDraftsFor('manual'),
-        note: `已成功生成 ${generated.length} 条推文草稿！可预览并挑选需要的内容加入队列。草稿会在本页保留 24 小时。`,
+        note: serialMode
+          ? `已生成 ${generated.length} 篇连载小故事，就在本页预览里，可逐篇挑入队。它们只留在这里，不会写进「连载长文」。${failures.length ? `另有 ${failures.length} 篇生成失败。` : ''}`
+          : `已成功生成 ${generated.length} 条推文草稿！可预览并挑选需要的内容加入队列。草稿会在本页保留 24 小时。`,
       };
     }
     if (request.action === 'restore-config-backup') {
@@ -4700,6 +4735,7 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
       const analysis = await analyzeLearningSamples(samples, { model, port, kind: 'manual' });
       const { payload } = mutateLearnings((current) => {
         current.patterns.unshift(...analysis.patterns);
+        if (analysis.deepGuide) current.deepGuide = analysis.deepGuide;
         if (analysis.styleGuide) current.styleGuide = analysis.styleGuide;
         current.winningTopics = [...new Set([...analysis.winningTopics, ...current.winningTopics])].slice(0, 40);
         current.hotWords = [...new Set([...(analysis.hotWords || []), ...(current.hotWords || [])])].slice(0, 30);
@@ -4708,8 +4744,9 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         ok: true,
         action: 'learn-manual',
         learnings: payload,
+        analysis: analysis.deepGuide || '',
         learnedPatterns: analysis.patterns.length,
-        note: `已拆解 ${samples.length} 条高曝光样本，提炼出 ${analysis.patterns.length} 条可复用套路、${(analysis.hotWords || []).length} 个高频曝光词。`,
+        note: `已拆解 ${samples.length} 条高曝光样本，生成 6 条写法拆解、${analysis.patterns.length} 条可复用套路、${(analysis.hotWords || []).length} 个高频曝光词。生成草稿时会按这 6 条写。`,
       };
     }
     if (request.action === 'trigger-learn') {
@@ -4725,6 +4762,18 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
         ok: true,
         action: 'trigger-learn',
         note: '已通知发帖 Worker 立即执行一次学习（历史发帖表现 + X 榜单拆解）。结果会写入本页，约 1~3 分钟后刷新可见。',
+      };
+    }
+    if (request.action === 'save-deep-guide') {
+      const deepGuide = String(request.deepGuide || '').slice(0, 4000);
+      const { payload } = mutateLearnings((current) => {
+        current.deepGuide = deepGuide;
+      }, activeLearningsPath);
+      return {
+        ok: true,
+        action: 'save-deep-guide',
+        learnings: payload,
+        note: deepGuide ? '6 条写法拆解已保存，下次生成会照它写。' : '6 条写法拆解已清空。',
       };
     }
     if (request.action === 'save-style-guide') {
@@ -4824,10 +4873,12 @@ export function createService({ clock = () => Date.now(), paths = DEFAULT_TARGET
     }
     if (request.action === 'clear-learnings') {
       const { payload } = mutateLearnings((current) => {
+        current.deepGuide = '';
         current.styleGuide = '';
         current.winningTopics = [];
         current.bannedTopics = [];
         current.hotWords = [];
+        current.plots = [];
         current.patterns = [];
         current.history = { lastRunAt: null, considered: 0, learned: 0, note: '', posts: [] };
       }, activeLearningsPath);
@@ -4971,7 +5022,7 @@ export const SERVICE_ACTIONS = [
   'remove-manual-draft', 'clear-manual-drafts', 'generate-draft-posts', 'analyze-reference-post',
   'set-x-api-token', 'clear-x-api-token', 'fetch-analyze-user', 'remove-external-account-analysis',
   'save-serial', 'delete-serial', 'write-serial-chapter', 'delete-serial-chapter',
-  'learn-manual', 'remove-learning', 'clear-learnings', 'promote-topic', 'save-style-guide',
+  'learn-manual', 'remove-learning', 'clear-learnings', 'promote-topic', 'save-style-guide', 'save-deep-guide',
   'save-hot-words', 'save-plots', 'save-pattern',
   'trigger-learn', 'fetch-trends', 'ensure-chrome', 'chrome-login-status', 'sync-login',
   'update-plugin', 'cache-cleanup',

@@ -851,6 +851,45 @@ test('the manual draft preview excludes drafts the automatic poster queued', asy
   } finally { f.cleanup(); }
 });
 
+test('a serial of short stories stays in the manual preview, not in 连载长文', async () => {
+  const f = fixture();
+  try {
+    const serialsPath = join(f.dir, 'serials.json');
+    const prompts = [];
+    const service = createService({
+      paths: f.paths,
+      configPath: join(f.dir, 'config.json'),
+      manualDraftsPath: join(f.dir, 'manual_drafts.json'),
+      serialsPath,
+      platform: 'darwin',
+      tweetGenerator: async prompt => {
+        prompts.push(prompt);
+        return `余与卿第${prompts.length}次相见于阶下。\n其服饰甚旧，而言语从容。\n尔若遇之，可愿与我同去一观乎？`;
+      },
+    });
+    const res = await service.action({
+      action: 'generate-draft-posts',
+      serial: true,
+      count: 3,
+      prompt: '写一组连载小故事',
+      commitToQueue: false,
+    });
+    assert.equal(res.generated.length, 3);
+    // Every part is a preview candidate carrying its serial number.
+    assert.deepEqual(res.generated.map(item => item.serialNo), [1, 2, 3]);
+    assert.ok(res.generated.every(item => item.source === 'ai_draft_serial'));
+    assert.ok(res.manualDrafts.filter(item => item.shelf === 'manual').length >= 3);
+    // The later parts must be told to continue the earlier ones.
+    assert.match(prompts[1], /这是同一组连载的第 2 篇，共 3 篇/);
+    assert.match(prompts[2], /承接上面的人物、关系与已经发生的情节/);
+    assert.doesNotMatch(prompts[0], /这是同一组连载/);
+    // Nothing is written into the long-form serial store.
+    assert.equal(existsSync(serialsPath), false, 'a throwaway serial must not create 连载长文 entries');
+    // Nor does it touch the send queue.
+    assert.equal(existsSync(join(f.dir, 'post_queue.json')), false);
+  } finally { f.cleanup(); }
+});
+
 
 test('the content style rides next to the writing style and reaches the prompt', async () => {
   const { contentStyleBlock, resolveContentStyle, serialChapterPrompt } = await import('../index.js');
@@ -2202,6 +2241,7 @@ test('learning prompt block carries topics but never overrides the writing style
   assert.equal(buildLearningPromptBlock({ styleGuide: '', winningTopics: [], bannedTopics: [], patterns: [] }), '');
 
   const block = buildLearningPromptBlock({
+    deepGuide: '1. 体裁与语言：浅近文言\n2. 结构：三行\n3. 开头钩子：一句反问\n4. 收尾：留白\n5. 人称称呼用词：余、卿\n6. 可复用句式模板：〔谁〕在〔何处〕…',
     styleGuide: '反差开局再落地',
     winningTopics: ['打工账本'],
     bannedTopics: ['股市理财'],
@@ -2214,8 +2254,13 @@ test('learning prompt block carries topics but never overrides the writing style
   assert.match(block, /谁还没破防过/);
   assert.match(block, /可选用词/);
   assert.match(block, /破防/);
-  // The style remains the caller's; the block only says to borrow structure.
-  assert.match(block, /每条帖子都要写一件全新的事/);
+  // The style remains the caller's; only the content must be new.
+  assert.match(block, /内容本身必须是全新的一件事/);
+  // The 6-point breakdown is a hard requirement, listed first.
+  assert.match(block, /高曝光写法拆解（必须逐条照做/);
+  assert.match(block, /1\. 体裁与语言：浅近文言/);
+  assert.match(block, /6\. 可复用句式模板：/);
+  assert.ok(block.indexOf('高曝光写法拆解') < block.indexOf('高表现套路总结'));
   assert.doesNotMatch(block, /请改用|改为白话|英文/);
   assert.ok(/文言/.test(defaults.postSettings.customPrompt));
 });
@@ -2272,9 +2317,12 @@ test('learning results can be edited in place', async () => {
       learningsPath,
       platform: 'darwin',
     });
+    await service.action({ action: 'save-deep-guide', deepGuide: '1. 体裁与语言：浅近文言\n2. 结构：三行' });
     await service.action({ action: 'save-hot-words', text: '反差, 旧约, 反差' });
     await service.action({ action: 'save-plots', text: '邀约—被拒—自嘲\n旧信重逢' });
     const seeded = await service.action({ action: 'state' });
+    assert.match(seeded.learnings.deepGuide, /^1\. 体裁与语言/);
+    assert.match(seeded.learnings.deepGuide, /2\. 结构/);
     assert.deepEqual(seeded.learnings.hotWords, ['反差', '旧约']);
     assert.deepEqual(seeded.learnings.plots, ['邀约—被拒—自嘲', '旧信重逢']);
 

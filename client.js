@@ -101,7 +101,7 @@ window.__ModuleLoader__.load({
       'generate-draft-posts', 'analyze-reference-post', 'set-x-api-token', 'clear-x-api-token',
       'fetch-analyze-user', 'remove-external-account-analysis', 'save-serial', 'delete-serial',
       'write-serial-chapter', 'delete-serial-chapter', 'learn-manual', 'clear-learnings',
-      'promote-topic', 'save-style-guide', 'save-hot-words', 'save-plots', 'save-pattern', 'trigger-learn', 'fetch-trends', 'update-plugin',
+      'promote-topic', 'save-style-guide', 'save-deep-guide', 'save-hot-words', 'save-plots', 'save-pattern', 'trigger-learn', 'fetch-trends', 'update-plugin',
     ];
     function staleServerActions(actions) {
       if (!Array.isArray(actions)) return [];
@@ -468,6 +468,9 @@ window.__ModuleLoader__.load({
       const [externalAnalyzeBusy, setExternalAnalyzeBusy] = React.useState(false);
       const [pickingFolder, setPickingFolder] = React.useState(false);
       const [styleGuideDraft, setStyleGuideDraft] = React.useState('');
+      const [deepGuideDraft, setDeepGuideDraft] = React.useState(null);
+      const [serialChapters, setSerialChapters] = React.useState(3);
+      const [serialBuilding, setSerialBuilding] = React.useState(false);
       const [hotWordsDraft, setHotWordsDraft] = React.useState(null);
       const [plotsDraft, setPlotsDraft] = React.useState(null);
       const [patternDrafts, setPatternDrafts] = React.useState({});
@@ -2665,6 +2668,61 @@ window.__ModuleLoader__.load({
                   }, draftAnalysis)
                   : null),
 
+              // A few connected short stories generated here and kept as
+              // preview drafts. Nothing is written to 连载长文.
+              h('div', { style: { marginTop: 12, padding: '12px 14px', borderRadius: 8, background: C.layerTwo, border: `1px solid ${C.border}` } },
+                h('div', { style: { fontSize: 13, fontWeight: '600', marginBottom: 4 } }, '📖 按上面的要求与参考，写成一组连载小故事：'),
+                h('div', { style: { fontSize: 12, color: C.faint, marginBottom: 8, lineHeight: 1.6 } },
+                  '每篇承接上一篇的人物和情节往前推一小段，结尾留钩子。它们只是本页的临时草稿，生成后直接出现在下方预览里，可逐篇挑入队；不会写进「📖 连载长文」。'),
+                h('div', { style: { display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' } },
+                  h('label', { style: { display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, color: C.muted } },
+                    '连载篇数',
+                    h('input', {
+                      type: 'number', min: 1, max: 20,
+                      style: { ...inputStyle, width: 84, margin: 0, padding: '4px 6px', fontSize: 12 },
+                      value: serialChapters,
+                      onChange: e => setSerialChapters(e.target.value === '' ? '' : Number(e.target.value)),
+                    }),
+                    '篇'),
+                  h('button', {
+                    type: 'button',
+                    disabled: busy || serialBuilding || generatingDrafts || !(draftGenPrompt.trim() || draftReference.trim()),
+                    style: { ...buttonStyle(false), padding: '6px 16px', fontSize: 13 },
+                    onClick: async () => {
+                      const total = Math.max(1, Math.min(20, Number(serialChapters) || 1));
+                      setSerialBuilding(true);
+                      setError('');
+                      setNotice(`正在生成 ${total} 篇连载小故事，慢模型需要几分钟…`);
+                      try {
+                        const res = await act('generate-draft-posts', undefined, {
+                          serial: true,
+                          count: total,
+                          prompt: draftGenPrompt.trim(),
+                          model: draftGenModel,
+                          style: draftGenStyle,
+                          maxChars: draftGenMaxChars === '' ? 0 : Number(draftGenMaxChars),
+                          reference: draftReference.trim(),
+                          referenceAnalysis: draftAnalysis,
+                          cast: draftCast,
+                          contentStyle: draftGenContentStyle.trim(),
+                          commitToQueue: false,
+                        });
+                        const made = Array.isArray(res?.generated) ? res.generated.length : 0;
+                        if (Array.isArray(res?.manualDrafts)) setPreviewDrafts(res.manualDrafts.filter(item => item?.shelf !== 'auto'));
+                        setNotice(made
+                          ? `已生成 ${made} 篇连载小故事，就在下方预览里，逐篇挑入队即可。`
+                          : (res?.note || '这次没有生成出可用的故事。'));
+                      } catch (err) {
+                        setError(`连载生成失败：${err.message || String(err)}`);
+                      } finally {
+                        setSerialBuilding(false);
+                      }
+                    }
+                  }, serialBuilding ? '⏳ 正在连载中...' : '📖 生成为连载小故事')),
+                !(draftGenPrompt.trim() || draftReference.trim())
+                  ? h('div', { style: { fontSize: 11, color: C.faint, marginTop: 6 } }, '先填提示词或粘贴参考帖，再点生成。')
+                  : null),
+
               h('div', { style: { display: 'flex', gap: 12, justifyContent: 'flex-end', alignItems: 'center', marginTop: 14 } },
                 h('span', { style: { fontSize: 12, color: C.faint } },
                   `将生成 ${Math.max(1, Math.min(50, Number(draftGenCount) || 1))} 条草稿`
@@ -2797,6 +2855,9 @@ window.__ModuleLoader__.load({
                   h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 } },
                     h('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
                       h('span', { style: { fontWeight: '600', fontSize: 13, color: C.accent } }, `#${idx + 1}`),
+                      Number(item.serialNo) > 0
+                        ? h('span', { style: { fontSize: 11, background: C.accent, color: C.onAccent, padding: '2px 6px', borderRadius: 4, fontWeight: '600' } }, `连载第 ${item.serialNo} 篇`)
+                        : null,
                       item.theme ? h('span', { style: { fontSize: 11, background: C.raised, padding: '2px 6px', borderRadius: 4, color: C.muted } }, item.theme) : null,
                       h('span', { style: { fontSize: 11, color: C.faint } }, `约 ${(item.text || '').length} 字`),
                       draftCreatedText(item) ? h('span', { style: { fontSize: 11, color: C.muted } }, `生成于 ${draftCreatedText(item)}`) : null,
@@ -3829,6 +3890,29 @@ window.__ModuleLoader__.load({
           // 4. 学习成果
           h('section', { style: cardStyle },
             h('h2', { style: { margin: 0, fontSize: 15 } }, '📚 学习成果'),
+
+            h('label', { style: { ...labelStyle, marginTop: 12 } }, '⭐ 6 条写法拆解（生成时逐条照做，可手动编辑）：'),
+            h('p', { style: { margin: '0 0 8px', fontSize: 12, color: C.faint, lineHeight: 1.6 } },
+              '这是学习里最重要的一项：体裁、结构、开头、收尾、人称用词、句式模板。生成草稿时会按这 6 条写，不是只借几个钩子。'),
+            h('textarea', {
+              style: { ...inputStyle, minHeight: 130, fontSize: 12 },
+              placeholder: '1. 体裁与语言：…\n2. 结构：…\n3. 开头钩子：…\n4. 收尾：…\n5. 人称称呼用词：…\n6. 可复用句式模板：〔…〕',
+              value: learningsClearPending ? '' : (deepGuideDraft !== null ? deepGuideDraft : (state?.learnings?.deepGuide || '')),
+              onChange: e => setDeepGuideDraft(e.target.value),
+            }),
+            h('div', { style: { display: 'flex', justifyContent: 'flex-end', marginTop: 6 } },
+              h('button', {
+                type: 'button',
+                disabled: busy,
+                style: { ...buttonStyle(false), fontSize: 12, padding: '4px 12px' },
+                onClick: async () => {
+                  try {
+                    const text = deepGuideDraft !== null ? deepGuideDraft : (state?.learnings?.deepGuide || '');
+                    await act('save-deep-guide', undefined, { deepGuide: text });
+                    setDeepGuideDraft(null);
+                  } catch (err) { setError(err.message || String(err)); }
+                }
+              }, '💾 保存 6 条拆解')),
 
             h('label', { style: { ...labelStyle, marginTop: 12 } }, '套路总结（会拼进生成提示词，可手动编辑）：'),
             h('textarea', {
